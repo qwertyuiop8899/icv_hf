@@ -875,11 +875,11 @@ function parseTorrentTitle(filename) {
     
     // Trova dove finisce il titolo
     const titleEndPatterns = [
-        /[(. _-](?:19|20)\d{2}[). _-]/,           // Anno
-        /[(. _-]S\d{1,2}[). _-E]/i,               // Stagione
-        /[(. _-]\d{1,2}x\d{1,3}[). _-]/i,         // 1x05
-        /[(. _-](?:720|1080|480|2160|4k)p?[). _-]/i, // Risoluzione
-        /[(. _-](?:HDTV|DVDRip|BluRay|WEB|REMUX)[). _-]/i, // Qualità
+        /[(. _\-](?:19|20)\d{2}[). _\-]/,           // Anno
+        /[(. _\-]S\d{1,2}[). _\-E]/i,               // Stagione
+        /[(. _\-]\d{1,2}x\d{1,3}[). _\-]/i,         // 1x05
+        /[(. _\-](?:720|1080|480|2160|4k)p?[). _\-]/i, // Risoluzione
+        /[(. _\-](?:HDTV|DVDRip|BluRay|WEB|REMUX)[). _\-]/i, // Qualità
     ];
 
     for (const pattern of titleEndPatterns) {

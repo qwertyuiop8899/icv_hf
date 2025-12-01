@@ -7509,6 +7509,39 @@ export default async function handler(req, res) {
                                 console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
                             }
                         }
+                        
+                        // ✅ SAVE PACK FILES FOR MOVIES (Trilogies, Collections, etc.)
+                        // This saves the mapping between pack hash and individual film IMDb IDs
+                        if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined && targetFile && torrent && torrent.files) {
+                            try {
+                                // Get IMDb ID of the movie being played
+                                const movieImdbId = await dbHelper.getImdbIdByHash(infoHash);
+                                
+                                if (movieImdbId) {
+                                    console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
+                                    
+                                    // Save this specific file mapping to pack_files table
+                                    const packFileData = [{
+                                        pack_hash: infoHash.toLowerCase(),
+                                        imdb_id: movieImdbId,
+                                        file_index: targetFile.id, // RealDebrid file.id
+                                        file_path: targetFile.path,
+                                        file_size: targetFile.bytes || 0
+                                    }];
+                                    
+                                    await dbHelper.insertPackFiles(packFileData);
+                                    console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file ${targetFile.id} in pack ${infoHash}`);
+                                    
+                                    // Also update the all_imdb_ids array on the torrents table
+                                    await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());
+                                } else {
+                                    console.warn(`⚠️ [DB] No IMDb ID found for movie pack, skipping save`);
+                                }
+                            } catch (packErr) {
+                                console.error(`❌ [DB] Error saving pack file mapping: ${packErr.message}`);
+                                // Don't fail the stream - this is a non-critical operation
+                            }
+                        }
                     }
                     
                     // Check if it's a RAR archive

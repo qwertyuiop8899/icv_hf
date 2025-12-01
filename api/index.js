@@ -969,11 +969,65 @@ function titleMatch(parsedTitle, titles, options = { threshold: 0.8 }) {
     const results = fuzzball.extract(parsedTitle, titles, { returnObjects: true });
     
     // Trova il punteggio più alto (fuzzball ritorna 0-100, noi usiamo 0-1)
+    // Con returnObjects: true, il formato è { choice, score, key }
     const highestScore = results.reduce((max, result) => {
-        return Math.max(max, result[1]); // result[1] è lo score
+        const score = result.score !== undefined ? result.score : result[1]; // Supporta entrambi i formati
+        return Math.max(max, score);
     }, 0) / 100;
     
     return highestScore >= threshold;
+}
+
+/**
+ * AIOStreams preprocessTitle - preprocessa il titolo prima del matching
+ * Fonte: packages/core/src/parser/utils.ts linea 27-62
+ * Gestisce titoli con "/" o "|" (es: "Fuori / Outside" → "Fuori")
+ * @param {string} parsedTitle - Titolo estratto dal parser
+ * @param {string} filename - Nome file originale del torrent
+ * @param {string[]} titles - Array di titoli validi dal metadata
+ * @returns {string} Titolo preprocessato
+ */
+function preprocessTitle(parsedTitle, filename, titles) {
+    let preprocessedTitle = parsedTitle;
+    
+    // Pattern per separatori (come AIOStreams)
+    const separatorPatterns = [
+        /\s*[\/\|]\s*/,                              // "/" o "|" con spazi
+        /[\s\.\-\(]+a[\s\.]?k[\s\.]?a[\s\.\)\-]+/i, // "a.k.a.", "aka", etc.
+        /\s*\(([^)]+)\)$/,                           // "(titolo alternativo)" alla fine
+    ];
+    
+    for (const pattern of separatorPatterns) {
+        const match = preprocessedTitle.match(pattern);
+        
+        if (match) {
+            // Controlla se uno dei titoli validi contiene già questo separatore
+            const hasExistingTitleWithSeparator = titles.some((title) =>
+                pattern.test(title.toLowerCase())
+            );
+            
+            if (!hasExistingTitleWithSeparator) {
+                const parts = preprocessedTitle.split(pattern);
+                if (parts.length > 1 && parts[0]?.trim()) {
+                    const originalTitle = preprocessedTitle;
+                    preprocessedTitle = parts[0].trim();
+                    console.log(`[preprocessTitle] Titolo aggiornato da "${originalTitle}" a "${preprocessedTitle}"`);
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Gestione "Saga" come in AIOStreams
+    if (
+        titles.some((title) => title.toLowerCase().includes('saga')) &&
+        filename?.toLowerCase().includes('saga') &&
+        !preprocessedTitle.toLowerCase().includes('saga')
+    ) {
+        preprocessedTitle += ' Saga';
+    }
+    
+    return preprocessedTitle;
 }
 
 /**
@@ -981,16 +1035,24 @@ function titleMatch(parsedTitle, titles, options = { threshold: 0.8 }) {
  * Fonte: packages/core/src/debrid/utils.ts linea 127-141
  * @param {object} parsed - { title: string }
  * @param {object} metadata - { titles: string[] }
+ * @param {string} filename - Nome file originale del torrent (opzionale)
  * @returns {boolean} true se il titolo è SBAGLIATO
  */
-function isTitleWrong(parsed, metadata) {
+function isTitleWrong(parsed, metadata, filename = '') {
     if (!parsed.title || !metadata?.titles?.length) return false;
     
-    const normalisedParsed = normaliseTitle(parsed.title);
+    // Preprocessa il titolo prima del matching (gestisce "Fuori / Outside" → "Fuori")
+    const preprocessedTitle = preprocessTitle(parsed.title, filename, metadata.titles);
+    
+    const normalisedParsed = normaliseTitle(preprocessedTitle);
     const normalisedTitles = metadata.titles.map(normaliseTitle);
+    
+    console.log(`[isTitleWrong] Titolo originale: "${parsed.title}", preprocessato: "${preprocessedTitle}", normalizzato: "${normalisedParsed}"`);
+    console.log(`[isTitleWrong] Titoli validi normalizzati: ${JSON.stringify(normalisedTitles.slice(0, 3))}...`);
     
     // Se NON matcha nessun titolo con threshold 0.8, è sbagliato
     if (!titleMatch(normalisedParsed, normalisedTitles, { threshold: 0.8 })) {
+        console.log(`[isTitleWrong] TITOLO SBAGLIATO: "${preprocessedTitle}" non matcha nessun titolo valido`);
         return true;
     }
     
@@ -1305,20 +1367,27 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                     continue;
                 }
                 
-                // Estrai hash
-                const hash = hit.hash?.toLowerCase() || 
+                // Estrai hash (come AIOStreams: usa hash, magnetUrl, o link)
+                let hash = hit.hash?.toLowerCase() || 
                     (hit.magnetUrl ? extractInfoHash(hit.magnetUrl)?.toLowerCase() : null);
                 
-                if (!hash) {
-                    console.log(`🦉 [Knaben API] Skipping hit without hash: ${hit.title}`);
+                // ✅ COME AIOSTREAMS: Se non ha hash, prova a usare il link per scaricare il torrent
+                const hasDownloadUrl = !!hit.link;
+                
+                if (!hash && !hasDownloadUrl) {
+                    console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
                     continue;
                 }
                 
-                // Deduplica per hash
-                if (seenHashes.has(hash)) {
+                // Se ha link ma non hash, generiamo un hash temporaneo dal link per deduplicazione
+                // L'hash reale verrà estratto quando si usa il torrent
+                const dedupeKey = hash || hit.link;
+                
+                // Deduplica per hash o link
+                if (seenHashes.has(dedupeKey)) {
                     continue;
                 }
-                seenHashes.add(hash);
+                seenHashes.add(dedupeKey);
 
                 // Filtro contenuti per adulti
                 if (isAdultCategory(hit.category) || isAdultCategory(hit.title)) {
@@ -1343,7 +1412,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                 
                 // ✅ NUOVO: Validazione come AIOStreams
                 // 1. Validazione titolo (PRIMA di tutto, come AIOStreams)
-                if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata)) {
+                if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, hit.title)) {
                     console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
                     continue;
                 }
@@ -1366,8 +1435,15 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                 // ✅ NUOVO: Usa i dati dal parser invece di extractQuality
                 const quality = parsedTitle.resolution || parsedTitle.quality || extractQuality(hit.title);
 
+                // ✅ COME AIOSTREAMS: Costruisci magnet link o usa download URL
+                let magnetLink = hit.magnetUrl;
+                if (!magnetLink && hash) {
+                    magnetLink = `magnet:?xt=urn:btih:${hash}`;
+                }
+
                 allHits.push({
-                    magnetLink: hit.magnetUrl || `magnet:?xt=urn:btih:${hash}`,
+                    magnetLink: magnetLink || null,
+                    downloadUrl: hit.link || null, // ✅ NUOVO: URL download torrent file
                     websiteTitle: hit.title,
                     title: hit.title,
                     filename: hit.title,
@@ -1376,7 +1452,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                     source: `Knaben (${hit.tracker || 'Unknown'})`,
                     seeders: hit.seeders || 0,
                     leechers: hit.peers || 0,
-                    infoHash: hash.toUpperCase(),
+                    infoHash: hash ? hash.toUpperCase() : null, // ✅ Può essere null se solo link
                     mainFileSize: sizeInBytes,
                     pubDate: hit.date || new Date().toISOString(),
                     categories: [hit.category || (type === 'movie' ? 'Movies' : 'TV')],
@@ -1882,7 +1958,7 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
             }
             
             // ✅ NUOVO: Validazione titolo come AIOStreams
-            if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata)) {
+            if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, result.title)) {
                 console.log(`🔍 [UIndex] Skipping wrong title: "${result.title.substring(0, 60)}..."`);
                 continue;
             }
@@ -6542,6 +6618,13 @@ async function handleSearch({ query, type }, config) {
     console.log(`🔍 Handling search: "${query}" (${type})`);
     
     try {
+        // ✅ Estrai titolo e anno dal query (es. "Fuori 2025" -> titolo="Fuori", anno=2025)
+        const yearMatch = query.match(/\s*\(?\b(19\d{2}|20\d{2})\b\)?$/);
+        const extractedYear = yearMatch ? parseInt(yearMatch[1]) : null;
+        const cleanedTitle = yearMatch ? query.replace(yearMatch[0], '').trim() : query;
+        
+        console.log(`📝 [Search] Extracted title: "${cleanedTitle}", year: ${extractedYear || 'N/A'}`);
+        
         // Build basic metadata for Knaben API
         const basicMetadata = {
             primaryTitle: query,
@@ -6554,9 +6637,10 @@ async function handleSearch({ query, type }, config) {
         };
         
         // ✅ ValidationMetadata per la search (validazione titolo)
+        // IMPORTANTE: usa solo il titolo senza anno per il matching!
         const basicValidationMetadata = {
-            titles: [query],
-            year: null, // Non disponibile nella search generica
+            titles: [cleanedTitle, query].filter(Boolean), // Titolo pulito + query originale
+            year: extractedYear,
             season: undefined,
             episode: undefined,
         };
@@ -6565,7 +6649,7 @@ async function handleSearch({ query, type }, config) {
         const [uindexResults, corsaroNeroResults, knabenResults] = await Promise.allSettled([
             fetchUIndexData(query, type, null, basicValidationMetadata), // Con validazione titolo
             fetchCorsaroNeroData(query, type), // Non richiede config
-            fetchKnabenData(query, type, basicMetadata, basicParsedId)  // Now uses API
+            fetchKnabenData(query, type, { ...basicMetadata, titles: basicValidationMetadata.titles }, basicParsedId)  // Usa titoli puliti per validazione
         ]);
 
         let corsaroAggregatedResults = [];

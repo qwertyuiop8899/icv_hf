@@ -4296,7 +4296,7 @@ async function handleStream(type, id, config, workerOrigin) {
     
     try {
         // ✅ TMDB API Key from config or environment variable
-        const tmdbKey = config.tmdb_key || process.env.TMDB_API_KEY;
+        const tmdbKey = config.tmdb_key || process.env.TMDB_KEY || process.env.TMDB_API_KEY || '5462f78469f3d80bf5201645294c16e4';
         
         if (!tmdbKey) {
             console.error('❌ TMDB API key not configured');

@@ -1310,8 +1310,14 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                 }
                 
                 // ✅ NUOVO: Validazione come AIOStreams
+                // 1. Validazione titolo (PRIMA di tutto, come AIOStreams)
+                if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata)) {
+                    console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
+                    continue;
+                }
+                
+                // 2. Per serie/anime, verifica stagione/episodio
                 if (validationMetadata && type !== 'movie') {
-                    // Per serie/anime, verifica stagione/episodio
                     if (isSeasonWrong(parsedTitle, validationMetadata)) {
                         console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
                         continue;
@@ -1321,12 +1327,6 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                         continue;
                     }
                 }
-                
-                // Validazione titolo (opzionale, meno restrittiva)
-                // if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata)) {
-                //     console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title}"`);
-                //     continue;
-                // }
 
                 const sizeInBytes = hit.bytes || 0;
                 const sizeStr = formatBytes(sizeInBytes);
@@ -1714,7 +1714,7 @@ function parseUIndexHTML(html) {
 }
 
 // ✅ Multi-Strategy Search (try different query variations)
-async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
+async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validationMetadata = null) {
     const searchStrategies = [];
     
     // Strategy 1: Original query
@@ -1757,7 +1757,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
         console.log(`🔍 Trying strategy: ${strategy.description} - "${strategy.query}"`);
         
         try {
-            const results = await fetchUIndexSingle(strategy.query, type);
+            const results = await fetchUIndexSingle(strategy.query, type, validationMetadata);
             
             // Deduplicate by info hash
             const newResults = results.filter(result => {
@@ -1786,7 +1786,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
 }
 
 // ✅ Single UIndex Search with Enhanced Error Handling
-async function fetchUIndexSingle(searchQuery, type = 'movie') {
+async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata = null) {
     try {
         console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
         
@@ -1845,6 +1845,24 @@ async function fetchUIndexSingle(searchQuery, type = 'movie') {
                 const multiFallback = /\b(multi|dual[.\s\-_]?audio)\b/i.test(result.title);
                 if (!italianFallback && !multiFallback) {
                     console.log(`🔍 [UIndex] Skipping non-Italian: "${result.title.substring(0, 60)}..."`);
+                    continue;
+                }
+            }
+            
+            // ✅ NUOVO: Validazione titolo come AIOStreams
+            if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata)) {
+                console.log(`🔍 [UIndex] Skipping wrong title: "${result.title.substring(0, 60)}..."`);
+                continue;
+            }
+            
+            // ✅ Per serie/anime, verifica stagione/episodio
+            if (validationMetadata && type !== 'movie') {
+                if (isSeasonWrong(parsedTitle, validationMetadata)) {
+                    console.log(`🔍 [UIndex] Skipping wrong season: "${result.title}" (need S${validationMetadata.season})`);
+                    continue;
+                }
+                if (isEpisodeWrong(parsedTitle, validationMetadata)) {
+                    console.log(`🔍 [UIndex] Skipping wrong episode: "${result.title}" (need E${validationMetadata.episode})`);
                     continue;
                 }
             }
@@ -3454,7 +3472,7 @@ function maybeCleanupCache() {
 }
 
 // ✅ Enhanced main fetch function
-async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null) {
+async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null, validationMetadata = null) {
     console.log(`🔄 Fetching UIndex results for: "${searchQuery}" (type: ${type})`);
 
     // Check cache first
@@ -3471,7 +3489,7 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null)
 
     try {
         // Use multi-strategy search for better results
-        const rawResults = await searchUIndexMultiStrategy(searchQuery, type);
+        const rawResults = await searchUIndexMultiStrategy(searchQuery, type, validationMetadata);
         
         if (!rawResults.length) {
             console.log('⚠️ No results found from any search strategy for UIndex');
@@ -4939,6 +4957,15 @@ async function handleStream(type, id, config, workerOrigin) {
             const uindexQueries = [];
             const seasonStr = String(season).padStart(2, '0');
             
+            // ✅ Costruisci validationMetadata per UIndex (come Knaben)
+            const uindexValidationMetadata = {
+                titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
+                year: mediaDetails.year,
+                season: season ? parseInt(season, 10) : undefined,
+                episode: episode ? parseInt(episode, 10) : undefined,
+            };
+            console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
+            
             // 🇮🇹 PRIORITY: Italian title first (cleaned, without symbols)
             if (italianTitle) {
                 const cleanedItalian = cleanTitleForSearch(italianTitle);
@@ -4974,7 +5001,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
                 
                 try {
-                    const res = await fetchUIndexData(q, searchType, italianTitle);
+                    const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
                     if (res && res.length > 0) {
                         console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
                         rawResultsByProvider.UIndex.push(...res);
@@ -6494,9 +6521,17 @@ async function handleSearch({ query, type }, config) {
             mediaType: type,
         };
         
+        // ✅ ValidationMetadata per la search (validazione titolo)
+        const basicValidationMetadata = {
+            titles: [query],
+            year: null, // Non disponibile nella search generica
+            season: undefined,
+            episode: undefined,
+        };
+        
         // --- MODIFICA: RICERCA E ORDINAMENTO SEPARATO ---
         const [uindexResults, corsaroNeroResults, knabenResults] = await Promise.allSettled([
-            fetchUIndexData(query, type, null), // italianTitle non è disponibile qui
+            fetchUIndexData(query, type, null, basicValidationMetadata), // Con validazione titolo
             fetchCorsaroNeroData(query, type), // Non richiede config
             fetchKnabenData(query, type, basicMetadata, basicParsedId)  // Now uses API
         ]);

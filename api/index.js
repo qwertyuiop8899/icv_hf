@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+import fuzzball from 'fuzzball';  // ✅ AIOSTREAMS: Fuzzy matching library
 
 // ✅ Import CommonJS modules (db-helper, id-converter)
 const require = createRequire(import.meta.url);
@@ -947,57 +948,86 @@ function isEpisodeWrong(parsed, metadata) {
     return false;
 }
 
+// ============================================================================
+// ✅ AIOSTREAMS TITLE MATCHING (COPIA ESATTA)
+// Fonte: packages/core/src/parser/utils.ts + packages/core/src/debrid/utils.ts
+// ============================================================================
+
 /**
- * Verifica se il titolo è sbagliato usando fuzzy matching (semplificato)
+ * AIOStreams titleMatch - usa fuzzball.extract() per fuzzy matching
+ * @param {string} parsedTitle - Titolo normalizzato dal torrent
+ * @param {string[]} titles - Array di titoli validi normalizzati
+ * @param {object} options - { threshold: 0.8 }
+ * @returns {boolean} true se matcha
  */
-function isTitleWrong(parsed, metadata, threshold = 0.8) {
-    if (!parsed.title || !metadata?.titles?.length) return false;
+function titleMatch(parsedTitle, titles, options = { threshold: 0.8 }) {
+    const { threshold } = options;
     
-    const normalisedParsed = normaliseTitle(parsed.title);
+    // Usa fuzzball.extract per trovare la migliore corrispondenza
+    const results = fuzzball.extract(parsedTitle, titles, { returnObjects: true });
     
-    // Controlla se almeno uno dei titoli matcha
-    for (const metaTitle of metadata.titles) {
-        const normalisedMeta = normaliseTitle(metaTitle);
-        
-        // Match esatto
-        if (normalisedParsed === normalisedMeta) return false;
-        
-        // Match parziale (uno contiene l'altro)
-        if (normalisedParsed.includes(normalisedMeta) || normalisedMeta.includes(normalisedParsed)) {
-            return false;
-        }
-        
-        // Calcola somiglianza (Levenshtein semplificato)
-        const similarity = calculateSimilarity(normalisedParsed, normalisedMeta);
-        if (similarity >= threshold) return false;
-    }
+    // Trova il punteggio più alto (fuzzball ritorna 0-100, noi usiamo 0-1)
+    const highestScore = results.reduce((max, result) => {
+        return Math.max(max, result[1]); // result[1] è lo score
+    }, 0) / 100;
     
-    return true;
+    return highestScore >= threshold;
 }
 
 /**
- * Calcola la somiglianza tra due stringhe (0-1)
+ * AIOStreams isTitleWrong - verifica se il titolo NON corrisponde
+ * Fonte: packages/core/src/debrid/utils.ts linea 127-141
+ * @param {object} parsed - { title: string }
+ * @param {object} metadata - { titles: string[] }
+ * @returns {boolean} true se il titolo è SBAGLIATO
  */
-function calculateSimilarity(str1, str2) {
+function isTitleWrong(parsed, metadata) {
+    if (!parsed.title || !metadata?.titles?.length) return false;
+    
+    const normalisedParsed = normaliseTitle(parsed.title);
+    const normalisedTitles = metadata.titles.map(normaliseTitle);
+    
+    // Se NON matcha nessun titolo con threshold 0.8, è sbagliato
+    if (!titleMatch(normalisedParsed, normalisedTitles, { threshold: 0.8 })) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Fallback per calcolare similarità senza fuzzball
+ */
+function calculateLevenshteinSimilarity(str1, str2) {
     if (str1 === str2) return 1.0;
     if (!str1 || !str2) return 0;
     
     const len1 = str1.length;
     const len2 = str2.length;
-    const maxLen = Math.max(len1, len2);
     
-    if (maxLen === 0) return 1.0;
+    const matrix = Array(len1 + 1).fill(null).map(() => Array(len2 + 1).fill(0));
     
-    // Semplice: conta caratteri comuni
-    const set1 = new Set(str1.split(''));
-    const set2 = new Set(str2.split(''));
-    let common = 0;
-    for (const char of set1) {
-        if (set2.has(char)) common++;
+    for (let i = 0; i <= len1; i++) matrix[i][0] = i;
+    for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+    
+    for (let i = 1; i <= len1; i++) {
+        for (let j = 1; j <= len2; j++) {
+            const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
     }
     
-    const totalUnique = new Set([...set1, ...set2]).size;
-    return common / totalUnique;
+    const distance = matrix[len1][len2];
+    const maxLen = Math.max(len1, len2);
+    return 1 - (distance / maxLen);
+}
+
+function calculateSimilarity(str1, str2) {
+    return calculateLevenshteinSimilarity(str1, str2);
 }
 
 // --- FINE SEZIONE TORRENT TITLE PARSER ---

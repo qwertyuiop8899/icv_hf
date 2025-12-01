@@ -4,10 +4,12 @@ import * as cheerio from 'cheerio';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
-import fuzzball from 'fuzzball';  // ✅ AIOSTREAMS: Fuzzy matching library
+
+// ✅ AIOSTREAMS: Fuzzy matching library (CommonJS import)
+const require = createRequire(import.meta.url);
+const fuzzball = require('fuzzball');
 
 // ✅ Import CommonJS modules (db-helper, id-converter)
-const require = createRequire(import.meta.url);
 const dbHelper = require('../db-helper.cjs');
 const { completeIds } = require('../lib/id-converter.cjs');
 

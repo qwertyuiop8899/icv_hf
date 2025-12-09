@@ -773,11 +773,29 @@
         // AllDebrid OAuth Elements
         const adAuthSection = document.getElementById("alldebrid_auth_section");
         const adConnectBtn = document.getElementById("ad_connect_btn");
+        const adOAuthSection = document.getElementById("ad_oauth_section");
+        const adManualEntryBtn = document.getElementById("ad_manual_entry_btn");
+        const adManualSection = document.getElementById("ad_manual_section");
+        const adSwitchOAuthBtn = document.getElementById("ad_switch_oauth_btn");
+
         const adPinArea = document.getElementById("ad_pin_area");
         const adPinCode = document.getElementById("ad_pin_code");
         const adPinLink = document.getElementById("ad_pin_link");
         const adConnectedArea = document.getElementById("ad_connected_area");
         const adDisconnectBtn = document.getElementById("ad_disconnect_btn");
+
+        // Toggle Manual/OAuth
+        adManualEntryBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            adOAuthSection.classList.add('hidden');
+            adManualSection.classList.remove('hidden');
+        });
+
+        adSwitchOAuthBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            adManualSection.classList.add('hidden');
+            adOAuthSection.classList.remove('hidden');
+        });
 
         // Enable/disable AllDebrid section (Updated Logic)
         useAllDebridCheckbox.addEventListener('change', () => {
@@ -787,25 +805,30 @@
                 adAuthSection.classList.remove('hidden', 'opacity-50', 'pointer-events-none');
             } else {
                 adAuthSection.classList.add('hidden', 'opacity-50', 'pointer-events-none');
-                // Optional: Clear token if disabled, or keep it.
-                // allDebridKeyInput.value = ''; 
             }
 
             // Initial state check for connected/disconnected view
             if (isChecked && allDebridKeyInput.value) {
-                // If we have a key, show connected state
-                adConnectBtn.classList.add('hidden');
+                // Check if it looks like an OAuth token (usually long) or manual key?
+                // For now, if we have a key, just show connected state or manual input populated
+                // Actually, let's default to showing manual input if populated?
+                // Or better: show "Connected" (OAuth style) but allow disconnect.
+
+                adOAuthSection.classList.add('hidden');
                 adConnectedArea.classList.remove('hidden');
                 adPinArea.classList.add('hidden');
+                adManualSection.classList.add('hidden');
+
             } else if (isChecked) {
-                // No key, show connect button
-                adConnectBtn.classList.remove('hidden');
+                // No key, show default state (OAuth button visible)
+                adOAuthSection.classList.remove('hidden');
+                adManualSection.classList.add('hidden');
                 adConnectedArea.classList.add('hidden');
                 adPinArea.classList.add('hidden');
             }
 
             // Update the link generation
-            allDebridKeyInput.disabled = !isChecked; // Keep this logic for compatibility
+            allDebridKeyInput.disabled = !isChecked;
             updateInstallLink();
         });
 

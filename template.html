@@ -899,37 +899,42 @@
             adOAuthSection.classList.remove('hidden');
         });
 
+        // State tracking
+        let isOAuthConnected = false;
+
         // Enable/disable AllDebrid section (Updated Logic)
         useAllDebridCheckbox.addEventListener('change', () => {
             const isChecked = useAllDebridCheckbox.checked;
-            // Toggle visibility of the auth section
             if (isChecked) {
                 adAuthSection.classList.remove('hidden');
             } else {
                 adAuthSection.classList.add('hidden');
             }
 
-            // Initial state check for connected/disconnected view
-            if (isChecked && allDebridKeyInput.value) {
-                // Check if it looks like an OAuth token (usually long) or manual key?
-                // For now, if we have a key, just show connected state or manual input populated
-                // Actually, let's default to showing manual input if populated?
-                // Or better: show "Connected" (OAuth style) but allow disconnect.
-
-                adOAuthSection.classList.add('hidden');
-                adConnectedArea.classList.remove('hidden');
-                adPinArea.classList.add('hidden');
-                adManualSection.classList.add('hidden');
-
-            } else if (isChecked) {
-                // No key, show default state (OAuth button visible)
-                adOAuthSection.classList.remove('hidden');
-                adManualSection.classList.add('hidden');
-                adConnectedArea.classList.add('hidden');
-                adPinArea.classList.add('hidden');
+            // UI State Management
+            if (isChecked) {
+                if (isOAuthConnected) {
+                    // 1. Authenticated via OAuth -> Show Green Box
+                    adConnectBtn.classList.add('hidden');
+                    adOAuthSection.classList.add('hidden'); // Hide the whole oauth wrapper
+                    adConnectedArea.classList.remove('hidden');
+                    adPinArea.classList.add('hidden');
+                    adManualSection.classList.add('hidden');
+                } else if (allDebridKeyInput.value) {
+                    // 2. Has value but NOT OAuth (Manual entry or loaded config) -> Show Manual Input
+                    adOAuthSection.classList.add('hidden'); // Hide Connect button
+                    adManualSection.classList.remove('hidden'); // Show Manual Input
+                    adConnectedArea.classList.add('hidden');
+                    adPinArea.classList.add('hidden');
+                } else {
+                    // 3. No value -> Default state (Show Connect Button)
+                    adOAuthSection.classList.remove('hidden');
+                    adManualSection.classList.add('hidden');
+                    adConnectedArea.classList.add('hidden');
+                    adPinArea.classList.add('hidden');
+                }
             }
 
-            // Update the link generation
             allDebridKeyInput.disabled = !isChecked;
             updateInstallLink();
         });
@@ -997,8 +1002,10 @@
                         const token = data.data.apikey;
 
                         // Success!
+                        isOAuthConnected = true; // Mark as OAuth flow
                         adPinArea.classList.add('hidden');
                         adConnectedArea.classList.remove('hidden');
+                        adOAuthSection.classList.add('hidden'); // Hide connect wrapper
                         allDebridKeyInput.value = token;
                         updateInstallLink();
 

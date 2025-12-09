@@ -8537,6 +8537,33 @@ export default async function handler(req, res) {
             return res.status(200).send(JSON.stringify(health, null, 2));
         }
 
+        // ✅ AllDebrid OAuth: Get Code
+        if (url.pathname === '/alldebrid/code') {
+            const agent = 'torrentio'; // Using torrentio agent for compatibility/parity
+            const response = await fetch(`https://api.alldebrid.com/v4/pin/get?agent=${agent}`);
+            const data = await response.json();
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(200).send(JSON.stringify(data));
+        }
+
+        // ✅ AllDebrid OAuth: Check Token
+        if (url.pathname === '/alldebrid/token') {
+            const check = url.searchParams.get('check');
+            const pin = url.searchParams.get('pin');
+            const agent = 'torrentio';
+
+            if (!check || !pin) {
+                res.setHeader('Content-Type', 'application/json');
+                return res.status(400).send(JSON.stringify({ error: 'Missing check or pin' }));
+            }
+
+            const response = await fetch(`https://api.alldebrid.com/v4/pin/check?agent=${agent}&check=${check}&pin=${pin}`);
+            const data = await response.json();
+
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(200).send(JSON.stringify(data));
+        }
+
         // Enhanced search endpoint for testing
         if (url.pathname === '/search') {
             const query = url.searchParams.get('q');

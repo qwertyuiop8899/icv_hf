@@ -479,6 +479,60 @@
             color: #9ca3af;
             font-size: clamp(0.7rem, 1.5vw, 0.875rem);
         }
+
+        /* Utility Classes */
+        .hidden {
+            display: none !important;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        .mb-2 {
+            margin-bottom: 0.5rem;
+        }
+
+        .mt-2 {
+            margin-top: 0.5rem;
+        }
+
+        .text-xs {
+            font-size: 0.75rem;
+        }
+
+        .text-sm {
+            font-size: 0.875rem;
+        }
+
+        .font-bold {
+            font-weight: bold;
+        }
+
+        .text-red {
+            color: #ff6b6b;
+        }
+
+        .text-green {
+            color: #4ec9b0;
+        }
+
+        .text-purple {
+            color: #c084fc;
+        }
+
+        .flex {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .flex-1 {
+            flex: 1;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/88/three.min.js"></script>
     <script id="vertexShader" type="x-shader/x-vertex">
@@ -641,6 +695,7 @@
                 <input id="torbox_key" placeholder="Torbox API Key" type="password" disabled>
             </div>
 
+            <!-- AllDebrid Config -->
             <div class="service-card">
                 <div class="service-header">
                     <div class="service-title">
@@ -651,7 +706,54 @@
                     </div>
                     <input type="checkbox" id="use_alldebrid">
                 </div>
-                <input id="alldebrid_key" placeholder="AllDebrid API Key" type="password" disabled>
+
+                <div id="alldebrid_auth_section" class="hidden">
+                    <!-- Connect Button (OAuth) -->
+                    <div id="ad_oauth_section">
+                        <button id="ad_connect_btn" style="margin-bottom: 10px;">
+                            🔗 Connetti AllDebrid
+                        </button>
+                        <div class="text-center">
+                            <a href="#" id="ad_manual_entry_btn"
+                                style="color: #9ca3af; font-size: 0.8em; text-decoration: underline;">...oppure
+                                inserisci API Key manualmente</a>
+                        </div>
+                    </div>
+
+                    <!-- Manual Input Area -->
+                    <div id="ad_manual_section" class="hidden">
+                        <small style="display: block; margin-bottom: 5px;">API Key Manuale:</small>
+                        <div style="display: flex; gap: 10px;">
+                            <input id="alldebrid_key" placeholder="AllDebrid API Key" type="password" style="flex: 1;"
+                                disabled>
+                            <button id="ad_switch_oauth_btn" style="width: auto; min-width: 50px; padding: 10px;"
+                                title="Torna a Connessione Automatica">↩️</button>
+                        </div>
+                    </div>
+
+                    <!-- PIN Display Area -->
+                    <div id="ad_pin_area" class="hidden"
+                        style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; text-align: center; margin-top: 10px;">
+                        <p style="color: #ddd; margin-bottom: 5px;">Inserisci questo codice su AllDebrid:</p>
+                        <p id="ad_pin_code"
+                            style="font-size: 1.5em; font-family: monospace; color: #c084fc; font-weight: bold; margin: 10px 0;">
+                            ----</p>
+                        <a id="ad_pin_link" href="#" target="_blank"
+                            style="color: #c084fc; text-decoration: underline; display: block; margin-bottom: 10px;">Clicca
+                            qui per inserire il codice</a>
+                        <div style="font-size: 0.8em; color: #aaa;">
+                            <span class="animate-spin">⏳</span> In attesa di autorizzazione...
+                        </div>
+                    </div>
+
+                    <!-- Connected State -->
+                    <div id="ad_connected_area" class="hidden"
+                        style="background: rgba(46, 204, 113, 0.2); border: 1px solid rgba(46, 204, 113, 0.5); padding: 15px; border-radius: 8px; text-align: center; margin-top: 10px;">
+                        <p style="color: #2ecc71; font-weight: bold; margin: 0;">✅ Account Collegato</p>
+                        <button id="ad_disconnect_btn"
+                            style="background: none; border: none; color: #e74c3c; text-decoration: underline; font-size: 0.8em; min-width: auto; padding: 5px; box-shadow: none; margin-top: 5px;">Disconnetti</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Siti di Ricerca Torrent (occupa 2 righe) -->
@@ -802,9 +904,9 @@
             const isChecked = useAllDebridCheckbox.checked;
             // Toggle visibility of the auth section
             if (isChecked) {
-                adAuthSection.classList.remove('hidden', 'opacity-50', 'pointer-events-none');
+                adAuthSection.classList.remove('hidden');
             } else {
-                adAuthSection.classList.add('hidden', 'opacity-50', 'pointer-events-none');
+                adAuthSection.classList.add('hidden');
             }
 
             // Initial state check for connected/disconnected view

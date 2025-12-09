@@ -5,8 +5,11 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 
-// ✅ Import CommonJS modules (db-helper, id-converter)
+// ✅ AIOSTREAMS: Fuzzy matching library (CommonJS import)
 const require = createRequire(import.meta.url);
+const fuzzball = require('fuzzball');
+
+// ✅ Import CommonJS modules (db-helper, id-converter)
 const dbHelper = require('../db-helper.cjs');
 const { completeIds } = require('../lib/id-converter.cjs');
 
@@ -168,16 +171,41 @@ function isItalian(title, italianMovieTitle = null) {
     return false;
 }
 
-// ✅ NUOVA FUNZIONE: Icona lingua
-function getLanguageInfo(title, italianMovieTitle = null, source = null) {
-    if (!title) return { icon: '', isItalian: false, isMulti: false, displayLabel: '' };
+// ✅ NUOVA FUNZIONE: Icona lingua (usando i regex AIOStreams)
+function getLanguageInfo(title, italianMovieTitle = null, source = null, parsedInfo = null) {
+    if (!title) return { icon: '', isItalian: false, isMulti: false, displayLabel: '', detectedLanguages: [] };
 
-    const lowerTitle = title.toLowerCase();
+    // ✅ Se abbiamo parsedInfo dal parser AIOStreams, usalo direttamente
+    let detectedLanguages = [];
+    if (parsedInfo?.languages?.length > 0) {
+        detectedLanguages = parsedInfo.languages;
+    } else {
+        // Fallback: usa i regex PARSE_REGEX.languages se definiti
+        if (typeof PARSE_REGEX !== 'undefined' && PARSE_REGEX.languages) {
+            for (const [lang, regex] of Object.entries(PARSE_REGEX.languages)) {
+                if (regex.test(title)) {
+                    detectedLanguages.push(lang);
+                }
+            }
+        } else {
+            // Fallback vecchio metodo se PARSE_REGEX non è ancora disponibile
+            const lowerTitle = title.toLowerCase();
+            if (/\b(ita|italian)\b/i.test(title) && !/\b(ita|italian)[.\s\-_]?sub/i.test(title)) detectedLanguages.push('Italian');
+            if (/\b(eng|english)\b/i.test(title) && !/\b(eng|english)[.\s\-_]?sub/i.test(title)) detectedLanguages.push('English');
+            if (/\b(multi)\b/i.test(title) && !/\b(multi)[.\s\-_]?sub/i.test(title)) detectedLanguages.push('Multi');
+            if (/\b(dual)\b/i.test(title) && !/\b(dual)[.\s\-_]?sub/i.test(title)) detectedLanguages.push('Dual Audio');
+        }
+    }
+
+    // Detect flags based on detected languages
+    let hasIta = detectedLanguages.includes('Italian');
+    const hasEng = detectedLanguages.includes('English');
+    const hasMulti = detectedLanguages.includes('Multi') || detectedLanguages.includes('Dual Audio');
     
-    // Detect flags
-    let hasIta = /\b(ita|italian|subita)\b/i.test(lowerTitle) || isItalian(title, italianMovieTitle);
-    const hasEng = /\b(eng|english)\b/i.test(lowerTitle);
-    const hasMulti = /\b(multi|dual)\b/i.test(lowerTitle);
+    // Check also for Italian via title matching
+    if (!hasIta && italianMovieTitle) {
+        hasIta = isItalian(title, italianMovieTitle);
+    }
 
     // Force Italian for CorsaroNero
     if (source && (source === 'CorsaroNero' || source.includes('CorsaroNero'))) {
@@ -186,21 +214,31 @@ function getLanguageInfo(title, italianMovieTitle = null, source = null) {
 
     // Logic 1: ITA + ENG -> 🇮🇹 🇬🇧
     if (hasIta && hasEng) {
-        return { icon: '🇮🇹 🇬🇧', isItalian: true, isMulti: true, displayLabel: '🇮🇹 🇬🇧' };
+        return { icon: '🇮🇹 🇬🇧', isItalian: true, isMulti: true, displayLabel: '🇮🇹 🇬🇧', detectedLanguages };
     }
 
     // Logic 2: SOLO ITA (or ITA + MULTI) -> 🇮🇹
     if (hasIta) {
-        return { icon: '🇮🇹', isItalian: true, isMulti: false, displayLabel: '🇮🇹' };
+        return { icon: '🇮🇹', isItalian: true, isMulti: hasMulti, displayLabel: '🇮🇹', detectedLanguages };
     }
 
-    // Logic 3: SOLO MULTI (No ITA) -> 🌈 MULTI
+    // Logic 3: MULTI (No ITA) -> 🌈 MULTI
     if (hasMulti) {
-        return { icon: '🌈', isItalian: false, isMulti: true, displayLabel: '🌈 MULTI' };
+        return { icon: '🌈', isItalian: false, isMulti: true, displayLabel: '🌈 MULTI', detectedLanguages };
     }
 
     // Logic 4: SOLO ENG (Default) -> 🇬🇧
-    return { icon: '🇬🇧', isItalian: false, isMulti: false, displayLabel: '🇬🇧' };
+    if (hasEng) {
+        return { icon: '🇬🇧', isItalian: false, isMulti: false, displayLabel: '🇬🇧', detectedLanguages };
+    }
+
+    // Logic 5: Altre lingue o nessuna rilevata -> 🌐
+    if (detectedLanguages.length > 0) {
+        return { icon: '🌐', isItalian: false, isMulti: false, displayLabel: '🌐', detectedLanguages };
+    }
+
+    // Default
+    return { icon: '', isItalian: false, isMulti: false, displayLabel: '', detectedLanguages };
 }
 
 // ✅ NUOVA FUNZIONE: Detecta Season Pack
@@ -538,123 +576,914 @@ async function fetchCorsaroNeroData(originalQuery, type = 'movie') {
 // --- FINE NUOVA SEZIONE ---
 
 
-// --- NUOVA SEZIONE: SCRAPER PER KNABEN.ORG ---
+// --- NUOVA SEZIONE: TORRENT TITLE PARSER (AIOStreams Style) ---
 
-const KNABEN_BASE_URL = "https://knaben.org";
+/**
+ * Helper function per creare regex (come AIOStreams)
+ * Crea un pattern che matcha solo parole intere, non prefissi/suffissi
+ */
+function createRegex(pattern) {
+    return new RegExp(`(?<![^\\s\\[(_\\-.,])(${pattern})(?=[\\s\\)\\]_.\\-,]|$)`, 'i');
+}
 
-async function fetchKnabenData(searchQuery, type = 'movie') {
-    // Knaben non ha categorie separate per film/serie nella ricerca, quindi 'type' è ignorato.
-    const cleanedQuery = searchQuery.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    if (!cleanedQuery) {
-        console.log('🦉 Query is empty after cleaning, skipping Knaben search.');
-        return [];
+/**
+ * Regex per lingue che esclude i sottotitoli (come AIOStreams)
+ * Non matcha se seguito da "sub", "subtitle", "subs", etc.
+ */
+function createLanguageRegex(pattern) {
+    return createRegex(`${pattern}(?![ .\\-_]?sub(title)?s?)`);
+}
+
+// --- REGEX PATTERNS (identici ad AIOStreams parser/regex.ts) ---
+
+const PARSE_REGEX = {
+    resolutions: {
+        '2160p': createRegex('(bd|hd|m)?(4k|2160(p|i)?)|u(ltra)?[ .\\-_]?hd|3840\\s?x\\s?(\\d{4})'),
+        '1440p': createRegex('(bd|hd|m)?(1440(p|i)?)|2k|w?q(uad)?[ .\\-_]?hd|2560\\s?x(\\d{4})'),
+        '1080p': createRegex('(bd|hd|m)?(1080(p|i)?)|f(ull)?[ .\\-_]?hd|1920\\s?x\\s?(\\d{3,4})'),
+        '720p': createRegex('(bd|hd|m)?((720|800)(p|i)?)|hd|1280\\s?x\\s?(\\d{3,4})'),
+        '576p': createRegex('(bd|hd|m)?((576|534)(p|i)?)'),
+        '480p': createRegex('(bd|hd|m)?(480(p|i)?)|sd'),
+        '360p': createRegex('(bd|hd|m)?(360(p|i)?)'),
+        '240p': createRegex('(bd|hd|m)?((240|266)(p|i)?)'),
+    },
+    qualities: {
+        'BluRay REMUX': createRegex('(bd|br|b|uhd)?remux'),
+        'BluRay': createRegex('(?<!remux.*)(bd|blu[ .\\-_]?ray|((bd|br)[ .\\-_]?rip))(?!.*remux)'),
+        'WEB-DL': createRegex('web[ .\\-_]?(dl)?(?![ .\\-_]?(rip|DLRip|cam))'),
+        'WEBRip': createRegex('web[ .\\-_]?rip'),
+        'HDRip': createRegex('hd[ .\\-_]?rip|web[ .\\-_]?dl[ .\\-_]?rip'),
+        'HDTV': createRegex('hd[ .\\-_]?tv|pdtv'),
+        'DVDRip': createRegex('dvd[ .\\-_]?(rip|scr)'),
+        'DVD': createRegex('dvd(?![ .\\-_]?(rip|scr))'),
+        'CAM': createRegex('(hd)?cam(?![ .\\-_]?rip)|cam[ .\\-_]?rip'),
+        'TS': createRegex('((hd)?ts|telesync)(?![ .\\-_]?rip)|ts[ .\\-_]?rip'),
+        'TC': createRegex('tc|telecine'),
+        'SCR': createRegex('((bd|dvd)?scr(eener)?)|scr[ .\\-_]?rip'),
+    },
+    visualTags: {
+        'HDR10+': createRegex('hdr[ .\\-_]?10[ .\\-_]?(\\+|p(lus)?)'),
+        'HDR10': createRegex('hdr[ .\\-_]?10(?![ .\\-_]?(?:\\+|p(lus)?))'),
+        'HDR': createRegex('hdr(?![ .\\-_]?10)(?![ .\\-_]?(?:\\+|p(lus)?))'),
+        'DV': createRegex('do?(lby)?[ .\\-_]?vi?(sion)?(?:[ .\\-_]?atmos)?|dv'),
+        '3D': createRegex('(bd)?(3|three)[ .\\-_]?(d(imension)?(al)?)'),
+        'IMAX': createRegex('imax'),
+        'SDR': createRegex('sdr'),
+    },
+    audioTags: {
+        'Atmos': createRegex('atmos'),
+        'DD+': createRegex('(d(olby)?[ .\\-_]?d(igital)?[ .\\-_]?(p(lus)?|\\+)(?:[ .\\-_]?(2[ .\\-_]?0|5[ .\\-_]?1|7[ .\\-_]?1))?)|e[ .\\-_]?ac[ .\\-_]?3'),
+        'DD': createRegex('(d(olby)?[ .\\-_]?d(igital)?(?:[ .\\-_]?(5[ .\\-_]?1|7[ .\\-_]?1|2[ .\\-_]?0?))?)|(?<!e[ .\\-_]?)ac[ .\\-_]?3'),
+        'DTS-HD MA': createRegex('dts[ .\\-_]?hd[ .\\-_]?ma'),
+        'DTS-HD': createRegex('dts[ .\\-_]?hd(?![ .\\-_]?ma)'),
+        'DTS-ES': createRegex('dts[ .\\-_]?es'),
+        'DTS': createRegex('dts(?![ .\\-_]?hd[ .\\-_]?ma|[ .\\-_]?hd|[ .\\-_]?es)'),
+        'TrueHD': createRegex('true[ .\\-_]?hd'),
+        'OPUS': createRegex('opus'),
+        'AAC': createRegex('q?aac(?:[ .\\-_]?2)?'),
+        'FLAC': createRegex('flac(?:[ .\\-_]?(lossless|2\\.0|x[2-4]))?'),
+    },
+    audioChannels: {
+        '2.0': createRegex('(d(olby)?[ .\\-_]?d(igital)?)?2[ .\\-_]?0(ch)?'),
+        '5.1': createRegex('(d(olby)?[ .\\-_]?d(igital)?[ .\\-_]?(p(lus)?|\\+)?)?5[ .\\-_]?1(ch)?'),
+        '6.1': createRegex('(d(olby)?[ .\\-_]?d(igital)?[ .\\-_]?(p(lus)?|\\+)?)?6[ .\\-_]?1(ch)?'),
+        '7.1': createRegex('(d(olby)?[ .\\-_]?d(igital)?[ .\\-_]?(p(lus)?|\\+)?)?7[ .\\-_]?1(ch)?'),
+    },
+    encodes: {
+        'HEVC': createRegex('hevc[ .\\-_]?(10)?|[xh][ .\\-_]?265'),
+        'AVC': createRegex('avc|[xh][ .\\-_]?264'),
+        'AV1': createRegex('av1'),
+        'XviD': createRegex('xvid'),
+        'DivX': createRegex('divx|dvix'),
+    },
+    // Regex per lingue (come AIOStreams) - escludono "sub", "subtitle"
+    languages: {
+        'Multi': createLanguageRegex('multi'),
+        'Dual Audio': createLanguageRegex('dual[ .\\-_]?(audio|lang(uage)?|flac|ac3|aac2?)'),
+        'Dubbed': createLanguageRegex('dub(s|bed|bing)?'),
+        'English': createLanguageRegex('english|eng'),
+        'Japanese': createLanguageRegex('japanese|jap|jpn'),
+        'Chinese': createLanguageRegex('chinese|chi'),
+        'Russian': createLanguageRegex('russian|rus'),
+        'Arabic': createLanguageRegex('arabic|ara'),
+        'Portuguese': createLanguageRegex('portuguese|por'),
+        'Spanish': createLanguageRegex('spanish|spa|esp'),
+        'French': createLanguageRegex('french|fra|fr|vf|vff|vfi|vf2|vfq|truefrench'),
+        'German': createLanguageRegex('deu(tsch)?(land)?|ger(man)?'),
+        'Italian': createRegex('italian|ita|sub[.\\s\\-_]?ita'),  // ✅ Include "ita", "italian", "sub ita", "subita"
+        'Korean': createLanguageRegex('korean|kor'),
+        'Hindi': createLanguageRegex('hindi|hin'),
+        'Bengali': createLanguageRegex('bengali|ben(?![ .\\-_]?the[ .\\-_]?men)'),
+        'Punjabi': createLanguageRegex('punjabi|pan'),
+        'Tamil': createLanguageRegex('tamil|tam'),
+        'Telugu': createLanguageRegex('telugu|tel'),
+        'Thai': createLanguageRegex('thai|tha'),
+        'Vietnamese': createLanguageRegex('vietnamese|vie'),
+        'Indonesian': createLanguageRegex('indonesian|ind'),
+        'Turkish': createLanguageRegex('turkish|tur'),
+        'Hebrew': createLanguageRegex('hebrew|heb'),
+        'Persian': createLanguageRegex('persian|per'),
+        'Ukrainian': createLanguageRegex('ukrainian|ukr'),
+        'Greek': createLanguageRegex('greek|ell'),
+        'Polish': createLanguageRegex('polish|pol'),
+        'Czech': createLanguageRegex('czech|cze'),
+        'Slovak': createLanguageRegex('slovak|slo'),
+        'Hungarian': createLanguageRegex('hungarian|hun'),
+        'Romanian': createLanguageRegex('romanian|rum'),
+        'Bulgarian': createLanguageRegex('bulgarian|bul'),
+        'Serbian': createLanguageRegex('serbian|srp'),
+        'Croatian': createLanguageRegex('croatian|hrv'),
+        'Dutch': createLanguageRegex('dutch|dut'),
+        'Danish': createLanguageRegex('danish|dan'),
+        'Finnish': createLanguageRegex('finnish|fin'),
+        'Swedish': createLanguageRegex('swedish|swe'),
+        'Norwegian': createLanguageRegex('norwegian|nor'),
+        'Malay': createLanguageRegex('malay'),
+        'Latino': createLanguageRegex('latino|lat'),
+    },
+    releaseGroup: /-[. ]?(?!\d+$|S\d+|\d+x|ep?\d+|[^[]+]$)([^\-. []+[^\-. [)\]\d][^\-. [)\]]*)(?:\[[\w.-]+])?(?=\)|[.-]+\w{2,4}$|$)/i,
+};
+
+/**
+ * Trova il primo match in un oggetto di regex patterns
+ */
+function matchPattern(filename, patterns) {
+    for (const [name, pattern] of Object.entries(patterns)) {
+        if (pattern.test(filename)) {
+            return name;
+        }
     }
-    
-    console.log(`🦉 [HTML Scraper] Searching Knaben.org for: "${cleanedQuery}" (Pages 1-3)`);
+    return undefined;
+}
 
-    const allStreams = [];
-    const maxPages = 3; // Cycle through first 3 pages
+/**
+ * Trova tutti i match in un oggetto di regex patterns
+ */
+function matchMultiplePatterns(filename, patterns) {
+    const matches = [];
+    for (const [name, pattern] of Object.entries(patterns)) {
+        if (pattern.test(filename)) {
+            matches.push(name);
+        }
+    }
+    return matches;
+}
 
-    for (let page = 1; page <= maxPages; page++) {
-        try {
-            // URL format: /search/query/0/page_number
-            // Note: Knaben uses 0 for category (all) and page number starts at 1? Or 0?
-            // Based on user request: /search/query/0/1, /search/query/0/2
-            const searchUrl = `${KNABEN_BASE_URL}/search/${encodeURIComponent(cleanedQuery)}/0/${page}/`;
-            
-            console.log(`🦉 [Page ${page}] Fetching: ${searchUrl}`);
+/**
+ * Parser principale per titoli torrent (implementazione JavaScript di @viren070/parse-torrent-title)
+ * Basato su: https://github.com/clement-escolano/parse-torrent-title
+ * 
+ * @param {string} filename - Nome del file/torrent da parsare
+ * @returns {Object} Oggetto con tutti i campi estratti
+ */
+function parseTorrentTitle(filename) {
+    if (!filename) {
+        return {
+            title: undefined,
+            year: undefined,
+            seasons: [],
+            episodes: [],
+            resolution: undefined,
+            quality: undefined,
+            languages: [],
+            codec: undefined,
+            group: undefined,
+            complete: false,
+            extended: false,
+            repack: false,
+            proper: false,
+            audioTags: [],
+            visualTags: [],
+            audioChannels: [],
+        };
+    }
 
-            const response = await fetch(searchUrl, {
-                headers: { 
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Referer': `${KNABEN_BASE_URL}/`
-                }
-            });
+    // Normalizza il filename
+    let normalized = filename
+        .replace(/\./g, ' ')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-            if (!response.ok) {
-                console.warn(`🦉 [Page ${page}] Failed with status ${response.status}`);
-                continue; // Try next page
+    const result = {
+        title: undefined,
+        year: undefined,
+        seasons: [],
+        episodes: [],
+        resolution: undefined,
+        quality: undefined,
+        languages: [],
+        codec: undefined,
+        group: undefined,
+        complete: false,
+        extended: false,
+        repack: false,
+        proper: false,
+        audioTags: [],
+        visualTags: [],
+        audioChannels: [],
+    };
+
+    // 1. Estrai anno (4 cifre tra 1900 e 2099)
+    const yearMatch = filename.match(/[[(. _-]?((?:19|20)\d{2})[\]).\s_-]/);
+    if (yearMatch) {
+        result.year = parseInt(yearMatch[1], 10);
+    }
+
+    // 2. Estrai stagione/episodio (S01E02, 1x02, Season 1 Episode 2, etc.)
+    const seasonEpisodePatterns = [
+        /S(\d{1,2})[ .\-_]?E(\d{1,3})/i,                       // S01E05
+        /(\d{1,2})x(\d{1,3})/i,                                  // 1x05
+        /Season[ .\-_]?(\d{1,2})[ .\-_]?Episode[ .\-_]?(\d{1,3})/i, // Season 1 Episode 5
+        /S(\d{1,2})[ .\-_]?-[ .\-_]?S(\d{1,2})/i,              // S01-S03 (range)
+        /S(\d{1,2})(?!E)/i,                                     // Solo stagione S01
+        /Season[ .\-_]?(\d{1,2})(?![ .\-_]?Episode)/i,          // Solo Season 1
+    ];
+
+    for (const pattern of seasonEpisodePatterns) {
+        const match = filename.match(pattern);
+        if (match) {
+            if (match[1]) {
+                result.seasons.push(parseInt(match[1], 10));
             }
-
-            const html = await response.text();
-            const $ = cheerio.load(html);
-
-            const rows = $('table.table tbody tr');
-            if (rows.length === 0) {
-                console.log(`🦉 [Page ${page}] No results found. Stopping pagination.`);
-                break; // No more results, stop looping
-            }
-
-            console.log(`🦉 [Page ${page}] Found ${rows.length} potential results.`);
-
-            const pageStreams = rows.toArray().map(row => {
-                const $row = $(row);
-
-                const cells = $row.find('td');
-                // --- NUOVA MODIFICA: Filtro per contenuti per adulti ---
-                // Estrai la categoria dalla prima cella per il filtraggio.
-                const torrentTitleForLog = $row.find('td:nth-child(2) a[title]').first().text().trim();
-                const categoryText = cells.eq(0).text().trim();
-                if (isAdultCategory(categoryText) || isAdultCategory(torrentTitleForLog)) {
-                    // Usiamo un selettore temporaneo per ottenere il titolo solo per il logging,
-                    // nel caso in cui questo risultato venga scartato.
-                    // console.log(`🦉 Filtering adult content by category: "${torrentTitleForLog}" (Category: ${categoryText})`);
-                    return null; // Scarta il risultato
+            if (match[2]) {
+                // Potrebbe essere episodio o seconda stagione (in range)
+                const num = parseInt(match[2], 10);
+                if (pattern.source.includes('x') || pattern.source.includes('E')) {
+                    result.episodes.push(num);
+                } else {
+                    // È un range di stagioni
+                    for (let s = parseInt(match[1], 10); s <= num; s++) {
+                        if (!result.seasons.includes(s)) {
+                            result.seasons.push(s);
+                        }
+                    }
                 }
-                // --- FINE MODIFICA ---
-
-
-                // Trova il titolo dall'attributo 'title' del primo link principale nella seconda cella.
-                const titleElement = $row.find('td:nth-child(2) a[title]').first();
-                const torrentTitle = titleElement.text().trim();
-
-                // Trova il magnet link cercando un link che inizi con 'magnet:?' nella riga.
-                const magnetElement = $row.find('a[href^="magnet:?"]').first();
-                const magnetLink = magnetElement.attr('href');
-
-                // Se non troviamo titolo o magnet, la riga non è valida.
-                // Questo gestisce anche le righe che hanno solo un link "Refresh magnet".
-                if (!torrentTitle || !magnetLink) return null;
-
-                const infoHash = extractInfoHash(magnetLink);
-                if (!infoHash) return null;
-
-                // Estrai gli altri dati dalle celle corrispondenti.
-                const sizeStr = cells.eq(2).text().trim();
-                const seeds = cells.eq(4).text().trim(); // 5th column
-                const leechs = cells.eq(5).text().trim(); // 6th column
-                const sizeInBytes = parseSize(sizeStr);
-
-                return {
-                    magnetLink: magnetLink,
-                    websiteTitle: torrentTitle,
-                    title: torrentTitle,
-                    filename: torrentTitle,
-                    quality: extractQuality(torrentTitle),
-                    size: sizeStr,
-                    source: 'Knaben',
-                    seeders: parseInt(seeds) || 0,
-                    leechers: parseInt(leechs) || 0,
-                    infoHash: infoHash.toUpperCase(),
-                    mainFileSize: sizeInBytes,
-                    pubDate: new Date().toISOString(), // Not available
-                    categories: [type === 'movie' ? 'Movies' : 'TV'] // Assume category from search type
-                };
-            }).filter(Boolean);
-
-            allStreams.push(...pageStreams);
-            
-            // Optional: Add a small delay to be nice to the server
-            if (page < maxPages) await new Promise(r => setTimeout(r, 200));
-
-        } catch (error) {
-            console.error(`❌ Error in fetchKnabenData (Page ${page}):`, error.message);
+            }
+            break; // Usa solo il primo match
         }
     }
 
-    console.log(`🦉 Successfully parsed ${allStreams.length} total streams from Knaben.org (Pages 1-${maxPages}).`);
-    return allStreams;
+    // 3. Estrai episodio assoluto per anime (es. "- 05", "E05", "Ep 5")
+    if (result.episodes.length === 0 && result.seasons.length === 0) {
+        const absEpPatterns = [
+            /[ .\-_](\d{2,4})[ .\-_]?(?:v\d)?(?:[[(]|\b(?:720|1080|480|2160))/i, // - 05 720p
+            /[ .\-_]E(\d{1,4})\b/i,                                               // E05
+            /[ .\-_]Ep[ .\-_]?(\d{1,4})\b/i,                                      // Ep 5
+        ];
+        for (const pattern of absEpPatterns) {
+            const match = filename.match(pattern);
+            if (match) {
+                result.episodes.push(parseInt(match[1], 10));
+                break;
+            }
+        }
+    }
+
+    // 4. Estrai risoluzione
+    result.resolution = matchPattern(filename, PARSE_REGEX.resolutions);
+
+    // 5. Estrai qualità
+    result.quality = matchPattern(filename, PARSE_REGEX.qualities);
+
+    // 6. Estrai lingue (usando i regex AIOStreams che escludono "sub/subtitle")
+    result.languages = matchMultiplePatterns(filename, PARSE_REGEX.languages);
+
+    // 7. Estrai codec
+    result.codec = matchPattern(filename, PARSE_REGEX.encodes);
+
+    // 8. Estrai audio tags
+    result.audioTags = matchMultiplePatterns(filename, PARSE_REGEX.audioTags);
+
+    // 9. Estrai visual tags (HDR, DV, etc.)
+    result.visualTags = matchMultiplePatterns(filename, PARSE_REGEX.visualTags);
+
+    // 10. Estrai audio channels
+    result.audioChannels = matchMultiplePatterns(filename, PARSE_REGEX.audioChannels);
+
+    // 11. Estrai release group
+    const groupMatch = filename.match(PARSE_REGEX.releaseGroup);
+    if (groupMatch && groupMatch[1]) {
+        result.group = groupMatch[1].trim();
+    }
+
+    // 12. Flag speciali
+    result.complete = /\b(complete|completa|tutte)\b/i.test(filename);
+    result.extended = /\b(extended|estesa)\b/i.test(filename);
+    result.repack = /\b(repack)\b/i.test(filename);
+    result.proper = /\b(proper)\b/i.test(filename);
+
+    // 13. Estrai titolo (tutto prima dell'anno o della risoluzione)
+    let titleEndIndex = filename.length;
+    
+    // Trova dove finisce il titolo
+    const titleEndPatterns = [
+        /[(. _\-](?:19|20)\d{2}[). _\-]/,           // Anno
+        /[(. _\-]S\d{1,2}[). _\-E]/i,               // Stagione
+        /[(. _\-]\d{1,2}x\d{1,3}[). _\-]/i,         // 1x05
+        /[(. _\-](?:720|1080|480|2160|4k)p?[). _\-]/i, // Risoluzione
+        /[(. _\-](?:HDTV|DVDRip|BluRay|WEB|REMUX)[). _\-]/i, // Qualità
+    ];
+
+    for (const pattern of titleEndPatterns) {
+        const match = filename.match(pattern);
+        if (match && match.index < titleEndIndex) {
+            titleEndIndex = match.index;
+        }
+    }
+
+    if (titleEndIndex > 0) {
+        result.title = filename
+            .substring(0, titleEndIndex)
+            .replace(/\./g, ' ')
+            .replace(/_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    return result;
+}
+
+/**
+ * Normalizza un titolo per confronto (come AIOStreams parser/utils.ts)
+ */
+function normaliseTitle(title) {
+    if (!title) return '';
+    return title
+        .replace(/&/g, 'and')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')  // Rimuove accenti
+        .replace(/[^\p{L}\p{N}+]/gu, '')  // Solo lettere e numeri
+        .toLowerCase();
+}
+
+/**
+ * Verifica se la stagione è sbagliata (come AIOStreams debrid/utils.ts)
+ */
+function isSeasonWrong(parsed, metadata) {
+    if (!parsed.seasons?.length || !metadata?.season) return false;
+    
+    // Se la stagione richiesta non è nelle stagioni del torrent
+    if (!parsed.seasons.includes(metadata.season)) {
+        // Eccezione: se è stagione 1 con episodi assoluti corretti
+        if (parsed.seasons.length === 1 && parsed.seasons[0] === 1 
+            && parsed.episodes?.length && metadata.absoluteEpisode 
+            && parsed.episodes.includes(metadata.absoluteEpisode)) {
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Verifica se l'episodio è sbagliato (come AIOStreams debrid/utils.ts)
+ */
+function isEpisodeWrong(parsed, metadata) {
+    if (!parsed.episodes?.length || !metadata?.episode) return false;
+    
+    // Controlla episodio normale o assoluto
+    if (!parsed.episodes.includes(metadata.episode) && 
+        !(metadata.absoluteEpisode && parsed.episodes.includes(metadata.absoluteEpisode))) {
+        return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// ✅ AIOSTREAMS TITLE MATCHING (COPIA ESATTA)
+// Fonte: packages/core/src/parser/utils.ts + packages/core/src/debrid/utils.ts
+// ============================================================================
+
+/**
+ * AIOStreams titleMatch - usa fuzzball.extract() per fuzzy matching
+ * @param {string} parsedTitle - Titolo normalizzato dal torrent
+ * @param {string[]} titles - Array di titoli validi normalizzati
+ * @param {object} options - { threshold: 0.8 }
+ * @returns {boolean} true se matcha
+ */
+function titleMatch(parsedTitle, titles, options = { threshold: 0.8 }) {
+    const { threshold } = options;
+    
+    // Usa fuzzball.extract per trovare la migliore corrispondenza
+    const results = fuzzball.extract(parsedTitle, titles, { returnObjects: true });
+    
+    // Trova il punteggio più alto (fuzzball ritorna 0-100, noi usiamo 0-1)
+    // Con returnObjects: true, il formato è { choice, score, key }
+    const highestScore = results.reduce((max, result) => {
+        const score = result.score !== undefined ? result.score : result[1]; // Supporta entrambi i formati
+        return Math.max(max, score);
+    }, 0) / 100;
+    
+    return highestScore >= threshold;
+}
+
+/**
+ * AIOStreams preprocessTitle - preprocessa il titolo prima del matching
+ * Fonte: packages/core/src/parser/utils.ts linea 27-62
+ * Gestisce titoli con "/" o "|" (es: "Fuori / Outside" → "Fuori")
+ * @param {string} parsedTitle - Titolo estratto dal parser
+ * @param {string} filename - Nome file originale del torrent
+ * @param {string[]} titles - Array di titoli validi dal metadata
+ * @returns {string} Titolo preprocessato
+ */
+function preprocessTitle(parsedTitle, filename, titles) {
+    let preprocessedTitle = parsedTitle;
+    
+    // Pattern per separatori (come AIOStreams)
+    const separatorPatterns = [
+        /\s*[\/\|]\s*/,                              // "/" o "|" con spazi
+        /[\s\.\-\(]+a[\s\.]?k[\s\.]?a[\s\.\)\-]+/i, // "a.k.a.", "aka", etc.
+        /\s*\(([^)]+)\)$/,                           // "(titolo alternativo)" alla fine
+    ];
+    
+    for (const pattern of separatorPatterns) {
+        const match = preprocessedTitle.match(pattern);
+        
+        if (match) {
+            // Controlla se uno dei titoli validi contiene già questo separatore
+            const hasExistingTitleWithSeparator = titles.some((title) =>
+                pattern.test(title.toLowerCase())
+            );
+            
+            if (!hasExistingTitleWithSeparator) {
+                const parts = preprocessedTitle.split(pattern);
+                if (parts.length > 1 && parts[0]?.trim()) {
+                    const originalTitle = preprocessedTitle;
+                    preprocessedTitle = parts[0].trim();
+                    console.log(`[preprocessTitle] Titolo aggiornato da "${originalTitle}" a "${preprocessedTitle}"`);
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Gestione "Saga" come in AIOStreams
+    if (
+        titles.some((title) => title.toLowerCase().includes('saga')) &&
+        filename?.toLowerCase().includes('saga') &&
+        !preprocessedTitle.toLowerCase().includes('saga')
+    ) {
+        preprocessedTitle += ' Saga';
+    }
+    
+    return preprocessedTitle;
+}
+
+/**
+ * AIOStreams isTitleWrong - verifica se il titolo NON corrisponde
+ * Fonte: packages/core/src/debrid/utils.ts linea 127-141
+ * @param {object} parsed - { title: string }
+ * @param {object} metadata - { titles: string[] }
+ * @param {string} filename - Nome file originale del torrent (opzionale)
+ * @returns {boolean} true se il titolo è SBAGLIATO
+ */
+function isTitleWrong(parsed, metadata, filename = '') {
+    if (!parsed.title || !metadata?.titles?.length) return false;
+    
+    // Preprocessa il titolo prima del matching (gestisce "Fuori / Outside" → "Fuori")
+    const preprocessedTitle = preprocessTitle(parsed.title, filename, metadata.titles);
+    
+    const normalisedParsed = normaliseTitle(preprocessedTitle);
+    const normalisedTitles = metadata.titles.map(normaliseTitle);
+    
+    console.log(`[isTitleWrong] Titolo originale: "${parsed.title}", preprocessato: "${preprocessedTitle}", normalizzato: "${normalisedParsed}"`);
+    console.log(`[isTitleWrong] Titoli validi normalizzati: ${JSON.stringify(normalisedTitles.slice(0, 3))}...`);
+    
+    // Se NON matcha nessun titolo con threshold 0.8, è sbagliato
+    if (!titleMatch(normalisedParsed, normalisedTitles, { threshold: 0.8 })) {
+        console.log(`[isTitleWrong] TITOLO SBAGLIATO: "${preprocessedTitle}" non matcha nessun titolo valido`);
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Fallback per calcolare similarità senza fuzzball
+ */
+function calculateLevenshteinSimilarity(str1, str2) {
+    if (str1 === str2) return 1.0;
+    if (!str1 || !str2) return 0;
+    
+    const len1 = str1.length;
+    const len2 = str2.length;
+    
+    const matrix = Array(len1 + 1).fill(null).map(() => Array(len2 + 1).fill(0));
+    
+    for (let i = 0; i <= len1; i++) matrix[i][0] = i;
+    for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+    
+    for (let i = 1; i <= len1; i++) {
+        for (let j = 1; j <= len2; j++) {
+            const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+    
+    const distance = matrix[len1][len2];
+    const maxLen = Math.max(len1, len2);
+    return 1 - (distance / maxLen);
+}
+
+function calculateSimilarity(str1, str2) {
+    return calculateLevenshteinSimilarity(str1, str2);
+}
+
+// --- FINE SEZIONE TORRENT TITLE PARSER ---
+
+
+// --- NUOVA SEZIONE: SCRAPER PER KNABEN.ORG (AIOStreams Style API) ---
+
+const KNABEN_API_URL = "https://api.knaben.org";
+const KNABEN_API_VERSION = "1";
+
+// Categorie Knaben
+const KnabenCategory = {
+    TV: 2000000,
+    Movies: 3000000,
+    Anime: 6000000,
+    AnimeSubbed: 6001000,
+    AnimeDubbed: 6002000,
+    AnimeDualAudio: 6003000,
+    AnimeRaw: 6004000,
+    AnimeMusicVideo: 6005000,
+    AnimeLiterature: 6006000,
+    AnimeMusic: 6007000,
+    AnimeNonEnglishTranslated: 6008000,
+};
+
+// Categorie da escludere (blacklist)
+const KNABEN_BLACKLISTED_CATEGORIES = [
+    KnabenCategory.AnimeLiterature,
+    KnabenCategory.AnimeMusic,
+    KnabenCategory.AnimeMusicVideo,
+];
+
+/**
+ * Classe KnabenAPI - Implementazione identica a AIOStreams
+ * POST https://api.knaben.org/1/
+ */
+class KnabenAPI {
+    constructor() {
+        this.headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+        };
+    }
+
+    /**
+     * Ricerca su Knaben API
+     * @param {Object} options - Opzioni di ricerca
+     * @param {string} options.query - Query di ricerca
+     * @param {string} [options.searchType='100%'] - Tipo di ricerca ('score' | 'XX%')
+     * @param {string} [options.searchField='title'] - Campo di ricerca
+     * @param {number[]} [options.categories] - Array di categorie da includere
+     * @param {number} [options.size=300] - Numero massimo di risultati (max 300)
+     * @param {boolean} [options.hideUnsafe=false] - Nascondi contenuti unsafe
+     * @param {boolean} [options.hideXXX=true] - Nascondi contenuti XXX
+     * @returns {Promise<{hits: Array, total: Object}>}
+     */
+    async search(options) {
+        const {
+            query,
+            searchType = '100%',
+            searchField = 'title',
+            categories,
+            size = 300,
+            hideUnsafe = false,
+            hideXXX = true,
+            orderBy,
+            orderDirection = 'desc',
+            from = 0,
+        } = options;
+
+        // Costruisci il body della richiesta (come AIOStreams)
+        const body = {
+            query: query,
+            search_type: searchType,
+            search_field: searchField,
+            size: Math.min(size, 300), // Max 300
+            from: from,
+            hide_unsafe: hideUnsafe,
+            hide_xxx: hideXXX,
+        };
+
+        if (categories && categories.length > 0) {
+            body.categories = categories;
+        }
+
+        if (orderBy) {
+            body.order_by = orderBy;
+            body.order_direction = orderDirection;
+        }
+
+        // ✅ FIX: Endpoint senza slash finale (altrimenti 404)
+        const url = `${KNABEN_API_URL}/v${KNABEN_API_VERSION}`;
+        
+        console.log(`🦉 [Knaben API] POST ${url}`);
+        console.log(`🦉 [Knaben API] Body: ${JSON.stringify(body)}`);
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: this.headers,
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(15000), // 15s timeout
+            });
+
+            if (!response.ok) {
+                throw new Error(`Knaben API error (${response.status}): ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            
+            console.log(`🦉 [Knaben API] Response: ${data.hits?.length || 0} hits, total: ${data.total?.value || 0}`);
+
+            return {
+                hits: data.hits || [],
+                total: data.total || { value: 0, relation: 'eq' },
+                max_score: data.max_score || null,
+            };
+        } catch (error) {
+            console.error(`❌ [Knaben API] Request failed:`, error.message);
+            throw error;
+        }
+    }
+}
+
+// Istanza singleton della API
+const knabenApi = new KnabenAPI();
+
+/**
+ * Costruisce le query di ricerca come AIOStreams
+ * @param {Object} parsedId - ID parsato (con season/episode)
+ * @param {Object} metadata - Metadati (title, year, titles)
+ * @param {Object} options - Opzioni
+ * @returns {string[]} Array di query
+ */
+function buildKnabenQueries(parsedId, metadata, options = {}) {
+    const { addYear = true, addSeasonEpisode = true, useAllTitles = true } = options;
+    
+    const queries = [];
+    
+    if (!metadata.primaryTitle && !metadata.title) {
+        return [];
+    }
+
+    // Usa tutti i titoli o solo il principale
+    const titles = useAllTitles && metadata.titles && metadata.titles.length > 0
+        ? metadata.titles.slice(0, 3) // Max 3 titoli come AIOStreams
+        : [metadata.primaryTitle || metadata.title];
+
+    for (const title of titles) {
+        if (!title) continue;
+        
+        // Pulisci il titolo
+        const cleanedTitle = title
+            .replace(/[^\p{L}\p{N}\s.-]/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (parsedId.mediaType === 'movie' || !addSeasonEpisode) {
+            // Film: aggiunge anno
+            if (metadata.year && addYear) {
+                queries.push(`${cleanedTitle} ${metadata.year}`);
+            }
+            queries.push(cleanedTitle);
+        } else {
+            // Serie: aggiunge S01E05
+            if (parsedId.season && parsedId.episode) {
+                const s = parsedId.season.toString().padStart(2, '0');
+                const e = parsedId.episode.toString().padStart(2, '0');
+                queries.push(`${cleanedTitle} S${s}E${e}`);
+            }
+            
+            // Anche solo stagione: "Title S01"
+            if (parsedId.season) {
+                const s = parsedId.season.toString().padStart(2, '0');
+                queries.push(`${cleanedTitle} S${s}`);
+            }
+            
+            // Per anime: episodio assoluto "Title 05"
+            if (metadata.absoluteEpisode) {
+                const absEp = metadata.absoluteEpisode.toString().padStart(2, '0');
+                queries.push(`${cleanedTitle} ${absEp}`);
+            }
+        }
+    }
+
+    // Deduplica
+    return [...new Set(queries)];
+}
+
+/**
+ * Cerca su Knaben usando l'API (stile AIOStreams)
+ * @param {string} searchQuery - Query di ricerca
+ * @param {string} type - Tipo: 'movie', 'series', 'anime'
+ * @param {Object} metadata - Metadati opzionali (per costruire query multiple)
+ * @param {Object} parsedId - ID parsato opzionale (per season/episode)
+ * @returns {Promise<Array>} Array di risultati
+ */
+async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
+    console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
+    
+    // Determina le categorie in base al tipo
+    const categories = [];
+    if (type === 'movie') {
+        categories.push(KnabenCategory.Movies);
+    }
+    if (type === 'series') {
+        categories.push(KnabenCategory.TV);
+    }
+    if (type === 'anime') {
+        categories.push(KnabenCategory.Anime, KnabenCategory.TV);
+    }
+    
+    // Costruisci le query
+    let queries = [];
+    
+    if (metadata && parsedId) {
+        // Usa la logica AIOStreams per costruire query multiple
+        queries = buildKnabenQueries(parsedId, metadata, {
+            addYear: true,
+            addSeasonEpisode: true,
+            useAllTitles: true,
+        });
+        console.log(`🦉 [Knaben API] Built ${queries.length} queries from metadata: ${queries.join(', ')}`);
+    }
+    
+    // Fallback alla query originale se non abbiamo metadata
+    if (queries.length === 0) {
+        const cleanedQuery = searchQuery
+            .replace(/[^\p{L}\p{N}\s.-]/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        
+        if (cleanedQuery) {
+            queries.push(cleanedQuery);
+        }
+    }
+    
+    if (queries.length === 0) {
+        console.log('🦉 [Knaben API] No valid queries, skipping search.');
+        return [];
+    }
+
+    const allHits = [];
+    const seenHashes = new Set();
+    
+    // Prepara metadata per validazione (come AIOStreams)
+    const validationMetadata = metadata ? {
+        titles: metadata.titles || [metadata.title, metadata.primaryTitle].filter(Boolean),
+        year: metadata.year,
+        season: parsedId?.season ? parseInt(parsedId.season, 10) : undefined,
+        episode: parsedId?.episode ? parseInt(parsedId.episode, 10) : undefined,
+        absoluteEpisode: metadata.absoluteEpisode,
+    } : null;
+    
+    // Esegui ricerche per ogni query
+    for (const query of queries) {
+        try {
+            console.log(`🦉 [Knaben API] Searching: "${query}"`);
+            
+            const { hits } = await knabenApi.search({
+                query,
+                categories: categories.length > 0 ? categories : undefined,
+                size: 300,
+                hideUnsafe: false,
+                hideXXX: true,
+            });
+
+            // Filtra e deduplica
+            for (const hit of hits) {
+                // Salta categorie blacklistate
+                if (hit.categoryId && KNABEN_BLACKLISTED_CATEGORIES.some(cat => hit.categoryId.includes(cat))) {
+                    continue;
+                }
+                
+                // Estrai hash (come AIOStreams: usa hash, magnetUrl, o link)
+                let hash = hit.hash?.toLowerCase() || 
+                    (hit.magnetUrl ? extractInfoHash(hit.magnetUrl)?.toLowerCase() : null);
+                
+                // ✅ COME AIOSTREAMS: Se non ha hash, prova a usare il link per scaricare il torrent
+                const hasDownloadUrl = !!hit.link;
+                
+                if (!hash && !hasDownloadUrl) {
+                    console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
+                    continue;
+                }
+                
+                // Se ha link ma non hash, generiamo un hash temporaneo dal link per deduplicazione
+                // L'hash reale verrà estratto quando si usa il torrent
+                const dedupeKey = hash || hit.link;
+                
+                // Deduplica per hash o link
+                if (seenHashes.has(dedupeKey)) {
+                    continue;
+                }
+                seenHashes.add(dedupeKey);
+
+                // Filtro contenuti per adulti
+                if (isAdultCategory(hit.category) || isAdultCategory(hit.title)) {
+                    continue;
+                }
+
+                // ✅ NUOVO: Parsing del titolo come AIOStreams
+                const parsedTitle = parseTorrentTitle(hit.title);
+
+                // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
+                const hasItalian = parsedTitle.languages.includes('Italian');
+                const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
+                if (!hasItalian && !hasMulti) {
+                    // Fallback: controlla anche con regex diretta per casi edge
+                    const italianFallback = /\b(ita|italian|sub[.\s\-_]?ita|subita|ita[.\s\-_]?sub)\b/i.test(hit.title);
+                    const multiFallback = /\b(multi|dual[.\s\-_]?audio)\b/i.test(hit.title);
+                    if (!italianFallback && !multiFallback) {
+                        console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
+                        continue;
+                    }
+                }
+                
+                // ✅ NUOVO: Validazione come AIOStreams
+                // 1. Validazione titolo (PRIMA di tutto, come AIOStreams)
+                if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, hit.title)) {
+                    console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
+                    continue;
+                }
+                
+                // 2. Per serie/anime, verifica stagione/episodio
+                if (validationMetadata && type !== 'movie') {
+                    if (isSeasonWrong(parsedTitle, validationMetadata)) {
+                        console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
+                        continue;
+                    }
+                    if (isEpisodeWrong(parsedTitle, validationMetadata)) {
+                        console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
+                        continue;
+                    }
+                }
+
+                const sizeInBytes = hit.bytes || 0;
+                const sizeStr = formatBytes(sizeInBytes);
+
+                // ✅ NUOVO: Usa i dati dal parser invece di extractQuality
+                const quality = parsedTitle.resolution || parsedTitle.quality || extractQuality(hit.title);
+
+                // ✅ COME AIOSTREAMS: Costruisci magnet link o usa download URL
+                let magnetLink = hit.magnetUrl;
+                if (!magnetLink && hash) {
+                    magnetLink = `magnet:?xt=urn:btih:${hash}`;
+                }
+
+                allHits.push({
+                    magnetLink: magnetLink || null,
+                    downloadUrl: hit.link || null, // ✅ NUOVO: URL download torrent file
+                    websiteTitle: hit.title,
+                    title: hit.title,
+                    filename: hit.title,
+                    quality: quality,
+                    size: sizeStr,
+                    source: `Knaben (${hit.tracker || 'Unknown'})`,
+                    seeders: hit.seeders || 0,
+                    leechers: hit.peers || 0,
+                    infoHash: hash ? hash.toUpperCase() : null, // ✅ Può essere null se solo link
+                    mainFileSize: sizeInBytes,
+                    pubDate: hit.date || new Date().toISOString(),
+                    categories: [hit.category || (type === 'movie' ? 'Movies' : 'TV')],
+                    indexer: hit.tracker,
+                    // ✅ NUOVO: Aggiungi dati dal parser
+                    parsedInfo: {
+                        resolution: parsedTitle.resolution,
+                        qualitySource: parsedTitle.quality,
+                        languages: parsedTitle.languages,
+                        codec: parsedTitle.codec,
+                        audioTags: parsedTitle.audioTags,
+                        visualTags: parsedTitle.visualTags,
+                        group: parsedTitle.group,
+                        seasons: parsedTitle.seasons,
+                        episodes: parsedTitle.episodes,
+                    },
+                });
+            }
+
+            // Piccola pausa tra le query per non sovraccaricare l'API
+            if (queries.indexOf(query) < queries.length - 1) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+
+        } catch (error) {
+            console.error(`❌ [Knaben API] Query "${query}" failed:`, error.message);
+        }
+    }
+
+    console.log(`🦉 [Knaben API] Total unique results: ${allHits.length}`);
+    return allHits;
 }
 
 // --- FINE NUOVA SEZIONE ---
@@ -993,7 +1822,7 @@ function parseUIndexHTML(html) {
 }
 
 // ✅ Multi-Strategy Search (try different query variations)
-async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
+async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validationMetadata = null) {
     const searchStrategies = [];
     
     // Strategy 1: Original query
@@ -1036,7 +1865,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
         console.log(`🔍 Trying strategy: ${strategy.description} - "${strategy.query}"`);
         
         try {
-            const results = await fetchUIndexSingle(strategy.query, type);
+            const results = await fetchUIndexSingle(strategy.query, type, validationMetadata);
             
             // Deduplicate by info hash
             const newResults = results.filter(result => {
@@ -1065,7 +1894,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie') {
 }
 
 // ✅ Single UIndex Search with Enhanced Error Handling
-async function fetchUIndexSingle(searchQuery, type = 'movie') {
+async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata = null) {
     try {
         console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
         
@@ -1106,7 +1935,56 @@ async function fetchUIndexSingle(searchQuery, type = 'movie') {
             return [];
         }
         
-        return parseUIndexHTML(html);
+        const rawResults = parseUIndexHTML(html);
+        
+        // ✅ NUOVO: Applica parsing AIOStreams e filtri a ogni risultato
+        const filteredResults = [];
+        for (const result of rawResults) {
+            // Parsing del titolo
+            const parsedTitle = parseTorrentTitle(result.title);
+            result.parsedInfo = parsedTitle;
+            
+            // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
+            const hasItalian = parsedTitle.languages.includes('Italian');
+            const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
+            if (!hasItalian && !hasMulti) {
+                // Fallback: controlla anche con regex diretta per casi edge
+                const italianFallback = /\b(ita|italian|sub[.\s\-_]?ita|subita|ita[.\s\-_]?sub)\b/i.test(result.title);
+                const multiFallback = /\b(multi|dual[.\s\-_]?audio)\b/i.test(result.title);
+                if (!italianFallback && !multiFallback) {
+                    console.log(`🔍 [UIndex] Skipping non-Italian: "${result.title.substring(0, 60)}..."`);
+                    continue;
+                }
+            }
+            
+            // ✅ NUOVO: Validazione titolo come AIOStreams
+            if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, result.title)) {
+                console.log(`🔍 [UIndex] Skipping wrong title: "${result.title.substring(0, 60)}..."`);
+                continue;
+            }
+            
+            // ✅ Per serie/anime, verifica stagione/episodio
+            if (validationMetadata && type !== 'movie') {
+                if (isSeasonWrong(parsedTitle, validationMetadata)) {
+                    console.log(`🔍 [UIndex] Skipping wrong season: "${result.title}" (need S${validationMetadata.season})`);
+                    continue;
+                }
+                if (isEpisodeWrong(parsedTitle, validationMetadata)) {
+                    console.log(`🔍 [UIndex] Skipping wrong episode: "${result.title}" (need E${validationMetadata.episode})`);
+                    continue;
+                }
+            }
+            
+            // ✅ Migliora quality detection usando il parser
+            if (!result.quality && parsedTitle.resolution) {
+                result.quality = parsedTitle.resolution.toLowerCase();
+            }
+            
+            filteredResults.push(result);
+        }
+        
+        console.log(`🔍 [UIndex] Filtered to ${filteredResults.length}/${rawResults.length} Italian results`);
+        return filteredResults;
         
     } catch (error) {
         console.error(`❌ Error fetching from UIndex:`, error);
@@ -2702,7 +3580,7 @@ function maybeCleanupCache() {
 }
 
 // ✅ Enhanced main fetch function
-async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null) {
+async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null, validationMetadata = null) {
     console.log(`🔄 Fetching UIndex results for: "${searchQuery}" (type: ${type})`);
 
     // Check cache first
@@ -2719,7 +3597,7 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null)
 
     try {
         // Use multi-strategy search for better results
-        const rawResults = await searchUIndexMultiStrategy(searchQuery, type);
+        const rawResults = await searchUIndexMultiStrategy(searchQuery, type, validationMetadata);
         
         if (!rawResults.length) {
             console.log('⚠️ No results found from any search strategy for UIndex');
@@ -2753,7 +3631,19 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null)
                 infoHash: result.infoHash,
                 mainFileSize: result.sizeInBytes,
                 pubDate: new Date().toISOString(),
-                categories: [finalCategory]
+                categories: [finalCategory],
+                // ✅ NUOVO: Aggiungi parsedInfo per language detection e validazione
+                parsedInfo: result.parsedInfo ? {
+                    resolution: result.parsedInfo.resolution,
+                    qualitySource: result.parsedInfo.quality,
+                    languages: result.parsedInfo.languages,
+                    codec: result.parsedInfo.codec,
+                    audioTags: result.parsedInfo.audioTags,
+                    visualTags: result.parsedInfo.visualTags,
+                    group: result.parsedInfo.group,
+                    seasons: result.parsedInfo.seasons,
+                    episodes: result.parsedInfo.episodes,
+                } : undefined,
             };
         });
 
@@ -3406,7 +4296,7 @@ async function handleStream(type, id, config, workerOrigin) {
     
     try {
         // ✅ TMDB API Key from config or environment variable
-        const tmdbKey = config.tmdb_key || process.env.TMDB_API_KEY;
+        const tmdbKey = config.tmdb_key || process.env.TMDB_KEY || process.env.TMDB_API_KEY || '5462f78469f3d80bf5201645294c16e4';
         
         if (!tmdbKey) {
             console.error('❌ TMDB API key not configured');
@@ -4175,6 +5065,15 @@ async function handleStream(type, id, config, workerOrigin) {
             const uindexQueries = [];
             const seasonStr = String(season).padStart(2, '0');
             
+            // ✅ Costruisci validationMetadata per UIndex (come Knaben)
+            const uindexValidationMetadata = {
+                titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
+                year: mediaDetails.year,
+                season: season ? parseInt(season, 10) : undefined,
+                episode: episode ? parseInt(episode, 10) : undefined,
+            };
+            console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
+            
             // 🇮🇹 PRIORITY: Italian title first (cleaned, without symbols)
             if (italianTitle) {
                 const cleanedItalian = cleanTitleForSearch(italianTitle);
@@ -4210,7 +5109,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
                 
                 try {
-                    const res = await fetchUIndexData(q, searchType, italianTitle);
+                    const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
                     if (res && res.length > 0) {
                         console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
                         rawResultsByProvider.UIndex.push(...res);
@@ -4270,11 +5169,28 @@ async function handleStream(type, id, config, workerOrigin) {
             
             // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
             if (useKnaben) {
-                // 🔥 MODIFIED: Always search Knaben, even for "Stagione" or "Completa"
-                // The user wants to ensure we catch everything, even if it seems Italian-specific
+                // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
+                // Build metadata object for Knaben API
+                const knabenMetadata = {
+                    primaryTitle: mediaDetails.title,
+                    title: mediaDetails.title,
+                    titles: mediaDetails.titles || [mediaDetails.title],
+                    year: mediaDetails.year,
+                    imdbId: mediaDetails.imdbId,
+                    tmdbId: mediaDetails.tmdbId,
+                    absoluteEpisode: mediaDetails.absoluteEpisode,
+                };
+                
+                // Build parsedId for Knaben
+                const knabenParsedId = {
+                    mediaType: searchType,
+                    season: season,
+                    episode: episode,
+                };
+                
                 searchPromises.push({
                     name: 'Knaben',
-                    promise: fetchKnabenData(query, searchType)
+                    promise: fetchKnabenData(query, searchType, knabenMetadata, knabenParsedId)
                 });
             }
 
@@ -4457,10 +5373,299 @@ async function handleStream(type, id, config, workerOrigin) {
             console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
         }
 
+        // 🎯 Helper: Calculate similarity between two strings (0-1)
+        // Uses multiple strategies: Levenshtein, word overlap, containment
+        const calculateSimilarity = (str1, str2) => {
+            if (!str1 || !str2) return 0;
+            if (str1 === str2) return 1;
+            
+            const s1 = str1.toLowerCase();
+            const s2 = str2.toLowerCase();
+            
+            // Strategy 1: If one contains the other, high similarity
+            if (s1.includes(s2) || s2.includes(s1)) {
+                const minLen = Math.min(s1.length, s2.length);
+                const maxLen = Math.max(s1.length, s2.length);
+                return Math.max(0.8, minLen / maxLen); // At least 80%
+            }
+            
+            // Strategy 2: Word overlap (handles different word order)
+            // "Medical Division Dr House" vs "Dr House Medical Division" should match!
+            const words1 = s1.split(/\s+/).filter(w => w.length > 1); // Ignore single chars
+            const words2 = s2.split(/\s+/).filter(w => w.length > 1);
+            
+            if (words1.length > 0 && words2.length > 0) {
+                let matchedWords = 0;
+                const usedIndices = new Set();
+                
+                for (const w1 of words1) {
+                    for (let i = 0; i < words2.length; i++) {
+                        if (usedIndices.has(i)) continue;
+                        const w2 = words2[i];
+                        // Exact match or very similar (typo tolerance)
+                        if (w1 === w2 || (w1.length > 3 && w2.length > 3 && (w1.includes(w2) || w2.includes(w1)))) {
+                            matchedWords++;
+                            usedIndices.add(i);
+                            break;
+                        }
+                    }
+                }
+                
+                const maxWords = Math.max(words1.length, words2.length);
+                const wordOverlap = matchedWords / maxWords;
+                
+                // If most words match, it's a good match even if order is different
+                if (wordOverlap >= 0.6) {
+                    return Math.max(0.75, wordOverlap); // At least 75% if 60%+ words match
+                }
+            }
+            
+            // Strategy 3: Levenshtein distance (fallback)
+            const matrix = [];
+            for (let i = 0; i <= s1.length; i++) {
+                matrix[i] = [i];
+            }
+            for (let j = 0; j <= s2.length; j++) {
+                matrix[0][j] = j;
+            }
+            for (let i = 1; i <= s1.length; i++) {
+                for (let j = 1; j <= s2.length; j++) {
+                    const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+                    matrix[i][j] = Math.min(
+                        matrix[i - 1][j] + 1,      // deletion
+                        matrix[i][j - 1] + 1,      // insertion
+                        matrix[i - 1][j - 1] + cost // substitution
+                    );
+                }
+            }
+            
+            const distance = matrix[s1.length][s2.length];
+            const maxLen = Math.max(s1.length, s2.length);
+            return 1 - (distance / maxLen);
+        };
+        
+        // 🎯 Helper function to check if a title matches the requested episode
+        // Returns true if: season pack complete, exact episode, or range that includes the episode
+        // Also validates that the series name matches the expected titles (75% fuzzy match)
+        const matchesRequestedEpisode = (title, requestedSeason, requestedEpisode, expectedTitles = []) => {
+            if (!title || !requestedSeason || !requestedEpisode) return true; // No filter for movies
+            
+            const seasonNum = parseInt(requestedSeason);
+            const episodeNum = parseInt(requestedEpisode);
+            const titleLower = title.toLowerCase();
+            
+            const SIMILARITY_THRESHOLD = 0.75; // 75% match required
+            
+            // 🚨 NEW: Validate series name matches expected titles (fuzzy 75% match)
+            // This prevents "Chico and the Man S01E06 E Pluribus Used Car" from matching "Pluribus"
+            if (expectedTitles && expectedTitles.length > 0) {
+                // Extract the series name from the torrent title (everything before S01E06 or 1x06)
+                // Added: S01-08 (season range), Stagioni (plural), ep01-22
+                const seriesNameMatch = title.match(/^(.+?)(?:\s*[.-]?\s*)?(?:[Ss]\d+[Ee]\d+|[Ss]\d+[-–]\d+|\d+x\d+|[Ss]tagion[ei]|[Ss]eason|[Ee]p?\d+|\[COMPLETA\]|Complete)/i);
+                
+                if (seriesNameMatch) {
+                    const torrentSeriesName = seriesNameMatch[1].trim().toLowerCase()
+                        .replace(/[.\-_]/g, ' ')  // Replace separators with spaces
+                        .replace(/\s+/g, ' ')      // Normalize spaces
+                        .replace(/\(\d{4}\)$/, '') // Remove year at end
+                        .trim();
+                    
+                    // Check if any expected title matches with 75% similarity
+                    let bestMatch = { title: '', similarity: 0 };
+                    
+                    const matchesExpectedTitle = expectedTitles.some(expectedTitle => {
+                        const cleanExpected = expectedTitle.toLowerCase()
+                            .replace(/[.\-_]/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        
+                        // Calculate similarity
+                        const similarity = calculateSimilarity(torrentSeriesName, cleanExpected);
+                        
+                        if (similarity > bestMatch.similarity) {
+                            bestMatch = { title: cleanExpected, similarity };
+                        }
+                        
+                        // Also check if one starts with the other (common case)
+                        // "Pluribus 2025" should match "Pluribus"
+                        if (torrentSeriesName.startsWith(cleanExpected) || cleanExpected.startsWith(torrentSeriesName)) {
+                            const minLen = Math.min(torrentSeriesName.length, cleanExpected.length);
+                            const maxLen = Math.max(torrentSeriesName.length, cleanExpected.length);
+                            const startSimilarity = minLen / maxLen;
+                            if (startSimilarity >= SIMILARITY_THRESHOLD) {
+                                bestMatch = { title: cleanExpected, similarity: Math.max(similarity, startSimilarity) };
+                                return true;
+                            }
+                        }
+                        
+                        return similarity >= SIMILARITY_THRESHOLD;
+                    });
+                    
+                    if (!matchesExpectedTitle) {
+                        console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
+                        return false;
+                    } else {
+                        console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
+                    }
+                }
+            }
+            
+            // 1. Check if it's a COMPLETE SEASON PACK (no specific episodes)
+            // Patterns: "S01" alone, "Stagione 1", "Season 1", "[COMPLETA]", "Complete"
+            // IMPORTANT: S01.E01.E02 or S01.E01-02 are NOT season packs, they are episode packs!
+            
+            const isCompletePack = /\[COMPLETA\]|Complete\s*Series|Complete\s*Season|Serie\s*Completa|Stagione\s*Completa/i.test(title);
+            
+            // Check for episode indicators that mean it's NOT a complete season
+            // S01E01, S01.E01, S01 E01, S01-E01, 1x01, etc.
+            const hasEpisodeIndicator = /[Ss]\d+[.\s-]*[Ee]\d+|[Ss]\d+[Ee]\d+|\d+x\d+/i.test(title);
+            // Episode range like E01-E10, E01-10
+            const hasEpisodeRange = /[Ee](p)?\.?\s*\d+\s*[-–]\s*(E(p)?\.?\s*)?\d+/i.test(title);
+            // Multi-episode list like .E01.E02 or .01.02 after season
+            const hasMultiEpisodeList = /[Ss]\d+[.\s][Ee]?\d+[.\s][Ee]?\d+/i.test(title);
+            
+            // It's a season pack only if it has season number but NO episode indicators
+            const hasSeasonOnly = !hasEpisodeIndicator && !hasEpisodeRange && !hasMultiEpisodeList && (
+                // S01 or S1 pattern
+                new RegExp(`[Ss](0?${seasonNum})(?![0-9])`, 'i').test(title) ||
+                // "Stagione X" or "Season X" pattern
+                new RegExp(`(stagione|season)\\s*${seasonNum}(?![0-9])`, 'i').test(title)
+            );
+            
+            if (isCompletePack || hasSeasonOnly) {
+                // Verify it's the right season
+                const seasonMatch = title.match(/[Ss](0?\d+)|[Ss]tagione?\s*(\d+)|[Ss]eason\s*(\d+)/i);
+                if (seasonMatch) {
+                    const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
+                    if (foundSeason === seasonNum) {
+                        console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
+                        return true;
+                    }
+                }
+                // Complete series pack
+                if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
+                    console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
+                    return true;
+                }
+            }
+            
+            // 2. Check for EXACT EPISODE match
+            const exactPatterns = [
+                new RegExp(`[Ss](0?${seasonNum})[Ee](0?${episodeNum})(?![0-9])`, 'i'),  // S01E06
+                new RegExp(`${seasonNum}x(0?${episodeNum})(?![0-9])`, 'i'),              // 1x06
+                new RegExp(`[Ss](0?${seasonNum})\\s*[Ee](0?${episodeNum})(?![0-9])`, 'i'), // S01 E06
+            ];
+            
+            if (exactPatterns.some(p => p.test(title))) {
+                console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
+                return true;
+            }
+            
+            // 3. Check for EPISODE RANGE that includes the requested episode
+            // Patterns: S01E01-E10, S01E01-10, E01-E10, S01E01.E02.E03
+            const rangePatterns = [
+                // S01E01-E10 or S01E01-10
+                /[Ss](0?\d+)[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                // E01-E10 or E01-10 (without season, assume current)
+                /[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                // 1x01-1x10 or 1x01-10
+                /(\d+)x(0?\d+)[-–](\d+x)?(0?\d+)/i,
+            ];
+            
+            for (const pattern of rangePatterns) {
+                const match = title.match(pattern);
+                if (match) {
+                    let startEp, endEp, matchedSeason;
+                    
+                    if (pattern.source.includes('[Ss]')) {
+                        // S01E01-E10 format
+                        matchedSeason = parseInt(match[1]);
+                        startEp = parseInt(match[2]);
+                        endEp = parseInt(match[4] || match[3]);
+                    } else if (pattern.source.includes('x')) {
+                        // 1x01-10 format
+                        matchedSeason = parseInt(match[1]);
+                        startEp = parseInt(match[2]);
+                        endEp = parseInt(match[4]);
+                    } else {
+                        // E01-E10 format (no season in pattern, check separately)
+                        const seasonCheck = title.match(/[Ss](0?\d+)/i);
+                        matchedSeason = seasonCheck ? parseInt(seasonCheck[1]) : seasonNum;
+                        startEp = parseInt(match[1]);
+                        endEp = parseInt(match[3] || match[2]);
+                    }
+                    
+                    if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
+                        console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        return true;
+                    } else if (matchedSeason === seasonNum) {
+                        console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        return false;
+                    }
+                }
+            }
+            
+            // 4. Check for MULTI-EPISODE list (S01E01.E02.E03 or S01 E01 E02 E03)
+            const multiEpMatch = title.match(/[Ss](0?\d+)[.\s]*([Ee]\d+[.\s]*)+/i);
+            if (multiEpMatch) {
+                const matchedSeason = parseInt(multiEpMatch[1]);
+                if (matchedSeason === seasonNum) {
+                    // Extract all episode numbers
+                    const episodes = title.match(/[Ee](0?\d+)/gi);
+                    if (episodes) {
+                        const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
+                        if (epNumbers.includes(episodeNum)) {
+                            console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return true;
+                        } else {
+                            console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return false;
+                        }
+                    }
+                }
+            }
+            
+            // 5. If we found a specific episode that doesn't match, reject it
+            // Check S01E01 format
+            const singleEpMatch = title.match(/[Ss](0?\d+)[Ee](0?\d+)/i);
+            if (singleEpMatch) {
+                const matchedSeason = parseInt(singleEpMatch[1]);
+                const matchedEpisode = parseInt(singleEpMatch[2]);
+                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                    console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                    return false;
+                }
+            }
+            
+            // 5b. Check NxNN format (1x03, 2x15, etc.) - same as S01E03
+            const nxnMatch = title.match(/(\d+)x(0?\d+)(?![0-9\-])/i);
+            if (nxnMatch) {
+                const matchedSeason = parseInt(nxnMatch[1]);
+                const matchedEpisode = parseInt(nxnMatch[2]);
+                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                    console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                    return false;
+                }
+            }
+            
+            // 6. Default: accept (might be a movie or unrecognized format)
+            return true;
+        };
+
         // Smart Deduplication
         const bestResults = new Map();
         for (const result of allRawResults) {
             if (!result.infoHash) continue;
+            
+            // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
+            if (type === 'series' && season && episode) {
+                // Pass expected titles to also validate series name
+                const expectedTitles = mediaDetails.titles || [mediaDetails.title];
+                if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
+                    continue; // Skip this result
+                }
+            }
+            
             const hash = result.infoHash;
             const newLangInfo = getLanguageInfo(result.title, italianTitle, result.source);
 
@@ -5413,11 +6618,38 @@ async function handleSearch({ query, type }, config) {
     console.log(`🔍 Handling search: "${query}" (${type})`);
     
     try {
+        // ✅ Estrai titolo e anno dal query (es. "Fuori 2025" -> titolo="Fuori", anno=2025)
+        const yearMatch = query.match(/\s*\(?\b(19\d{2}|20\d{2})\b\)?$/);
+        const extractedYear = yearMatch ? parseInt(yearMatch[1]) : null;
+        const cleanedTitle = yearMatch ? query.replace(yearMatch[0], '').trim() : query;
+        
+        console.log(`📝 [Search] Extracted title: "${cleanedTitle}", year: ${extractedYear || 'N/A'}`);
+        
+        // Build basic metadata for Knaben API
+        const basicMetadata = {
+            primaryTitle: query,
+            title: query,
+            titles: [query],
+        };
+        
+        const basicParsedId = {
+            mediaType: type,
+        };
+        
+        // ✅ ValidationMetadata per la search (validazione titolo)
+        // IMPORTANTE: usa solo il titolo senza anno per il matching!
+        const basicValidationMetadata = {
+            titles: [cleanedTitle, query].filter(Boolean), // Titolo pulito + query originale
+            year: extractedYear,
+            season: undefined,
+            episode: undefined,
+        };
+        
         // --- MODIFICA: RICERCA E ORDINAMENTO SEPARATO ---
         const [uindexResults, corsaroNeroResults, knabenResults] = await Promise.allSettled([
-            fetchUIndexData(query, type, null), // italianTitle non è disponibile qui
+            fetchUIndexData(query, type, null, basicValidationMetadata), // Con validazione titolo
             fetchCorsaroNeroData(query, type), // Non richiede config
-            fetchKnabenData(query, type)      // Non richiede config
+            fetchKnabenData(query, type, { ...basicMetadata, titles: basicValidationMetadata.titles }, basicParsedId)  // Usa titoli puliti per validazione
         ]);
 
         let corsaroAggregatedResults = [];
@@ -6275,6 +7507,39 @@ export default async function handler(req, res) {
                                 }
                             } catch (fileErr) {
                                 console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
+                            }
+                        }
+                        
+                        // ✅ SAVE PACK FILES FOR MOVIES (Trilogies, Collections, etc.)
+                        // This saves the mapping between pack hash and individual film IMDb IDs
+                        if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined && targetFile && torrent && torrent.files) {
+                            try {
+                                // Get IMDb ID of the movie being played
+                                const movieImdbId = await dbHelper.getImdbIdByHash(infoHash);
+                                
+                                if (movieImdbId) {
+                                    console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
+                                    
+                                    // Save this specific file mapping to pack_files table
+                                    const packFileData = [{
+                                        pack_hash: infoHash.toLowerCase(),
+                                        imdb_id: movieImdbId,
+                                        file_index: targetFile.id, // RealDebrid file.id
+                                        file_path: targetFile.path,
+                                        file_size: targetFile.bytes || 0
+                                    }];
+                                    
+                                    await dbHelper.insertPackFiles(packFileData);
+                                    console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file ${targetFile.id} in pack ${infoHash}`);
+                                    
+                                    // Also update the all_imdb_ids array on the torrents table
+                                    await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());
+                                } else {
+                                    console.warn(`⚠️ [DB] No IMDb ID found for movie pack, skipping save`);
+                                }
+                            } catch (packErr) {
+                                console.error(`❌ [DB] Error saving pack file mapping: ${packErr.message}`);
+                                // Don't fail the stream - this is a non-critical operation
                             }
                         }
                     }

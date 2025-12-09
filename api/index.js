@@ -8391,7 +8391,8 @@ export default async function handler(req, res) {
 
                 // STEP 2: Get magnet status
                 console.log(`[AllDebrid] Checking magnet status: ${magnetId}`);
-                const magnetStatus = await alldebrid.getMagnetStatus(magnetId);
+                const magnetStatusArray = await alldebrid.getMagnetStatus(magnetId);
+                const magnetStatus = Array.isArray(magnetStatusArray) ? magnetStatusArray[0] : magnetStatusArray;
 
                 // Extract status from response
                 const status = magnetStatus.status || magnetStatus.statusCode;

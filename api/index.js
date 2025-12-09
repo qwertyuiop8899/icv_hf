@@ -422,7 +422,7 @@ async function fetchCorsaroNeroSingle(searchQuery, type = 'movie') {
             if (!titleElement.length) return null;
             const torrentTitle = titleElement.text().trim();
 
-            // console.log(`🏴‍☠️   - Processing row: "${torrentTitle}"`);
+            console.log(`🏴‍☠️   - Processing row: "${torrentTitle}"`);
             // --- NUOVA MODIFICA: Validazione per query brevi ---
             if (!isGoodShortQueryMatch(torrentTitle, searchQuery)) {
                 return null;
@@ -1186,15 +1186,16 @@ class KnabenAPI {
         // ✅ FIX: Endpoint senza slash finale (altrimenti 404)
         const url = `${KNABEN_API_URL}/v${KNABEN_API_VERSION}`;
 
-        console.log(`🦉 [Knaben API] POST ${url}`);
-        console.log(`🦉 [Knaben API] Body: ${JSON.stringify(body)}`);
+        // console.log(`🦉 [Knaben API] POST ${url}`);
+        // console.log(`🦉 [Knaben API] Body: ${JSON.stringify(body)}`);
 
         try {
             const response = await fetch(url, {
                 method: 'POST',
-                headers: this.headers,
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(15000), // 15s timeout
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
             });
 
             if (!response.ok) {
@@ -1203,7 +1204,7 @@ class KnabenAPI {
 
             const data = await response.json();
 
-            console.log(`🦉 [Knaben API] Response: ${data.hits?.length || 0} hits, total: ${data.total?.value || 0}`);
+            // console.log(`🦉 [Knaben API] Response: ${data.hits?.length || 0} hits, total: ${data.total?.value || 0}`);
 
             return {
                 hits: data.hits || [],
@@ -1350,7 +1351,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     // Esegui ricerche per ogni query
     for (const query of queries) {
         try {
-            console.log(`🦉 [Knaben API] Searching: "${query}"`);
+            // console.log(`🦉 [Knaben API] Searching: "${query}"`);
 
             const { hits } = await knabenApi.search({
                 query,
@@ -1402,30 +1403,33 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                 const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
                 if (!hasItalian && !hasMulti) {
                     // Fallback: controlla anche con regex diretta per casi edge
-                    const italianFallback = /\b(ita|italian|sub[.\s\-_]?ita|subita|ita[.\s\-_]?sub)\b/i.test(hit.title);
-                    const multiFallback = /\b(multi|dual[.\s\-_]?audio)\b/i.test(hit.title);
-                    if (!italianFallback && !multiFallback) {
-                        console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
+                    if (!hit.hash || !hit.link) {
+                        // console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
                         continue;
                     }
-                }
 
-                // ✅ NUOVO: Validazione come AIOStreams
-                // 1. Validazione titolo (PRIMA di tutto, come AIOStreams)
-                if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, hit.title)) {
-                    console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
-                    continue;
-                }
-
-                // 2. Per serie/anime, verifica stagione/episodio
-                if (validationMetadata && type !== 'movie') {
-                    if (isSeasonWrong(parsedTitle, validationMetadata)) {
-                        console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
+                    // Strict Italian Filter
+                    if (!isItalian(hit.title)) {
+                        // console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
                         continue;
                     }
-                    if (isEpisodeWrong(parsedTitle, validationMetadata)) {
-                        console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
+
+                    // Validate title fuzzily
+                    const validation = validateResult(hit.title, validationMetadata);
+                    if (!validation.match) {
+                        // console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
                         continue;
+                    }
+
+                    if (type === 'series' && validationMetadata) {
+                        if (validation.season && validation.season !== validationMetadata.season) {
+                            // console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
+                            continue;
+                        }
+                        if (validation.episode && validation.episode !== validationMetadata.episode) {
+                            // console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
+                            continue;
+                        }
                     }
                 }
 
@@ -1482,7 +1486,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         }
     }
 
-    console.log(`🦉 [Knaben API] Total unique results: ${allHits.length}`);
+    console.log(`🦉 [Knaben API] Search completed. Found ${allHits.length} unique results.`);
     return allHits;
 }
 
@@ -2638,130 +2642,118 @@ class Torbox {
 }
 
 // ✅ AllDebrid API integration
-const AllDebridClient = require('all-debrid-api');
-
 class AllDebrid {
     constructor(apiKey) {
         this.apiKey = apiKey;
-        this.AD = new AllDebridClient(apiKey, { base_agent: 'torrentio' });
+        this.baseUrl = 'https://api.alldebrid.com/v4';
     }
 
     async checkCache(hashes) {
         if (!hashes || hashes.length === 0) return {};
-        // Torrentio policy: return cached false, do not check API
+
         const results = {};
-        hashes.forEach(hash => {
-            results[hash.toLowerCase()] = {
-                cached: false,
-                service: 'AllDebrid'
-            };
-        });
+
+        try {
+            // AllDebrid uses /magnet/instant endpoint
+            const magnets = hashes.map(h => `magnet:?xt=urn:btih:${h}`);
+            const url = `${this.baseUrl}/magnet/instant?agent=stremio&apikey=${this.apiKey}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ magnets })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.status === 'success') {
+                const magnetData = data.data.magnets || [];
+
+                magnetData.forEach((item, index) => {
+                    const hash = hashes[index]?.toLowerCase();
+                    if (!hash) return;
+
+                    // AllDebrid returns instant: true if cached
+                    results[hash] = {
+                        cached: item.instant === true,
+                        service: 'AllDebrid'
+                    };
+                });
+            }
+        } catch (error) {
+            console.error('AllDebrid cache check failed:', error);
+            hashes.forEach(hash => {
+                results[hash.toLowerCase()] = { cached: false, service: 'AllDebrid' };
+            });
+        }
+
         return results;
     }
 
-    async resolve({ infoHash, magnetLink, fileIdx }) {
-        console.log(`[AllDebrid] Resolve: Unrestricting ${infoHash} [${fileIdx}]`);
-        try {
-            const torrent = await this._createOrFindTorrent(infoHash, magnetLink);
-
-            if (this._statusReady(torrent.statusCode)) {
-                console.log(`[AllDebrid] Resolve: Torrent ready, unlocking link matching fileIdx ${fileIdx}`);
-                return await this._unrestrictLink(torrent, fileIdx);
-            } else if (this._statusDownloading(torrent.statusCode)) {
-                console.log(`[AllDebrid] Resolve: Torrent downloading...`);
-                // Return generic downloading message or handle upstream
-                return { status: 'Downloading', torrent };
-            } else {
-                throw new Error(`Torrent status not ready: ${torrent.statusCode}`);
-            }
-        } catch (error) {
-            console.log(`[AllDebrid] Resolve failed: ${JSON.stringify(error)}`);
-            throw error;
-        }
-    }
-
-    async _createOrFindTorrent(infoHash, magnetLink) {
-        return this._findTorrent(infoHash)
-            .catch(() => this._createTorrent(infoHash, magnetLink));
-    }
-
-    async _findTorrent(infoHash) {
-        try {
-            const response = await this.AD.magnet.status(); // GET all magnets
-            const torrents = response.data.magnets || [];
-            const foundTorrents = torrents.filter(t => t.hash && t.hash.toLowerCase() === infoHash.toLowerCase());
-            const nonFailedTorrent = foundTorrents.find(t => !this._statusError(t.statusCode));
-            const foundTorrent = nonFailedTorrent || foundTorrents[0];
-
-            if (foundTorrent) {
-                console.log(`[AllDebrid] Found existing torrent: ${foundTorrent.id} (${foundTorrent.filename})`);
-                return foundTorrent;
-            }
-            return Promise.reject('No recent torrent found');
-        } catch (e) {
-            return Promise.reject(e);
-        }
-    }
-
-    async _createTorrent(infoHash, magnetLink) {
-        console.log(`[AllDebrid] Creating new torrent for ${infoHash}`);
-        const uploadResponse = await this.AD.magnet.upload(magnetLink);
-        if (uploadResponse.data && uploadResponse.data.magnets && uploadResponse.data.magnets.length > 0) {
-            const torrentId = uploadResponse.data.magnets[0].id;
-            console.log(`[AllDebrid] Torrent created with ID: ${torrentId}`);
-            // Fetch status immediately to get files/links
-            const statusResponse = await this.AD.magnet.status(torrentId);
-            // Return object (API returns array, we take first)
-            return statusResponse.data.magnets; // API behavior: status(id) returns object or array? 
-            // Logic in test suggested array! Let's be safe.
-        }
-        throw new Error('AllDebrid upload failed to return magnet ID');
-    }
-
-    async _unrestrictLink(torrent, fileIdx) {
-        // Find target video
-        const videos = (torrent.links || []).filter(link => link.filename.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i)).sort((a, b) => b.size - a.size);
-
-        // Strategy: if fileIdx is provided, match by filename? 
-        // Torrentio uses sameFilename check or index.
-        // Simplified for this addon: Use index if valid, else biggest video.
-
-        let targetVideo = videos[0]; // Default biggest
-        // If fileIdx might be the index in the 'videos' array or the global file list?
-        // Torrentio logic: videos.find(video => sameFilename(targetFileName, video.filename)) || videos[0].
-
-        if (!targetVideo) {
-            throw new Error('No video links found in torrent');
-        }
-
-        console.log(`[AllDebrid] Unlocking link for file: ${targetVideo.filename}`);
-        const response = await this.AD.link.unlock(targetVideo.link);
-        return response.data.link;
-    }
-
-    // Status helpers
-    _statusError(statusCode) { return [5, 6, 7, 8, 9, 10, 11].includes(statusCode); }
-    _statusReady(statusCode) { return statusCode === 4; }
-    _statusDownloading(statusCode) { return [0, 1, 2, 3].includes(statusCode); }
-
-    // Legacy public methods (wrappers for backward compatibility if needed, or remove)
     async uploadMagnet(magnetLink) {
-        // Used by existing stream logic, map to _createTorrent
-        // But stream logic expects just the ID or object.
-        // Let's keep strict parity focus on Resolve logic, but existing code calls uploadMagnet.
-        // I should refactor the caller too.
-        const t = await this._createTorrent(extractInfoHash(magnetLink), magnetLink);
-        return { id: Array.isArray(t) ? t[0].id : t.id };
+        const url = `${this.baseUrl}/magnet/upload?agent=stremio&apikey=${this.apiKey}`;
+
+        const formData = new URLSearchParams();
+        formData.append('magnets[]', magnetLink);
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            throw new Error(`AllDebrid API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            throw new Error(`AllDebrid error: ${data.error?.message || 'Unknown error'}`);
+        }
+
+        // Returns { id: magnetId }
+        return data.data.magnets[0];
     }
 
     async getMagnetStatus(magnetId) {
-        const response = await this.AD.magnet.status(magnetId);
-        return response.data.magnets;
+        const url = `${this.baseUrl}/magnet/status?agent=stremio&apikey=${this.apiKey}&id=${magnetId}`;
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error(`AllDebrid API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            throw new Error(`AllDebrid error: ${data.error?.message || 'Unknown error'}`);
+        }
+
+        return data.data.magnets;
     }
 
     async unlockLink(link) {
-        const response = await this.AD.link.unlock(link);
-        return response.data.link;
+        const url = `${this.baseUrl}/link/unlock?agent=stremio&apikey=${this.apiKey}&link=${encodeURIComponent(link)}`;
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error(`AllDebrid API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            throw new Error(`AllDebrid error: ${data.error?.message || 'Unknown error'}`);
+        }
+
+        return data.data.link;
     }
 }
 
@@ -5267,13 +5259,13 @@ async function handleStream(type, id, config, workerOrigin) {
 
             // DEBUG: Log all unique hashes BEFORE filtering
             const uniqueHashes = [...new Set(dbResults.map(r => r.info_hash))];
-            console.log(`💾 [DB] Before filter: ${uniqueHashes.length} unique torrents out of ${dbResults.length} total results`);
-            uniqueHashes.forEach(hash => {
-                const torrents = dbResults.filter(r => r.info_hash === hash);
-                const firstTorrent = torrents[0];
-                const title = firstTorrent.torrent_title || firstTorrent.title;
-                console.log(`  - ${hash.substring(0, 8)}: "${title.substring(0, 60)}..." (appears ${torrents.length} times)`);
-            });
+            console.log(`💾 [DB] Found ${uniqueHashes.length} unique torrents from ${dbResults.length} total DB results`);
+            // uniqueHashes.forEach(hash => {
+            //     const torrents = dbResults.filter(r => r.info_hash === hash);
+            //     const firstTorrent = torrents[0];
+            //     const title = firstTorrent.torrent_title || firstTorrent.title;
+            //     console.log(`  - ${hash.substring(0, 8)}: "${title.substring(0, 60)}..." (appears ${torrents.length} times)`);
+            // });
 
             // ✅ FILTER DB RESULTS for series by season/episode (like scraping results)
             let filteredDbResults = dbResults;
@@ -8446,25 +8438,103 @@ export default async function handler(req, res) {
 
                 const alldebrid = new AllDebrid(userConfig.alldebrid_key);
 
-                console.log(`[AllDebrid] Resolving ${infoHash} using strict Torrentio flow...`);
+                console.log(`[AllDebrid] Resolving ${infoHash}`);
 
-                // Use new RESOLVE flow
-                const result = await alldebrid.resolve({ infoHash, magnetLink, fileIdx: 0 }); // Defaulting fileIdx to 0 (biggest)
+                // STEP 1: Upload magnet (AllDebrid will use cache if available)
+                console.log(`[AllDebrid] Uploading magnet (will use cache if available)`);
+                const uploadResponse = await alldebrid.uploadMagnet(magnetLink);
+                const magnetId = uploadResponse.id;
 
-                if (typeof result === 'string') {
-                    // It's a URL
-                    console.log(`[AllDebrid] Stream URL unlocked: ${result.substring(0, 50)}...`);
-                    return res.redirect(302, result);
-                } else if (result && result.status === 'Downloading') {
-                    console.log(`[AllDebrid] Content is downloading...`);
+                if (!magnetId) {
+                    throw new Error('Failed to get magnet ID from AllDebrid');
+                }
+
+                // STEP 2: Get magnet status
+                console.log(`[AllDebrid] Checking magnet status: ${magnetId}`);
+                const magnetStatus = await alldebrid.getMagnetStatus(magnetId);
+
+                // Extract status from response
+                const status = magnetStatus.status || magnetStatus.statusCode;
+
+                // STEP 3: Check if ready
+                if (status === 'Ready' || status === 4) {
+                    // ✅ READY: Get files and unrestrict
+                    console.log(`[AllDebrid] Magnet ready, getting files...`);
+
+                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+
+                    // Extract files from magnetStatus
+                    const files = magnetStatus.links || [];
+
+                    if (files.length === 0) {
+                        console.log(`[AllDebrid] No files found`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                    // Find video files
+                    const videos = files
+                        .filter(file => {
+                            const filename = file.filename || file.link || '';
+                            return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+                        })
+                        .filter(file => {
+                            const filename = file.filename || file.link || '';
+                            const lowerName = filename.toLowerCase();
+                            const size = file.size || 0;
+                            return !junkKeywords.some(junk => lowerName.includes(junk)) || size > 250 * 1024 * 1024;
+                        })
+                        .sort((a, b) => (b.size || 0) - (a.size || 0));
+
+                    const targetFile = videos[0];
+
+                    if (!targetFile) {
+                        console.log(`[AllDebrid] No video file found`);
+                        // Check if it's a RAR archive
+                        if (files.some(f => (f.filename || '').endsWith('.rar') || (f.filename || '').endsWith('.zip'))) {
+                            console.log(`[AllDebrid] Failed: RAR archive`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                        }
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                    // STEP 4: Unlock the link
+                    const fileLink = targetFile.link;
+                    console.log(`[AllDebrid] Unlocking link for: ${targetFile.filename}`);
+                    const unrestrictedUrl = await alldebrid.unlockLink(fileLink);
+
+                    console.log(`[AllDebrid] Redirecting to stream (direct, no MediaFlow)`);
+                    return res.redirect(302, unrestrictedUrl);
+
+                } else if (status === 'Downloading' || status === 1 || status === 'Processing' || status === 2) {
+                    // ⏳ DOWNLOADING/PROCESSING: Show placeholder video
+                    console.log(`[AllDebrid] Magnet is downloading/processing (status: ${status})...`);
                     return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+
                 } else {
-                    throw new Error('Unexpected resolve result');
+                    // ❌ ERROR or UNKNOWN: Show failed video
+                    console.log(`[AllDebrid] Unexpected status: ${status}`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                 }
 
             } catch (error) {
                 console.error('🅰️ ❌ AllDebrid stream error:', error);
-                // Simplify error handling similar to before
+
+                // Handle specific errors with placeholder videos
+                const errorMsg = error.message?.toLowerCase() || '';
+
+                if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
+                    console.log(`[AllDebrid] Torrent not available (400/404)`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                }
+
+                if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
+                    console.log(`[AllDebrid] Archive format not supported`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                }
+
+                // Generic error: show failed placeholder
+                console.log(`[AllDebrid] Generic error, showing failed video`);
                 return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
             }
         }
@@ -8535,33 +8605,6 @@ export default async function handler(req, res) {
 
             res.setHeader('Content-Type', 'application/json');
             return res.status(200).send(JSON.stringify(health, null, 2));
-        }
-
-        // ✅ AllDebrid OAuth: Get Code
-        if (url.pathname === '/alldebrid/code') {
-            const agent = 'torrentio'; // Using torrentio agent for compatibility/parity
-            const response = await fetch(`https://api.alldebrid.com/v4/pin/get?agent=${agent}`);
-            const data = await response.json();
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(200).send(JSON.stringify(data));
-        }
-
-        // ✅ AllDebrid OAuth: Check Token
-        if (url.pathname === '/alldebrid/token') {
-            const check = url.searchParams.get('check');
-            const pin = url.searchParams.get('pin');
-            const agent = 'torrentio';
-
-            if (!check || !pin) {
-                res.setHeader('Content-Type', 'application/json');
-                return res.status(400).send(JSON.stringify({ error: 'Missing check or pin' }));
-            }
-
-            const response = await fetch(`https://api.alldebrid.com/v4/pin/check?agent=${agent}&check=${check}&pin=${pin}`);
-            const data = await response.json();
-
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(200).send(JSON.stringify(data));
         }
 
         // Enhanced search endpoint for testing

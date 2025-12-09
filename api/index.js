@@ -5131,7 +5131,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 } catch (e) {
                     console.error(`❌ [UIndex] Error searching "${q}":`, e.message);
                 }
-                await new Promise(resolve => setTimeout(resolve, 250)); // Rate limit protection
+                await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
             }
         }
 

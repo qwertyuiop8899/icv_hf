@@ -41,6 +41,9 @@ function decodeHtmlEntities(text) {
     return text.replace(/&[#\w]+;/g, match => entities[match] || match);
 }
 
+// ✅ DEBUG MODE
+const DEBUG_MODE = false;
+
 // ✅ Enhanced Query Cleaning (from uiai.js)
 function cleanSearchQuery(query) {
     console.log(`🧹 Cleaning query: "${query}"`);
@@ -1047,12 +1050,14 @@ function isTitleWrong(parsed, metadata, filename = '') {
     const normalisedParsed = normaliseTitle(preprocessedTitle);
     const normalisedTitles = metadata.titles.map(normaliseTitle);
 
-    console.log(`[isTitleWrong] Titolo originale: "${parsed.title}", preprocessato: "${preprocessedTitle}", normalizzato: "${normalisedParsed}"`);
-    console.log(`[isTitleWrong] Titoli validi normalizzati: ${JSON.stringify(normalisedTitles.slice(0, 3))}...`);
+    if (DEBUG_MODE) {
+        console.log(`[isTitleWrong] Titolo originale: "${parsed.title}", preprocessato: "${preprocessedTitle}", normalizzato: "${normalisedParsed}"`);
+        console.log(`[isTitleWrong] Titoli validi normalizzati: ${JSON.stringify(normalisedTitles.slice(0, 3))}...`);
+    }
 
     // Se NON matcha nessun titolo con threshold 0.8, è sbagliato
     if (!titleMatch(normalisedParsed, normalisedTitles, { threshold: 0.8 })) {
-        console.log(`[isTitleWrong] TITOLO SBAGLIATO: "${preprocessedTitle}" non matcha nessun titolo valido`);
+        if (DEBUG_MODE) console.log(`[isTitleWrong] TITOLO SBAGLIATO: "${preprocessedTitle}" non matcha nessun titolo valido`);
         return true;
     }
 
@@ -1956,25 +1961,25 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
                 const italianFallback = /\b(ita|italian|sub[.\s\-_]?ita|subita|ita[.\s\-_]?sub)\b/i.test(result.title);
                 const multiFallback = /\b(multi|dual[.\s\-_]?audio)\b/i.test(result.title);
                 if (!italianFallback && !multiFallback) {
-                    console.log(`🔍 [UIndex] Skipping non-Italian: "${result.title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`🔍 [UIndex] Skipping non-Italian: "${result.title.substring(0, 60)}..."`);
                     continue;
                 }
             }
 
             // ✅ NUOVO: Validazione titolo come AIOStreams
             if (validationMetadata && isTitleWrong(parsedTitle, validationMetadata, result.title)) {
-                console.log(`🔍 [UIndex] Skipping wrong title: "${result.title.substring(0, 60)}..."`);
+                if (DEBUG_MODE) console.log(`🔍 [UIndex] Skipping wrong title: "${result.title.substring(0, 60)}..."`);
                 continue;
             }
 
             // ✅ Per serie/anime, verifica stagione/episodio
             if (validationMetadata && type !== 'movie') {
                 if (isSeasonWrong(parsedTitle, validationMetadata)) {
-                    console.log(`🔍 [UIndex] Skipping wrong season: "${result.title}" (need S${validationMetadata.season})`);
+                    if (DEBUG_MODE) console.log(`🔍 [UIndex] Skipping wrong season: "${result.title}" (need S${validationMetadata.season})`);
                     continue;
                 }
                 if (isEpisodeWrong(parsedTitle, validationMetadata)) {
-                    console.log(`🔍 [UIndex] Skipping wrong episode: "${result.title}" (need E${validationMetadata.episode})`);
+                    if (DEBUG_MODE) console.log(`🔍 [UIndex] Skipping wrong episode: "${result.title}" (need E${validationMetadata.episode})`);
                     continue;
                 }
             }
@@ -5287,7 +5292,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // DEBUG: Log rejected torrents
                     if (!match) {
-                        console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}"`);
+                        if (DEBUG_MODE) console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}"`);
                     }
 
                     return match;
@@ -5310,11 +5315,11 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (hasFileIndex && !existingHasFileIndex) {
                         // New has file_index, existing doesn't → replace
-                        console.log(`💾 [DB Dedup] Replacing ${hash.substring(0, 8)} (no fileIndex) with version that has fileIndex=${dbResult.file_index}`);
+                        if (DEBUG_MODE) console.log(`💾 [DB Dedup] Replacing ${hash.substring(0, 8)} (no fileIndex) with version that has fileIndex=${dbResult.file_index}`);
                         deduplicatedMap.set(hash, dbResult);
                     } else if (hasFileIndex && existingHasFileIndex) {
                         // Both have file_index → keep first one
-                        console.log(`💾 [DB Dedup] Keeping first ${hash.substring(0, 8)} fileIndex=${existing.file_index}, skipping duplicate with fileIndex=${dbResult.file_index}`);
+                        if (DEBUG_MODE) console.log(`💾 [DB Dedup] Keeping first ${hash.substring(0, 8)} fileIndex=${existing.file_index}, skipping duplicate with fileIndex=${dbResult.file_index}`);
                     }
                 }
             }
@@ -5506,7 +5511,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     });
 
                     if (!matchesExpectedTitle) {
-                        console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
                         return false;
                     } else {
                         console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
@@ -5542,13 +5547,13 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (seasonMatch) {
                     const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
                     if (foundSeason === seasonNum) {
-                        console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
+                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
                         return true;
                     }
                 }
                 // Complete series pack
                 if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
-                    console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
                     return true;
                 }
             }
@@ -5561,7 +5566,7 @@ async function handleStream(type, id, config, workerOrigin) {
             ];
 
             if (exactPatterns.some(p => p.test(title))) {
-                console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
+                if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
                 return true;
             }
 
@@ -5600,10 +5605,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
 
                     if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
-                        console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
                         return true;
                     } else if (matchedSeason === seasonNum) {
-                        console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
                         return false;
                     }
                 }
@@ -5619,10 +5624,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (episodes) {
                         const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
                         if (epNumbers.includes(episodeNum)) {
-                            console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
                             return true;
                         } else {
-                            console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
                             return false;
                         }
                     }
@@ -5636,7 +5641,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const matchedSeason = parseInt(singleEpMatch[1]);
                 const matchedEpisode = parseInt(singleEpMatch[2]);
                 if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
                     return false;
                 }
             }
@@ -5647,7 +5652,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const matchedSeason = parseInt(nxnMatch[1]);
                 const matchedEpisode = parseInt(nxnMatch[2]);
                 if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
                     return false;
                 }
             }
@@ -5765,7 +5770,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 );
 
                 if (!match) {
-                    console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
+                    if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
                 } else {
                     console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
                 }
@@ -6745,6 +6750,31 @@ export default async function handler(req, res) {
 
     const url = new URL(req.url, `https://${req.headers.host}`);
     console.log(`🌐 ${req.method} ${url.pathname} - ${req.headers['user-agent']?.substring(0, 50) || 'Unknown'}`);
+
+    // ✅ Log decoded config if available
+    try {
+        const configMatch = url.pathname.match(/^\/([a-zA-Z0-9+\/=]+)(\/|$)/);
+        if (configMatch && configMatch[1] && configMatch[1].length > 20) {
+            const configStr = atob(configMatch[1]);
+            const config = JSON.parse(configStr);
+
+            // Format Torbox key with box emojis if present
+            if (config.torbox_key) {
+                config.torbox_key = `📦📦📦 ${config.torbox_key} 📦📦📦`;
+            }
+            // Hide other sensitive keys
+            if (config.rd_key) config.rd_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
+            if (config.alldebrid_key) config.alldebrid_key = '🔗🔗🔗 [HIDDEN] 🔗🔗🔗';
+            if (config.premiumize_key) config.premiumize_key = '💎💎💎 [HIDDEN] 💎💎💎';
+            if (config.offcloud_key) config.offcloud_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
+            if (config.tmdb_key) config.tmdb_key = '🎬🎬🎬 [HIDDEN] 🎬🎬🎬';
+
+            console.log(`📜 Decoded Config:`, JSON.stringify(config));
+        }
+    } catch (e) {
+        // Ignore parsing errors, it might not be a config path
+    }
+
 
     // ✅ Serve la pagina di configurazione alla root
     if (url.pathname === '/') {

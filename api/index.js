@@ -9,9 +9,10 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const fuzzball = require('fuzzball');
 
-// ✅ Import CommonJS modules (db-helper, id-converter)
+// ✅ Import CommonJS modules (db-helper, id-converter, rd-cache-checker)
 const dbHelper = require('../db-helper.cjs');
 const { completeIds } = require('../lib/id-converter.cjs');
+const rdCacheChecker = require('../rd-cache-checker.cjs');
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
@@ -5889,7 +5890,7 @@ async function handleStream(type, id, config, workerOrigin) {
             cacheChecks.push(
                 (async () => {
                     // ⚠️ instantAvailability is DISABLED by RealDebrid (error_code 37)
-                    // Strategy: Use DB cache (20-day TTL) + mark as cached on successful unrestrict
+                    // Strategy: DB cache + Leviathan-style live check (Add → Status → Delete)
 
                     // STEP 1: Check DB cache for known cached torrents (< 20 days)
                     let dbCachedResults = {};
@@ -5898,8 +5899,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         console.log(`💾 [DB Cache] ${Object.keys(dbCachedResults).length}/${hashes.length} hashes found in cache (< 20 days)`);
                     }
 
-                    // STEP 2: Set DB cached results
-                    rdCacheResults = dbCachedResults;
+                    // STEP 2: Set DB cached results as base
+                    rdCacheResults = { ...dbCachedResults };
 
                     // STEP 3: Get user torrents (personal cache - already added to RD account)
                     rdUserTorrents = await rdService.getTorrents().catch(e => {
@@ -5916,6 +5917,69 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (userCacheToSave.length > 0) {
                             await dbHelper.updateRdCacheStatus(userCacheToSave);
                             console.log(`💾 [GLOBAL CACHE] Saved ${userCacheToSave.length} RD personal torrents to DB (now available for all users)`);
+                        }
+                    }
+
+                    // STEP 5: Leviathan-style live check for hashes NOT in DB cache
+                    // Find hashes that don't have cache info yet
+                    // Only exclude user torrents that are DOWNLOADED (confirmed cached)
+                    const userDownloadedHashes = new Set(
+                        rdUserTorrents
+                            .filter(t => t.status === 'downloaded')
+                            .map(t => t.hash?.toLowerCase())
+                    );
+                    const uncachedHashes = hashes.filter(h => {
+                        // Only skip live check if DB says cached=true (confirmed in cache)
+                        // If cached=false or undefined, we should re-check
+                        const isConfirmedCached = dbCachedResults[h]?.cached === true;
+                        const inUserDownloaded = userDownloadedHashes.has(h);
+                        return !isConfirmedCached && !inUserDownloaded;
+                    });
+
+                    if (uncachedHashes.length > 0 && config.rd_key) {
+                        console.log(`🔍 [RD Live Check] ${uncachedHashes.length} hashes without cache info`);
+
+                        // Build items array with hash and magnet for checking
+                        const itemsToCheck = uncachedHashes.map(hash => {
+                            const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                            return result ? { hash, magnet: result.magnetLink } : null;
+                        }).filter(Boolean);
+
+                        if (itemsToCheck.length > 0) {
+                            // Count how many are already confirmed cached in DB
+                            const dbCachedCount = hashes.filter(h => dbCachedResults[h]?.cached === true).length;
+
+                            // SYNC: Check enough to reach 5 total verified
+                            const syncLimit = Math.max(0, 5 - dbCachedCount);
+                            const syncItems = itemsToCheck.slice(0, syncLimit);
+
+                            console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
+
+                            if (syncItems.length > 0) {
+                                const liveCheckResults = await rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit);
+
+                                // Merge live check results into rdCacheResults
+                                Object.assign(rdCacheResults, liveCheckResults);
+
+                                // Save live check results to DB for future queries
+                                if (dbEnabled) {
+                                    const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => ({
+                                        hash,
+                                        cached: data.cached
+                                    }));
+                                    if (liveResultsToSave.length > 0) {
+                                        await dbHelper.updateRdCacheStatus(liveResultsToSave);
+                                        console.log(`💾 [DB] Saved ${liveResultsToSave.length} live check results to DB`);
+                                    }
+                                }
+                            }
+
+                            // ASYNC: Process remaining hashes in background (local, non-blocking)
+                            const asyncItems = itemsToCheck.slice(syncLimit);
+                            if (asyncItems.length > 0) {
+                                rdCacheChecker.enrichCacheBackground(asyncItems, config.rd_key, dbHelper);
+                                console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
+                            }
                         }
                     }
                 })()

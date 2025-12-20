@@ -1106,7 +1106,14 @@ function calculateSimilarity(str1, str2) {
 // --- NUOVA SEZIONE: SCRAPER PER KNABEN.ORG (AIOStreams Style API) ---
 
 const KNABEN_API_URL = "https://api.knaben.org";
+const KNABEN_TIMEOUT_FIRST = 4000; // 4 second timeout for first attempt
+const KNABEN_TIMEOUT_RETRY = 2000; // 2 second timeout for subsequent attempts
+const UINDEX_TIMEOUT = 5000; // 5 second timeout for UIndex
 const KNABEN_API_VERSION = "1";
+
+// Global circuit breaker for Knaben - resets every 30 seconds
+let knabenTimeoutCount = 0;
+let knabenCircuitBreakerUntil = 0;
 
 // Categorie Knaben
 const KnabenCategory = {
@@ -1196,13 +1203,21 @@ class KnabenAPI {
         // console.log(`🦉 [Knaben API] Body: ${JSON.stringify(body)}`);
 
         try {
+            // Add timeout using AbortController - shorter timeout after first failure
+            const controller = new AbortController();
+            const timeout = knabenTimeoutCount === 0 ? KNABEN_TIMEOUT_FIRST : KNABEN_TIMEOUT_RETRY;
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`Knaben API error (${response.status}): ${response.statusText}`);
@@ -1298,6 +1313,12 @@ function buildKnabenQueries(parsedId, metadata, options = {}) {
  * @returns {Promise<Array>} Array di risultati
  */
 async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
+    // Global circuit breaker check - if Knaben has failed too many times, skip
+    if (Date.now() < knabenCircuitBreakerUntil) {
+        console.log(`⚠️ [Knaben API] Circuit breaker active - skipping search for "${searchQuery}"`);
+        return [];
+    }
+
     console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
 
     // Determina le categorie in base al tipo
@@ -1489,6 +1510,18 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
 
         } catch (error) {
             console.error(`❌ [Knaben API] Query "${query}" failed:`, error.message);
+            // Circuit breaker: if timeout/abort, increment global counter
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
+                knabenTimeoutCount++;
+                console.warn(`⚠️ [Knaben API] Timeout #${knabenTimeoutCount} - skipping remaining queries`);
+
+                // After 2 timeouts, activate circuit breaker for 30 seconds
+                if (knabenTimeoutCount >= 2) {
+                    knabenCircuitBreakerUntil = Date.now() + 30000; // 30 seconds
+                    console.warn(`🔴 [Knaben API] Circuit breaker ACTIVATED - Knaben disabled for 30 seconds`);
+                }
+                break;
+            }
         }
     }
 
@@ -1919,6 +1952,10 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
 
         const searchUrl = `https://uindex.org/search.php?search=${encodeURIComponent(searchQuery)}&c=${category}`;
 
+        // Add timeout using AbortController
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), UINDEX_TIMEOUT);
+
         const response = await fetch(searchUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -1930,8 +1967,11 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Cache-Control': 'no-cache'
-            }
+            },
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -6822,16 +6862,11 @@ export default async function handler(req, res) {
             const configStr = atob(configMatch[1]);
             const config = JSON.parse(configStr);
 
-            // Format Torbox key with box emojis if present
-            if (config.torbox_key) {
-                config.torbox_key = `📦📦📦 ${config.torbox_key} 📦📦📦`;
-            }
-            // Hide other sensitive keys
+            // Only hide Real-Debrid key (user requested: show Torbox and TMDB keys)
             if (config.rd_key) config.rd_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
             if (config.alldebrid_key) config.alldebrid_key = '🔗🔗🔗 [HIDDEN] 🔗🔗🔗';
             if (config.premiumize_key) config.premiumize_key = '💎💎💎 [HIDDEN] 💎💎💎';
             if (config.offcloud_key) config.offcloud_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
-            if (config.tmdb_key) config.tmdb_key = '🎬🎬🎬 [HIDDEN] 🎬🎬🎬';
 
             console.log(`📜 Decoded Config:`, JSON.stringify(config));
         }

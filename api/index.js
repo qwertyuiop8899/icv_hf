@@ -1108,12 +1108,28 @@ function calculateSimilarity(str1, str2) {
 const KNABEN_API_URL = "https://api.knaben.org";
 const KNABEN_TIMEOUT_FIRST = 4000; // 4 second timeout for first attempt
 const KNABEN_TIMEOUT_RETRY = 2000; // 2 second timeout for subsequent attempts
-const UINDEX_TIMEOUT = 5000; // 5 second timeout for UIndex
 const KNABEN_API_VERSION = "1";
+
+// TorrentGalaxy API configuration
+const TORRENTGALAXY_API_URL = "https://torrentgalaxy.space";
+const TORRENTGALAXY_TIMEOUT_FIRST = 4000; // 4 second timeout for first attempt
+const TORRENTGALAXY_TIMEOUT_RETRY = 2000; // 2 second timeout for subsequent attempts
+
+// UIndex configuration
+const UINDEX_TIMEOUT_FIRST = 4000; // 4 second timeout for first attempt
+const UINDEX_TIMEOUT_RETRY = 2000; // 2 second timeout for subsequent attempts
 
 // Global circuit breaker for Knaben - resets every 30 seconds
 let knabenTimeoutCount = 0;
 let knabenCircuitBreakerUntil = 0;
+
+// Global circuit breaker for TorrentGalaxy - resets every 30 seconds
+let torrentGalaxyTimeoutCount = 0;
+let torrentGalaxyCircuitBreakerUntil = 0;
+
+// Global circuit breaker for UIndex - resets every 30 seconds
+let uindexTimeoutCount = 0;
+let uindexCircuitBreakerUntil = 0;
 
 // Categorie Knaben
 const KnabenCategory = {
@@ -1529,7 +1545,164 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     return allHits;
 }
 
-// --- FINE NUOVA SEZIONE ---
+// --- FINE NUOVA SEZIONE KNABEN ---
+
+// --- NUOVA SEZIONE: TORRENTGALAXY API ---
+
+/**
+ * TorrentGalaxy Category mapping
+ */
+const TorrentGalaxyCategory = {
+    Movies: 'Movies',
+    TV: 'TV',
+    Anime: 'Anime'
+};
+
+/**
+ * Cerca su TorrentGalaxy usando l'API JSON
+ * @param {string} searchQuery - Query di ricerca
+ * @param {string} type - Tipo: 'movie', 'series', 'anime'
+ * @param {Object} metadata - Metadati opzionali
+ * @param {Object} parsedId - ID parsato opzionale (per season/episode)
+ * @returns {Promise<Array>} Array di risultati
+ */
+async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
+    // Global circuit breaker check
+    if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
+        console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping search for "${searchQuery}"`);
+        return [];
+    }
+
+    console.log(`🌌 [TorrentGalaxy] Starting search for: "${searchQuery}" (type: ${type})`);
+
+    const allResults = [];
+    const seenHashes = new Set();
+
+    // Build queries based on metadata (similar to Knaben)
+    const queries = [];
+
+    if (metadata && (type === 'series' || type === 'anime')) {
+        const title = metadata.primaryTitle || metadata.title || searchQuery;
+        const season = parsedId?.season || metadata.season;
+        const episode = parsedId?.episode || metadata.episode;
+
+        if (season && episode) {
+            const s = season.toString().padStart(2, '0');
+            const e = episode.toString().padStart(2, '0');
+            queries.push(`${title} S${s}E${e}`);
+            queries.push(`${title} S${s}`);
+        } else if (season) {
+            const s = season.toString().padStart(2, '0');
+            queries.push(`${title} S${s}`);
+        }
+        queries.push(title);
+    } else {
+        queries.push(searchQuery);
+    }
+
+    // Deduplicate queries
+    const uniqueQueries = [...new Set(queries)];
+    console.log(`🌌 [TorrentGalaxy] Built ${uniqueQueries.length} queries: ${uniqueQueries.join(', ')}`);
+
+    for (const query of uniqueQueries) {
+        // Check circuit breaker before each query
+        if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
+            console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping remaining queries`);
+            break;
+        }
+
+        try {
+            // Add timeout using AbortController - shorter timeout after first failure
+            const controller = new AbortController();
+            const timeout = torrentGalaxyTimeoutCount === 0 ? TORRENTGALAXY_TIMEOUT_FIRST : TORRENTGALAXY_TIMEOUT_RETRY;
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+            const encodedQuery = encodeURIComponent(query);
+            const url = `${TORRENTGALAXY_API_URL}/get-posts/keywords:${encodedQuery}:format:json`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json'
+                },
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`TorrentGalaxy API error (${response.status}): ${response.statusText}`);
+            }
+
+            const data = await response.json();
+
+            if (data && data.results && Array.isArray(data.results)) {
+                // Reset timeout count on success
+                torrentGalaxyTimeoutCount = 0;
+
+                for (const item of data.results) {
+                    const hash = (item.h || '').toLowerCase();
+                    if (!hash || seenHashes.has(hash)) continue;
+                    seenHashes.add(hash);
+
+                    // Filter by category based on type
+                    const category = item.c || '';
+                    if (type === 'movie' && category !== TorrentGalaxyCategory.Movies) continue;
+                    if (type === 'series' && category !== TorrentGalaxyCategory.TV) continue;
+                    if (type === 'anime' && category !== TorrentGalaxyCategory.Anime && category !== TorrentGalaxyCategory.TV) continue;
+
+                    // Convert bytes to human-readable size
+                    const sizeBytes = parseInt(item.s) || 0;
+                    let sizeStr = '0 B';
+                    if (sizeBytes >= 1024 * 1024 * 1024) {
+                        sizeStr = (sizeBytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+                    } else if (sizeBytes >= 1024 * 1024) {
+                        sizeStr = (sizeBytes / (1024 * 1024)).toFixed(2) + ' MB';
+                    } else if (sizeBytes >= 1024) {
+                        sizeStr = (sizeBytes / 1024).toFixed(2) + ' KB';
+                    } else {
+                        sizeStr = sizeBytes + ' B';
+                    }
+
+                    // Map to standard format
+                    allResults.push({
+                        title: item.n || 'Unknown',
+                        infoHash: hash,
+                        seeders: parseInt(item.se) || 0,
+                        leechers: parseInt(item.le) || 0,
+                        size: sizeStr,
+                        imdbId: item.i || null,
+                        category: category,
+                        source: 'TorrentGalaxy',
+                        magnetLink: `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(item.n || '')}&tr=udp://tracker.opentrackr.org:1337/announce`
+                    });
+                }
+                console.log(`🌌 [TorrentGalaxy] Query "${query}" returned ${data.results.length} results, ${allResults.length} total unique`);
+            }
+
+        } catch (error) {
+            console.error(`❌ [TorrentGalaxy] Query "${query}" failed:`, error.message);
+            // Circuit breaker: if timeout/abort, increment global counter
+            if (error.name === 'AbortError' || error.message.includes('aborted')) {
+                torrentGalaxyTimeoutCount++;
+                console.warn(`⚠️ [TorrentGalaxy] Timeout #${torrentGalaxyTimeoutCount} - skipping remaining queries`);
+
+                // After 2 timeouts, activate circuit breaker for 30 seconds
+                if (torrentGalaxyTimeoutCount >= 2) {
+                    torrentGalaxyCircuitBreakerUntil = Date.now() + 30000; // 30 seconds
+                    console.warn(`🔴 [TorrentGalaxy] Circuit breaker ACTIVATED - TorrentGalaxy disabled for 30 seconds`);
+                }
+                break;
+            }
+        }
+    }
+
+    console.log(`🌌 [TorrentGalaxy] Search completed. Found ${allResults.length} unique results.`);
+    return allResults;
+}
+
+// --- FINE NUOVA SEZIONE TORRENTGALAXY ---
 
 // --- NUOVA SEZIONE: JACKETTIO INTEGRATION ---
 
@@ -1938,6 +2111,12 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
 
 // ✅ Single UIndex Search with Enhanced Error Handling
 async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata = null) {
+    // Global circuit breaker check for UIndex
+    if (Date.now() < uindexCircuitBreakerUntil) {
+        console.log(`⚠️ [UIndex] Circuit breaker active - skipping search for "${searchQuery}"`);
+        return [];
+    }
+
     try {
         console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
 
@@ -1952,9 +2131,10 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
 
         const searchUrl = `https://uindex.org/search.php?search=${encodeURIComponent(searchQuery)}&c=${category}`;
 
-        // Add timeout using AbortController
+        // Add timeout using AbortController - shorter timeout after first failure
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), UINDEX_TIMEOUT);
+        const timeout = uindexTimeoutCount === 0 ? UINDEX_TIMEOUT_FIRST : UINDEX_TIMEOUT_RETRY;
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
 
         const response = await fetch(searchUrl, {
             headers: {
@@ -1972,6 +2152,9 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
         });
 
         clearTimeout(timeoutId);
+
+        // Reset timeout count on successful response
+        uindexTimeoutCount = 0;
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -2037,7 +2220,20 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
         return filteredResults;
 
     } catch (error) {
-        console.error(`❌ Error fetching from UIndex:`, error);
+        console.error(`❌ Error fetching from UIndex:`, error.message);
+
+        // Circuit breaker: if timeout/abort, increment global counter
+        if (error.name === 'AbortError' || error.message.includes('aborted')) {
+            uindexTimeoutCount++;
+            console.warn(`⚠️ [UIndex] Timeout #${uindexTimeoutCount}`);
+
+            // After 2 timeouts, activate circuit breaker for 30 seconds
+            if (uindexTimeoutCount >= 2) {
+                uindexCircuitBreakerUntil = Date.now() + 30000; // 30 seconds
+                console.warn(`🔴 [UIndex] Circuit breaker ACTIVATED - UIndex disabled for 30 seconds`);
+            }
+        }
+
         return [];
     }
 }
@@ -5083,6 +5279,7 @@ async function handleStream(type, id, config, workerOrigin) {
         const rawResultsByProvider = {
             UIndex: [],
             Knaben: [],
+            TorrentGalaxy: [],
             CorsaroNero: [],
             Jackettio: []
         };
@@ -5095,6 +5292,7 @@ async function handleStream(type, id, config, workerOrigin) {
         const useUIndex = config.use_uindex !== false;
         const useCorsaroNero = config.use_corsaronero !== false;
         const useKnaben = config.use_knaben !== false;
+        const useTorrentGalaxy = config.use_torrentgalaxy === true; // Default OFF (false) for new feature
 
         // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
         console.log(`🔍 Starting live search...`);
@@ -5244,6 +5442,25 @@ async function handleStream(type, id, config, workerOrigin) {
                 });
             }
 
+            // TorrentGalaxy
+            if (useTorrentGalaxy) {
+                const tgxMetadata = {
+                    primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
+                    title: originalTitle || mediaDetails.title,
+                    year: mediaDetails.year,
+                    titles: [cleanedItalianTitle, originalTitle, mediaDetails.title].filter(Boolean),
+                };
+                const tgxParsedId = {
+                    season: season ? parseInt(season, 10) : undefined,
+                    episode: episode ? parseInt(episode, 10) : undefined,
+                };
+
+                searchPromises.push({
+                    name: 'TorrentGalaxy',
+                    promise: fetchTorrentGalaxyData(query, searchType, tgxMetadata, tgxParsedId)
+                });
+            }
+
             // Jackettio
             if (jackettioInstance) {
                 searchPromises.push({
@@ -5294,7 +5511,8 @@ async function handleStream(type, id, config, workerOrigin) {
             ...rawResultsByProvider.CorsaroNero,
             ...rawResultsByProvider.Jackettio,
             ...rawResultsByProvider.Knaben,
-            ...rawResultsByProvider.UIndex
+            ...rawResultsByProvider.UIndex,
+            ...rawResultsByProvider.TorrentGalaxy
         ];
 
         console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
@@ -6532,7 +6750,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (!sizeStr) return 0;
 
                 // Parse "1.5 GB", "700 MB", etc.
-                const match = sizeStr.match(/([\d.]+)\s*([a-zA-Z]+)/);
+                const sizeStrConverted = String(sizeStr || '');
+                const match = sizeStrConverted.match(/([\d.]+)\s*([a-zA-Z]+)/);
                 if (!match) return 0;
 
                 const val = parseFloat(match[1]);

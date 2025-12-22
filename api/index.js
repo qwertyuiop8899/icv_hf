@@ -5537,6 +5537,9 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 if (externalResults.length > 0) {
                     console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                    // DEBUG: Check if externalAddon is present at source
+                    const sampleResult = externalResults[0];
+                    console.log(`🔍 [EXT DEBUG] Sample result: externalAddon="${sampleResult.externalAddon}", externalProvider="${sampleResult.externalProvider}", source="${sampleResult.source}"`);
                     rawResultsByProvider.ExternalAddons.push(...externalResults);
                 } else {
                     console.log(`⚠️ [External Addons] No results received`);
@@ -6420,15 +6423,25 @@ async function handleStream(type, id, config, workerOrigin) {
                         cacheType = 'none';
                     }
 
+                    // DEBUG: Log result properties to debug display names
+                    if (result.source === 'RARBG' || result.externalAddon) {
+                        console.log(`🔍 [DEBUG DISPLAY] source="${result.source}", externalAddon="${result.externalAddon}", externalProvider="${result.externalProvider}"`);
+                    }
+
                     const isCached = cacheType === 'global' || cacheType === 'personal';
                     const cacheStatusIcon = isCached ? '⚡' : '⏬';
                     const errorIcon = streamError ? '⚠️ ' : '';
 
                     // New Name Format: IL 🏴‍☠️ 🔮 [👑] [⚡] \n [Quality]
-                    let badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
-                    if (result.source === 'RARBG') {
-                        badgePrefix = '🅣 Torrentio';
+                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
+
+                    // DEBUG: Unconditional log for ALL results
+                    console.log(`🔍 [BADGE DEBUG] source="${result.source}", externalAddon="${result.externalAddon}", externalProvider="${result.externalProvider}"`);
+                    if (result.externalAddon) {
+                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
                     }
+
                     const streamName = `${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
@@ -6465,11 +6478,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
+
+                    // For external addons, display ONLY the specific provider in parentheses
+                    if (result.externalAddon && result.externalProvider) {
+                        providerName = `(${result.externalProvider})`;
+                    }
+
                     if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
-                    }
-                    if (result.source === 'RARBG') {
-                        providerName = '🅣 ThePirateBay';
                     }
 
                     const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
@@ -6543,7 +6559,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cacheStatusIcon = isCached ? '⚡' : '⏬';
                     const errorIcon = streamError ? '⚠️ ' : '';
 
-                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    // Badge uses addon name for external addons
+                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                    if (result.externalAddon) {
+                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                    }
                     const streamName = `${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
@@ -6575,6 +6596,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
+
+                    // For external addons, display ONLY the specific provider in parentheses
+                    if (result.externalAddon && result.externalProvider) {
+                        providerName = `(${result.externalProvider})`;
+                    }
+
                     if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
@@ -6633,7 +6660,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cacheStatusIcon = isCached ? '⚡' : '⏬';
                     const errorIcon = streamError ? '⚠️ ' : '';
 
-                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    // Badge uses addon name for external addons
+                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                    if (result.externalAddon) {
+                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                    }
                     const streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
@@ -6665,6 +6697,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
+
+                    // For external addons, display ONLY the specific provider in parentheses
+                    if (result.externalAddon && result.externalProvider) {
+                        providerName = `(${result.externalProvider})`;
+                    }
+
                     if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
@@ -6703,7 +6741,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // ✅ P2P STREAM (if no debrid service enabled)
                 if (!useRealDebrid && !useTorbox && !useAllDebrid) {
-                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    // Badge uses addon name for external addons
+                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                    if (result.externalAddon) {
+                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                    }
                     const streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
@@ -6735,6 +6778,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
+
+                    // For external addons, display ONLY the specific provider in parentheses
+                    if (result.externalAddon && result.externalProvider) {
+                        providerName = `(${result.externalProvider})`;
+                    }
+
                     if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }

@@ -6425,7 +6425,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     const errorIcon = streamError ? '⚠️ ' : '';
 
                     // New Name Format: IL 🏴‍☠️ 🔮 [👑] [⚡] \n [Quality]
-                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    let badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    if (result.source === 'RARBG') {
+                        badgePrefix = '🅣 Torrentio';
+                    }
                     const streamName = `${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
@@ -6464,6 +6467,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     let providerName = result.source;
                     if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
+                    }
+                    if (result.source === 'RARBG') {
+                        providerName = '🅣 ThePirateBay';
                     }
 
                     const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;

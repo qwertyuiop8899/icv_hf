@@ -13,6 +13,10 @@ const fuzzball = require('fuzzball');
 const dbHelper = require('../db-helper.cjs');
 const { completeIds } = require('../lib/id-converter.cjs');
 const rdCacheChecker = require('../rd-cache-checker.cjs');
+const { searchRARBG } = require('../rarbg.cjs');
+
+// ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
+import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
@@ -5281,7 +5285,9 @@ async function handleStream(type, id, config, workerOrigin) {
             Knaben: [],
             TorrentGalaxy: [],
             CorsaroNero: [],
-            Jackettio: []
+            Jackettio: [],
+            ExternalAddons: [], // ✅ Torrentio, MediaFusion, Comet
+            RARBG: []
         };
 
         const searchType = kitsuId ? 'anime' : type;
@@ -5293,6 +5299,15 @@ async function handleStream(type, id, config, workerOrigin) {
         const useCorsaroNero = config.use_corsaronero !== false;
         const useKnaben = config.use_knaben !== false;
         const useTorrentGalaxy = config.use_torrentgalaxy === true; // Default OFF (false) for new feature
+        const globalExternalEnabled = config.use_external_addons !== false;
+        const enabledExternalAddons = [];
+        if (globalExternalEnabled) {
+            if (config.use_torrentio !== false) enabledExternalAddons.push('torrentio');
+            if (config.use_mediafusion !== false) enabledExternalAddons.push('mediafusion');
+            if (config.use_comet !== false) enabledExternalAddons.push('comet');
+        }
+        console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
+        console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
 
         // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
         console.log(`🔍 Starting live search...`);
@@ -5506,13 +5521,70 @@ async function handleStream(type, id, config, workerOrigin) {
         // when only incorrect Italian seasons are found.
         // See "LANGUAGE FILTERING (Post-Season Filter)" below.
 
+        // ✅ 4️⃣ EXTERNAL ADDONS: Fetch from Torrentio, MediaFusion, Comet in parallel
+
+        if (enabledExternalAddons.length > 0) {
+            console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+
+            // Build Stremio-format ID for addon APIs
+            let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
+            if (type === 'series' && season && episode) {
+                stremioId = `${stremioId}:${season}:${episode}`;
+            }
+
+            try {
+                const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
+
+                if (externalResults.length > 0) {
+                    console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                    rawResultsByProvider.ExternalAddons.push(...externalResults);
+                } else {
+                    console.log(`⚠️ [External Addons] No results received`);
+                }
+            } catch (externalError) {
+                console.error(`❌ [External Addons] Error:`, externalError.message);
+            }
+        }
+
+        // ✅ 5️⃣ RARBG (Standalone Proxy)
+        if (config.use_rarbg !== false) {
+            // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
+            const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
+            console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
+            try {
+                // Timeout 4500ms come richiesto
+                // Build Stremio-format ID
+                let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
+                if (type === 'series' && season && episode) {
+                    stremioId = `${stremioId}:${season}:${episode}`;
+                }
+
+                const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
+                if (rarbgRes && rarbgRes.length > 0) {
+                    console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
+                    rawResultsByProvider.RARBG = rarbgRes.map(r => ({
+                        title: r.title,
+                        link: r.magnet,
+                        size: r.size,
+                        seeders: r.seeders,
+                        source: "RARBG",
+                        infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
+                    }));
+                }
+            } catch (e) {
+                console.log(`❌ [RARBG] Error: ${e.message}`);
+            }
+        }
+
         // Merge finale
         const allRawResults = [
             ...rawResultsByProvider.CorsaroNero,
-            ...rawResultsByProvider.Jackettio,
             ...rawResultsByProvider.Knaben,
+            ...rawResultsByProvider.TorrentGalaxy,
+            ...rawResultsByProvider.ExternalAddons,
+            ...rawResultsByProvider.RARBG,
             ...rawResultsByProvider.UIndex,
-            ...rawResultsByProvider.TorrentGalaxy
+            ...rawResultsByProvider.Jackettio
         ];
 
         console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
@@ -6353,7 +6425,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     const errorIcon = streamError ? '⚠️ ' : '';
 
                     // New Name Format: IL 🏴‍☠️ 🔮 [👑] [⚡] \n [Quality]
-                    const streamName = `IL 🏴‍☠️ 🔮 [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    const streamName = `${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
 
@@ -6389,7 +6462,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
-                    if (providerName.toLowerCase().includes('corsaro')) {
+                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
 
@@ -6464,7 +6537,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cacheStatusIcon = isCached ? '⚡' : '⏬';
                     const errorIcon = streamError ? '⚠️ ' : '';
 
-                    const streamName = `IL 🏴‍☠️ 🔮 [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    const streamName = `${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6495,7 +6569,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
-                    if (providerName.toLowerCase().includes('corsaro')) {
+                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
 
@@ -6553,7 +6627,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cacheStatusIcon = isCached ? '⚡' : '⏬';
                     const errorIcon = streamError ? '⚠️ ' : '';
 
-                    const streamName = `IL 🏴‍☠️ 🔮 [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    const streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6584,7 +6659,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
-                    if (providerName.toLowerCase().includes('corsaro')) {
+                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
 
@@ -6622,7 +6697,8 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // ✅ P2P STREAM (if no debrid service enabled)
                 if (!useRealDebrid && !useTorbox && !useAllDebrid) {
-                    const streamName = `IL 🏴‍☠️ 🔮 [🧲] [⏬]\n${result.quality || 'Unknown'}`;
+                    const badgePrefix = result.externalAddon ? `${result.sourceEmoji || '🔗'} ${result.externalProvider || result.source}` : 'IL 🏴‍☠️ 🔮';
+                    const streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6653,7 +6729,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Normalize provider name
                     let providerName = result.source;
-                    if (providerName.toLowerCase().includes('corsaro')) {
+                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
                         providerName = 'IlCorsaroNero';
                     }
 

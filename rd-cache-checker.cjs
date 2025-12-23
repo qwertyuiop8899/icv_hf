@@ -75,9 +75,14 @@ async function rdRequest(method, url, token, data = null) {
  */
 async function deleteTorrent(token, torrentId) {
     try {
-        await rdRequest('DELETE', `${RD_BASE_URL}/torrents/delete/${torrentId}`, token);
+        const result = await rdRequest('DELETE', `${RD_BASE_URL}/torrents/delete/${torrentId}`, token);
+        if (result && result.success) {
+            console.log(`🗑️ [RD Delete] Successfully deleted torrent ${torrentId}`);
+        } else {
+            console.log(`🗑️ [RD Delete] Delete request sent for ${torrentId} (no confirmation)`);
+        }
     } catch (e) {
-        console.error(`⚠️ Error deleting torrent ${torrentId}:`, e.message);
+        console.error(`⚠️ [RD Delete] FAILED to delete torrent ${torrentId}:`, e.message);
     }
 }
 

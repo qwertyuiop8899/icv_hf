@@ -722,6 +722,14 @@
             </div>
 
             <div class="action-section full-width">
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="aiostreams_mode">
+                        <span>🔄 Modalità AIOStreams</span>
+                        <small style="margin-left: auto; color: #9ca3af;">Compatibile con AIOStreams addon</small>
+                    </label>
+                </div>
                 <div class="button-group">
                     <button id="install_button" disabled>Installa Addon</button>
                     <button id="copy_button" disabled>Copia Link</button>
@@ -758,6 +766,7 @@
         const useRarbgCheckbox = document.getElementById("use_rarbg");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
+        const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
 
         // Buttons
         const installButton = document.getElementById("install_button");
@@ -860,6 +869,11 @@
                 if (maxResLimit) {
                     config.max_res_limit = parseInt(maxResLimit);
                 }
+            }
+
+            // AIOStreams compatibility mode
+            if (aioStreamsModeCheckbox.checked) {
+                config.aiostreams_mode = true;
             }
 
             // Check if at least one search site is selected
@@ -1040,6 +1054,15 @@
                     }
                 }
 
+                // AIOStreams mode
+                if (cfg.aiostreams_mode) {
+                    const aioStreamsCheckbox = document.getElementById('aiostreams_mode');
+                    if (aioStreamsCheckbox) {
+                        aioStreamsCheckbox.checked = true;
+                        console.log('✅ Loaded aiostreams_mode:', cfg.aiostreams_mode);
+                    }
+                }
+
                 console.log('✅ Configuration preloaded successfully');
 
                 // Trigger updateInstallLink to refresh the UI
@@ -1070,6 +1093,7 @@
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
+        aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
 
         // Initial call to enable buttons
         updateInstallLink();

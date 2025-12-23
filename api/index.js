@@ -14,6 +14,7 @@ const dbHelper = require('../db-helper.cjs');
 const { completeIds } = require('../lib/id-converter.cjs');
 const rdCacheChecker = require('../rd-cache-checker.cjs');
 const { searchRARBG } = require('../rarbg.cjs');
+const aioFormatter = require('../aiostreams-formatter.cjs');
 
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
@@ -75,21 +76,35 @@ function extractQuality(title) {
     if (!title) return '';
 
     // More comprehensive quality patterns
+    // Resolution numbers are unique enough to match without strict boundaries
     const qualityPatterns = [
-        /\b(2160p|4k|uhd)\b/i,
-        /\b(1080p)\b/i,
-        /\b(720p)\b/i,
-        /\b(480p|sd)\b/i,
+        /(2160p?|4k|uhd)/i,
+        /(1080p?)/i,
+        /(720p?)/i,
+        /(480p?)/i,
+        /\b(sd)\b/i,
         /\b(webrip|web-rip)\b/i,
-        /\b(bluray|blu-ray|bdremux|bd)\b/i,
+        /\b(bluray|blu-ray|bdremux)\b/i,
         /\b(remux)\b/i,
-        /\b(hdrip|hdr)\b/i,
+        /\b(hdrip)\b/i,
         /\b(cam|ts|tc)\b/i
     ];
 
     for (const pattern of qualityPatterns) {
         const match = title.match(pattern);
-        if (match) return match[1].toLowerCase();
+        if (match) {
+            let quality = match[1].toLowerCase();
+
+            // Normalize resolutions: always add 'p' suffix (except 4k/uhd)
+            if (quality === '2160' || quality === '2160p' || quality === 'uhd' || quality === '4k') {
+                return '4K';  // Normalize to 4K
+            }
+            if (quality === '1080') return '1080p';
+            if (quality === '720') return '720p';
+            if (quality === '480') return '480p';
+
+            return quality;
+        }
     }
 
     return '';
@@ -1676,6 +1691,7 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
                         seeders: parseInt(item.se) || 0,
                         leechers: parseInt(item.le) || 0,
                         size: sizeStr,
+                        quality: extractQuality(item.n || ''),  // ✅ Add quality extraction
                         imdbId: item.i || null,
                         category: category,
                         source: 'TorrentGalaxy',
@@ -5567,6 +5583,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         link: r.magnet,
                         size: r.size,
                         seeders: r.seeders,
+                        quality: r.quality,  // ✅ Add quality from RARBG
                         source: "RARBG",
                         infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
                     }));
@@ -6432,7 +6449,19 @@ async function handleStream(type, id, config, workerOrigin) {
                         badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
                     }
 
-                    const streamName = `${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    // AIOStreams-compatible format or standard format
+                    let streamName;
+                    if (config.aiostreams_mode) {
+                        streamName = aioFormatter.formatStreamName({
+                            addonName: 'IlCorsaroViola',
+                            service: 'realdebrid',
+                            cached: isCached,
+                            quality: result.quality || 'Unknown',
+                            hasError: !!streamError
+                        });
+                    } else {
+                        streamName = `${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    }
 
                     const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
 
@@ -6494,9 +6523,11 @@ async function handleStream(type, id, config, workerOrigin) {
                         debugInfo
                     ].filter(Boolean).join('\n');
 
-                    streams.push({
+                    // Build stream with infoHash for P2P fallback
+                    const rdStream = {
                         name: streamName,
                         title: streamTitle,
+                        infoHash: result.infoHash,
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-realdebrid-optimized',
@@ -6512,7 +6543,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             seeders: result.seeders,
                             error: streamError
                         }
-                    });
+                    };
+
+                    // Add fileIdx for pack torrents (P2P fallback support)
+                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                        rdStream.fileIdx = result.fileIndex;
+                    }
+
+                    streams.push(rdStream);
                 }
 
                 // ✅ TORBOX STREAM (if enabled)
@@ -6555,7 +6593,20 @@ async function handleStream(type, id, config, workerOrigin) {
                         const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
                         badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
                     }
-                    const streamName = `${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+
+                    // AIOStreams-compatible format or standard format
+                    let streamName;
+                    if (config.aiostreams_mode) {
+                        streamName = aioFormatter.formatStreamName({
+                            addonName: 'IlCorsaroViola',
+                            service: 'torbox',
+                            cached: isCached,
+                            quality: result.quality || 'Unknown',
+                            hasError: !!streamError
+                        });
+                    } else {
+                        streamName = `${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    }
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6608,9 +6659,11 @@ async function handleStream(type, id, config, workerOrigin) {
                         lastLine
                     ].filter(Boolean).join('\n');
 
-                    streams.push({
+                    // Build stream with infoHash for P2P fallback
+                    const torboxStream = {
                         name: streamName,
                         title: streamTitle,
+                        infoHash: result.infoHash,
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-torbox-optimized',
@@ -6625,7 +6678,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             quality: result.quality,
                             seeders: result.seeders
                         }
-                    });
+                    };
+
+                    // Add fileIdx for pack torrents (P2P fallback support)
+                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                        torboxStream.fileIdx = result.fileIndex;
+                    }
+
+                    streams.push(torboxStream);
                 }
 
                 // ✅ ALLDEBRID STREAM (if enabled)
@@ -6656,7 +6716,20 @@ async function handleStream(type, id, config, workerOrigin) {
                         const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
                         badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
                     }
-                    const streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+
+                    // AIOStreams-compatible format or standard format
+                    let streamName;
+                    if (config.aiostreams_mode) {
+                        streamName = aioFormatter.formatStreamName({
+                            addonName: 'IlCorsaroViola',
+                            service: 'alldebrid',
+                            cached: isCached,
+                            quality: result.quality || 'Unknown',
+                            hasError: !!streamError
+                        });
+                    } else {
+                        streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                    }
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6709,9 +6782,11 @@ async function handleStream(type, id, config, workerOrigin) {
                         lastLine
                     ].filter(Boolean).join('\n');
 
-                    streams.push({
+                    // Build stream with infoHash for P2P fallback
+                    const adStream = {
                         name: streamName,
                         title: streamTitle,
+                        infoHash: result.infoHash,
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-alldebrid-optimized',
@@ -6726,7 +6801,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             quality: result.quality,
                             seeders: result.seeders
                         }
-                    });
+                    };
+
+                    // Add fileIdx for pack torrents (P2P fallback support)
+                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                        adStream.fileIdx = result.fileIndex;
+                    }
+
+                    streams.push(adStream);
                 }
 
                 // ✅ P2P STREAM (if no debrid service enabled)
@@ -6737,7 +6819,20 @@ async function handleStream(type, id, config, workerOrigin) {
                         const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
                         badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
                     }
-                    const streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
+
+                    // AIOStreams-compatible format or standard format
+                    let streamName;
+                    if (config.aiostreams_mode) {
+                        streamName = aioFormatter.formatStreamName({
+                            addonName: 'IlCorsaroViola',
+                            service: 'p2p',
+                            cached: false, // P2P is never cached
+                            quality: result.quality || 'Unknown',
+                            hasError: false
+                        });
+                    } else {
+                        streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
+                    }
 
                     // New Title Format
                     let titleLine1 = '';
@@ -6827,77 +6922,109 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         }
 
-        // ✅ GLOBAL SORTING: Cache > Resolution > Size > Seeders
-        streams.sort((a, b) => {
-            // 1. Cached Status (Cached first)
-            const isCachedA = (a._meta && a._meta.cached) || (a.name && a.name.includes('⚡'));
-            const isCachedB = (b._meta && b._meta.cached) || (b.name && b.name.includes('⚡'));
+        // Helper function for resolution score
+        const getResolutionScore = (stream) => {
+            const quality = (stream._meta?.quality || '').toLowerCase();
+            const name = (stream.name || '').toLowerCase();
+            const title = (stream.title || '').toLowerCase();
+            const combined = quality + ' ' + name + ' ' + title;
 
-            if (isCachedA !== isCachedB) {
-                return isCachedA ? -1 : 1; // Cached comes first
+            if (combined.includes('2160') || combined.includes('4k')) return 2160;
+            if (combined.includes('1080')) return 1080;
+            if (combined.includes('720')) return 720;
+            if (combined.includes('480')) return 480;
+            return 0;
+        };
+
+        // Helper function for size in bytes
+        const getSizeInBytes = (stream) => {
+            let sizeStr = stream._meta?.originalSize;
+
+            // Fallback: try to find size in title (e.g. "💾 1.5 GB")
+            if (!sizeStr && stream.title) {
+                const match = stream.title.match(/💾\s*(.+)/);
+                if (match) sizeStr = match[1];
             }
 
-            // 2. Resolution (High to Low)
-            const getResolutionScore = (stream) => {
-                const quality = (stream._meta?.quality || '').toLowerCase();
-                const name = (stream.name || '').toLowerCase();
-                const title = (stream.title || '').toLowerCase();
-                const combined = quality + ' ' + name + ' ' + title;
+            if (!sizeStr) return 0;
 
-                if (combined.includes('2160') || combined.includes('4k')) return 2160;
-                if (combined.includes('1080')) return 1080;
-                if (combined.includes('720')) return 720;
-                if (combined.includes('480')) return 480;
-                return 0;
-            };
+            // Parse "1.5 GB", "700 MB", etc.
+            const sizeStrConverted = String(sizeStr || '');
+            const match = sizeStrConverted.match(/([\d.]+)\s*([a-zA-Z]+)/);
+            if (!match) return 0;
 
-            const resA = getResolutionScore(a);
-            const resB = getResolutionScore(b);
+            const val = parseFloat(match[1]);
+            const unit = match[2].toUpperCase();
 
-            if (resA !== resB) {
-                return resB - resA; // Higher resolution first
-            }
+            let multiplier = 1;
+            if (unit.includes('GB')) multiplier = 1024 * 1024 * 1024;
+            else if (unit.includes('MB')) multiplier = 1024 * 1024;
+            else if (unit.includes('KB')) multiplier = 1024;
 
-            // 3. Size (Big to Small)
-            const getSizeInBytes = (stream) => {
-                let sizeStr = stream._meta?.originalSize;
+            return val * multiplier;
+        };
 
-                // Fallback: try to find size in title (e.g. "💾 1.5 GB")
-                if (!sizeStr && stream.title) {
-                    const match = stream.title.match(/💾\s*(.+)/);
-                    if (match) sizeStr = match[1];
+        // ✅ P2P MODE SORTING: Quality > Seeders > Size (no cache priority)
+        // ✅ DEBRID MODE SORTING: Cache > Resolution > Size > Seeders
+        const isP2PMode = !useRealDebrid && !useTorbox && !useAllDebrid;
+
+        if (isP2PMode) {
+            console.log(`🔄 [P2P Sorting] Applying P2P sort order: Quality > Seeders > Size`);
+            streams.sort((a, b) => {
+                // 1. Resolution (High to Low)
+                const resA = getResolutionScore(a);
+                const resB = getResolutionScore(b);
+
+                if (resA !== resB) {
+                    return resB - resA; // Higher resolution first
                 }
 
-                if (!sizeStr) return 0;
+                // 2. Seeders (More is better)
+                const seedsA = a._meta?.seeders || 0;
+                const seedsB = b._meta?.seeders || 0;
 
-                // Parse "1.5 GB", "700 MB", etc.
-                const sizeStrConverted = String(sizeStr || '');
-                const match = sizeStrConverted.match(/([\d.]+)\s*([a-zA-Z]+)/);
-                if (!match) return 0;
+                if (seedsA !== seedsB) {
+                    return seedsB - seedsA; // Higher seeders first
+                }
 
-                const val = parseFloat(match[1]);
-                const unit = match[2].toUpperCase();
+                // 3. Size (Tie-breaker: Larger first)
+                const sizeA = getSizeInBytes(a);
+                const sizeB = getSizeInBytes(b);
+                return sizeB - sizeA;
+            });
+        } else {
+            // ✅ DEBRID SORTING: Cache > Resolution > Size > Seeders
+            streams.sort((a, b) => {
+                // 1. Cached Status (Cached first)
+                const isCachedA = (a._meta && a._meta.cached) || (a.name && a.name.includes('⚡'));
+                const isCachedB = (b._meta && b._meta.cached) || (b.name && b.name.includes('⚡'));
 
-                let multiplier = 1;
-                if (unit.includes('GB')) multiplier = 1024 * 1024 * 1024;
-                else if (unit.includes('MB')) multiplier = 1024 * 1024;
-                else if (unit.includes('KB')) multiplier = 1024;
+                if (isCachedA !== isCachedB) {
+                    return isCachedA ? -1 : 1; // Cached comes first
+                }
 
-                return val * multiplier;
-            };
+                // 2. Resolution (High to Low)
+                const resA = getResolutionScore(a);
+                const resB = getResolutionScore(b);
 
-            const sizeA = getSizeInBytes(a);
-            const sizeB = getSizeInBytes(b);
+                if (resA !== resB) {
+                    return resB - resA; // Higher resolution first
+                }
 
-            if (sizeA !== sizeB) {
-                return sizeB - sizeA; // Larger size first
-            }
+                // 3. Size (Big to Small)
+                const sizeA = getSizeInBytes(a);
+                const sizeB = getSizeInBytes(b);
 
-            // 4. Seeders (Fallback)
-            const seedsA = a._meta?.seeders || 0;
-            const seedsB = b._meta?.seeders || 0;
-            return seedsB - seedsA;
-        });
+                if (sizeA !== sizeB) {
+                    return sizeB - sizeA; // Larger size first
+                }
+
+                // 4. Seeders (Fallback)
+                const seedsA = a._meta?.seeders || 0;
+                const seedsB = b._meta?.seeders || 0;
+                return seedsB - seedsA;
+            });
+        }
 
         // ✅ Apply Max Resolution Limit (if configured)
         if (config.max_res_limit) {
@@ -7328,10 +7455,49 @@ export default async function handler(req, res) {
         // Stremio manifest
         // Gestisce sia /manifest.json che /{config}/manifest.json
         if (url.pathname.endsWith('/manifest.json')) {
+            // Extract config from URL path to determine addon name
+            const pathParts = url.pathname.split('/');
+            let addonName = 'IlCorsaroViola';
+
+            // Check if there's a config segment (e.g., /{config}/manifest.json)
+            if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
+                try {
+                    const encodedConfigStr = pathParts[1];
+                    const config = JSON.parse(atob(encodedConfigStr));
+
+                    // Determine which debrid services are configured
+                    const hasRD = config.rd_key && config.rd_key.length > 0;
+                    const hasTB = config.torbox_key && config.torbox_key.length > 0;
+                    const hasAD = config.ad_key && config.ad_key.length > 0;
+
+                    // Check if MediaFlow proxy is configured (only applies to RD)
+                    const hasProxy = config.mediaflow_url && config.mediaflow_url.length > 0;
+
+                    // Build dynamic name based on active services (using icons)
+                    const services = [];
+                    if (hasRD) services.push('👑');  // Crown for Real-Debrid
+                    if (hasTB) services.push('📦');  // Box for Torbox
+                    if (hasAD) services.push('🅰️');   // Red A for AllDebrid
+
+                    if (services.length > 0) {
+                        // Add proxy indicator only if RD is enabled
+                        const proxyPrefix = (hasProxy && hasRD) ? '🕵️ ' : '';
+                        addonName = `${proxyPrefix}IlCorsaroViola ${services.join('+')}`;
+                    } else {
+                        addonName = 'IlCorsaroViola 🧲';  // Magnet for P2P
+                    }
+
+                    console.log(`📛 [Manifest] Dynamic addon name: ${addonName}`);
+                } catch (e) {
+                    console.error('Error parsing config for addon name:', e);
+                    // Keep default name on error
+                }
+            }
+
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '1.0.0',
-                name: 'IlCorsaroViola',
+                version: '2.0.0',
+                name: addonName,
                 description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true',
                 resources: ['stream'],
@@ -9063,7 +9229,7 @@ export default async function handler(req, res) {
             const health = {
                 status: 'OK',
                 addon: 'IlCorsaroViola',
-                version: '1.0.0',
+                version: '2.0.0',
                 uptime: Date.now(),
                 cache: {
                     entries: cache.size,

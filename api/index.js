@@ -7437,7 +7437,7 @@ export default async function handler(req, res) {
 
             // ✅ Redirect logo.png to external URL
             if (filename === 'logo.png') {
-                return res.redirect(302, 'https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true');
+                return res.redirect(302, 'https://i.imgur.com/kZK4KKS.png');
             }
 
             const logoPath = path.join(process.cwd(), 'public', filename);

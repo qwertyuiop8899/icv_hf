@@ -15,6 +15,7 @@ const { completeIds } = require('../lib/id-converter.cjs');
 const rdCacheChecker = require('../rd-cache-checker.cjs');
 const { searchRARBG } = require('../rarbg.cjs');
 const aioFormatter = require('../aiostreams-formatter.cjs');
+const packFilesHandler = require('../pack-files-handler.cjs');
 
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
@@ -5684,6 +5685,95 @@ async function handleStream(type, id, config, workerOrigin) {
             filteredDbResults = Array.from(deduplicatedMap.values());
             console.log(`💾 [DB] Deduplicated to ${filteredDbResults.length} unique torrents`);
 
+            // ✅ PACK FILES VERIFICATION: Verify season packs contain the requested episode
+            // - Max 20 packs verified per search
+            // - 100ms delay between API calls to avoid 503
+            // - Skip packs already in DB (have file_index)
+            // - Order by size (largest first)
+            if (type === 'series' && season && episode && (config.rd_key || config.torbox_key)) {
+                const seasonNum = parseInt(season);
+                const episodeNum = parseInt(episode);
+                const seriesImdbId = mediaDetails.imdbId;
+                const MAX_PACK_VERIFY = 20;
+                const DELAY_MS = 100;
+
+                // Separate verified (in DB) from unverified packs
+                const verifiedPacks = [];
+                const unverifiedPacks = [];
+                const nonPacks = [];
+
+                for (const dbResult of filteredDbResults) {
+                    const torrentTitle = dbResult.torrent_title || dbResult.title;
+                    const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
+                    const isPack = packFilesHandler.isSeasonPack(torrentTitle);
+
+                    if (!isPack) {
+                        nonPacks.push(dbResult);
+                    } else if (hasFileIndex) {
+                        verifiedPacks.push(dbResult);
+                    } else {
+                        unverifiedPacks.push(dbResult);
+                    }
+                }
+
+                // Sort unverified packs by size (largest first)
+                const torrentSize = (r) => r.torrent_size || r.size || 0;
+                unverifiedPacks.sort((a, b) => torrentSize(b) - torrentSize(a));
+
+                console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+
+                // Verify unverified packs (max 20, with 100ms delay)
+                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
+                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
+
+                const newlyVerified = [];
+                const excluded = [];
+
+                for (let i = 0; i < toVerify.length; i++) {
+                    const dbResult = toVerify[i];
+                    const torrentTitle = dbResult.torrent_title || dbResult.title;
+
+                    // Add delay between calls (except first)
+                    if (i > 0) {
+                        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                    }
+
+                    console.log(`📦 [PACK VERIFY] (${i + 1}/${toVerify.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
+
+                    try {
+                        const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                            dbResult.info_hash.toLowerCase(),
+                            config,
+                            seriesImdbId,
+                            seasonNum,
+                            episodeNum,
+                            dbHelper
+                        );
+
+                        if (fileInfo) {
+                            console.log(`✅ [PACK VERIFY] Found E${episodeNum}: ${fileInfo.fileName} (${(fileInfo.fileSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+                            // Use totalPackSize from fileInfo if available, otherwise use torrent_size
+                            dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
+                            dbResult.file_index = fileInfo.fileIndex;
+                            dbResult.file_title = fileInfo.fileName;
+                            dbResult.file_size = fileInfo.fileSize;
+                            newlyVerified.push(dbResult);
+                        } else {
+                            console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                            excluded.push(dbResult);
+                        }
+                    } catch (err) {
+                        console.warn(`⚠️ [PACK VERIFY] Error: ${err.message} - keeping pack`);
+                        newlyVerified.push(dbResult); // Keep on error
+                    }
+                }
+
+                console.log(`📦 [PACK VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped (limit)`);
+
+                // Combine all results: non-packs + verified + newly verified + skipped
+                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
+            }
+
             // Convert filtered DB results to scraper format
             for (const dbResult of filteredDbResults) {
                 // 🔥 FILTER: Respect user configuration even for DB results
@@ -5705,6 +5795,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
                 const torrentTitle = dbResult.torrent_title || dbResult.title;
                 const torrentSize = dbResult.torrent_size || dbResult.size;
+                // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
+                const displaySize = dbResult.file_size || torrentSize;
                 // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
                 // This ensures we only show the actual filename for the SPECIFIC episode
                 const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
@@ -5713,7 +5805,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
 
                 // DEBUG: Log what we're adding
-                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(torrentSize || 0)}, seeders=${dbResult.seeders || 0}`);
+                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
 
                 // Add to raw results with high priority
                 allRawResults.push({
@@ -5722,8 +5814,11 @@ async function handleStream(type, id, config, workerOrigin) {
                     magnetLink: magnetLink,
                     seeders: dbResult.seeders || 0,
                     leechers: 0,
-                    size: torrentSize ? formatBytes(torrentSize) : 'Unknown',
-                    sizeInBytes: torrentSize || 0,
+                    size: displaySize ? formatBytes(displaySize) : 'Unknown',
+                    sizeInBytes: displaySize || 0,
+                    // ✅ Pack size for pack/episode display
+                    packSize: dbResult.packSize || torrentSize || 0,
+                    file_size: dbResult.file_size || 0,
                     quality: extractQuality(torrentTitle),
                     filename: fileName || torrentTitle,
                     source: `💾 ${dbResult.provider || 'Database'}`,
@@ -6138,6 +6233,95 @@ async function handleStream(type, id, config, workerOrigin) {
 
             console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
 
+            // ✅ PACK FILES VERIFICATION for scraped results
+            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+                const seasonNum = parseInt(season);
+                const episodeNum = parseInt(episode);
+                const seriesImdbId = mediaDetails.imdbId;
+                const MAX_PACK_VERIFY = 20;
+                const DELAY_MS = 100;
+
+                // Separate verified from unverified packs
+                const verifiedPacks = [];
+                const unverifiedPacks = [];
+                const nonPacks = [];
+
+                for (const result of filteredResults) {
+                    const hasFileIndex = result.fileIndex !== null && result.fileIndex !== undefined;
+                    const isPack = packFilesHandler.isSeasonPack(result.title);
+
+                    if (!isPack) {
+                        nonPacks.push(result);
+                    } else if (hasFileIndex) {
+                        verifiedPacks.push(result);
+                    } else {
+                        unverifiedPacks.push(result);
+                    }
+                }
+
+                // Sort by size (largest first)
+                unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+
+                console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+
+                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
+                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
+
+                const newlyVerified = [];
+                const excluded = [];
+
+                for (let i = 0; i < toVerify.length; i++) {
+                    const result = toVerify[i];
+                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+
+                    if (!infoHash) {
+                        newlyVerified.push(result);
+                        continue;
+                    }
+
+                    if (i > 0) {
+                        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                    }
+
+                    console.log(`📦 [SCRAPE VERIFY] (${i + 1}/${toVerify.length}) Checking "${result.title.substring(0, 50)}..."`);
+
+                    // ✅ Save original pack size BEFORE any modification
+                    const originalPackSize = result.sizeInBytes || 0;
+
+                    try {
+                        const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                            infoHash,
+                            config,
+                            seriesImdbId,
+                            seasonNum,
+                            episodeNum,
+                            dbHelper
+                        );
+
+                        if (fileInfo) {
+                            console.log(`✅ [SCRAPE VERIFY] Found E${episodeNum}: ${fileInfo.fileName}`);
+                            // Use totalPackSize from fileInfo if available, otherwise use original sizeInBytes
+                            result.packSize = fileInfo.totalPackSize || originalPackSize;
+                            result.file_size = fileInfo.fileSize;
+                            result.fileIndex = fileInfo.fileIndex;
+                            result.file_title = fileInfo.fileName;
+                            result.sizeInBytes = fileInfo.fileSize;
+                            result.size = formatBytes(fileInfo.fileSize);
+                            newlyVerified.push(result);
+                        } else {
+                            console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                            excluded.push(result);
+                        }
+                    } catch (err) {
+                        console.warn(`⚠️ [SCRAPE VERIFY] Error: ${err.message} - keeping pack`);
+                        newlyVerified.push(result);
+                    }
+                }
+
+                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped`);
+                filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
+            }
+
             // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
             if (filteredResults.length === 0 && originalCount > 0) {
                 console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
@@ -6479,8 +6663,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
-                    // Check if it's a pack
-                    const isPack = isSeasonPack(result.title) || (result.fileIndex !== undefined && result.fileIndex !== null);
+                    // ✅ FIX: A pack is ONLY when the title indicates a season pack, NOT just having fileIndex
+                    // fileIndex is now also set for single episodes after verification
+                    const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
                         titleLine1 = `🗳️ ${result.title}`;
@@ -6498,7 +6683,30 @@ async function handleStream(type, id, config, workerOrigin) {
                         titleLine1 = `🎬 ${result.title}`;
                     }
 
-                    const sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
+                    let sizeLine;
+                    // For packs: packSize should be the original pack size, episodeSize is the individual file
+                    // If packSize wasn't set, use sizeInBytes as the pack size when we have file_size
+                    // Force Number() to avoid string comparison issues
+                    const episodeSize = Number(result.file_size) || 0;
+                    const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
+
+                    // Debug: log sizes
+                    if (isPack) {
+                        console.log(`📦 [SIZE DEBUG] Pack: "${result.title.substring(0, 40)}..." packSize=${formatBytes(packSize)}, episodeSize=${formatBytes(episodeSize)}, sizeInBytes=${formatBytes(result.sizeInBytes || 0)}, rawPackSize=${formatBytes(result.packSize || 0)}`);
+                    }
+
+                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                        // Pack with known episode size: show both
+                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        console.log(`✅ [SIZE LINE] DUAL format: "${sizeLine}" (isPack=${isPack}, ep=${episodeSize}, pack=${packSize})`);
+                    } else {
+                        // Single file or pack without episode size
+                        sizeLine = `💾 ${result.size || 'Unknown'}`;
+                        if (isPack) {
+                            console.log(`❌ [SIZE LINE] SINGLE format: "${sizeLine}" (isPack=${isPack}, ep=${episodeSize}, pack=${packSize}, condition: ep>0=${episodeSize > 0}, pack>0=${packSize > 0}, ep<pack=${episodeSize < packSize})`);
+                        }
+                    }
 
                     // Languages
                     const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
@@ -6622,7 +6830,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
-                    const isPack = isSeasonPack(result.title) || (result.fileIndex !== undefined && result.fileIndex !== null);
+                    const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
                         titleLine1 = `🗳️ ${result.title}`;
@@ -6639,7 +6847,15 @@ async function handleStream(type, id, config, workerOrigin) {
                         titleLine1 = `🎬 ${result.title}`;
                     }
 
-                    const sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    // Size display with pack/episode format
+                    let sizeLine;
+                    const packSize = result.packSize || 0;
+                    const episodeSize = result.file_size || 0;
+                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                    } else {
+                        sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    }
 
                     const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
                     const langDisplay = langInfo.displayLabel;
@@ -6745,7 +6961,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
-                    const isPack = isSeasonPack(result.title) || (result.fileIndex !== undefined && result.fileIndex !== null);
+                    const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
                         titleLine1 = `🗳️ ${result.title}`;
@@ -6762,7 +6978,15 @@ async function handleStream(type, id, config, workerOrigin) {
                         titleLine1 = `🎬 ${result.title}`;
                     }
 
-                    const sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    // Size display with pack/episode format
+                    let sizeLine;
+                    const packSize = result.packSize || 0;
+                    const episodeSize = result.file_size || 0;
+                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                    } else {
+                        sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    }
 
                     const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
                     const langDisplay = langInfo.displayLabel;
@@ -6848,7 +7072,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
-                    const isPack = isSeasonPack(result.title) || (result.fileIndex !== undefined && result.fileIndex !== null);
+                    const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
                         titleLine1 = `🗳️ ${result.title}`;
@@ -6865,7 +7089,21 @@ async function handleStream(type, id, config, workerOrigin) {
                         titleLine1 = `🎬 ${result.title}`;
                     }
 
-                    const sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    // Size display with pack/episode format
+                    let sizeLine;
+                    const episodeSize = result.file_size || 0;
+                    const packSize = result.packSize || (episodeSize > 0 && isPack ? (result.sizeInBytes || 0) : 0);
+
+                    // Debug: log sizes for P2P
+                    if (isPack) {
+                        console.log(`📦 [P2P SIZE] Pack: "${result.title.substring(0, 40)}..." packSize=${formatBytes(packSize)}, episodeSize=${formatBytes(episodeSize)}, rawPackSize=${formatBytes(result.packSize || 0)}`);
+                    }
+
+                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                    } else {
+                        sizeLine = `💾 ${result.size || 'Unknown'}`;
+                    }
 
                     const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
                     const langDisplay = langInfo.displayLabel;

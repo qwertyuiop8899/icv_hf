@@ -20,6 +20,8 @@ const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$
 const SEASON_EPISODE_PATTERNS = [
     // S01E04, s01e04, S1E04
     { pattern: /[sS](\d{1,2})[eE](\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
+    // S01EP04 (Common in Italian releases) - FIX: Added for Il Trono di Spade pack support
+    { pattern: /[sS](\d{1,2})[eE][pP](\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
     // 1x04, 01x04
     { pattern: /(?<!\w)(\d{1,2})[xX](\d{1,3})(?!\w)/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
     // Season 1 Episode 04
@@ -379,6 +381,7 @@ function isSeasonPack(torrentTitle) {
     ];
 
     // Verifica che NON sia un singolo episodio
+    // FIX: Added negative lookahead (?!...) to prevent matching "S01E01" in "S01E01-10"
     const singleEpisodePattern = /[sS]\d{1,2}[eExX]\d{1,3}(?!\s*[-–—]\s*[eExX]?\d)/;
 
     if (singleEpisodePattern.test(torrentTitle)) {

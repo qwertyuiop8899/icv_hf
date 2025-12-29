@@ -3940,13 +3940,18 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null,
 }
 
 // ✅ IMPROVED Matching functions - Supporta SEASON PACKS come Torrentio
-function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null) {
+// ✅ MODIFICATA: Aggiunto parametro skipTitleCheck
+function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null, skipTitleCheck = false) {
     if (!torrentTitle || !showTitleOrTitles) return false;
 
+    // FIX: Definisci isDebugTarget PRIMA di usarlo
+    const isDebugTarget = torrentTitle.toLowerCase().includes('scissione') &&
+        torrentTitle.toLowerCase().includes('s01e01') &&
+        torrentTitle.toLowerCase().includes('2160p');
+
     // DEBUG: Log rejected single episodes
-    if (torrentTitle.includes('155da22a') || torrentTitle.includes('3d700a66') ||
-        (torrentTitle.toLowerCase().includes('scissione') && torrentTitle.toLowerCase().includes('s01e01') && torrentTitle.toLowerCase().includes('2160p'))) {
-        console.log(`🔍 [Match Debug] Checking: "${torrentTitle.substring(0, 80)}" for S${seasonNum}E${episodeNum}`);
+    if (isDebugTarget) {
+        console.log(`🔍 [Match Debug] Checking: "${torrentTitle.substring(0, 80)}" for S${seasonNum}E${episodeNum} (Anime: ${isAnime}, SkipTitle: ${skipTitleCheck})`);
     }
 
     // ✅ STEP 1: Light cleaning (keep dots and dashes for episode ranges!)
@@ -4290,7 +4295,8 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
 
     // ✅ COMPLETE SERIES PACK: Check for [COMPLETA] / [COMPLETE] / [FULL SERIES] without specific season number
     // This handles anime and series that are packaged as complete series (e.g., "Death Note (2006) [COMPLETA]")
-    const completeSeriesPattern = /(?:completa?|complete|full.*series|serie.*completa?|integrale)/i;
+    // FIX: Aggiunta regex per intervalli di anni (es. "Game of Thrones (2011-2019)")
+    const completeSeriesPattern = /(?:complete|completa|full|tutte|all)\s*(?:series|serie|seasons|stagioni|collection|collezione|pack)|(?:\d+\s*(?:season|stagion)[ei]?)|(?:\bS\d+\s*-\s*S?\d+\b)|(?:\(20\d{2}-20\d{2}\))/i;
     if (completeSeriesPattern.test(normalizedTorrentTitle)) {
         // Only match if there's NO explicit season number (avoids false positives like "S02 COMPLETA")
         const hasExplicitSeason = /(?:stagione|season|s)\s*\d{1,2}/i.test(normalizedTorrentTitle);
@@ -5640,13 +5646,19 @@ async function handleStream(type, id, config, workerOrigin) {
                 filteredDbResults = dbResults.filter(dbResult => {
                     // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
                     const torrentTitle = dbResult.torrent_title || dbResult.title;
+
+                    // TRUST ID MATCH: If torrent has correct IMDB ID, skip title check
+                    // This fixes issues where torrent title is in different language (e.g. "Il Trono di Spade" vs "Game of Thrones")
+                    const trustTitle = dbResult.imdb_id && dbResult.imdb_id === mediaDetails.imdbId;
+
                     const match = isExactEpisodeMatch(
                         torrentTitle,
                         mediaDetails.titles || mediaDetails.title,
                         seasonNum,
                         episodeNum,
                         !!kitsuId,  // isAnime flag
-                        mediaDetails.absoluteEpisode  // absolute episode for Kitsu
+                        mediaDetails.absoluteEpisode,  // absolute episode for Kitsu
+                        trustTitle // skipTitleCheck
                     );
 
                     // DEBUG: Log rejected torrents

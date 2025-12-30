@@ -4,9 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <link rel="icon" type="image/png" href="https://i.imgur.com/kZK4KKS.png">
+    <link rel="icon" type="image/png" href="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true">
     <link rel="shortcut icon" type="image/png"
-        href="https://i.imgur.com/kZK4KKS.png">
+        href="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true">
     <title>IlCorsaroViola | Configurazione</title>
     <style>
         * {
@@ -568,7 +568,7 @@
                 <img src="/prisonmike.png" alt="Prison Mike" class="prisonmike-img">
 
                 <div class="logo-container">
-                    <img src="https://i.imgur.com/kZK4KKS.png" alt="Logo"
+                    <img src="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true" alt="Logo"
                         class="logo">
                     <div class="brand" style="text-align: center;">
                         <h1 style="margin-bottom: 5px;">IlCorsaroViola</h1>
@@ -730,6 +730,14 @@
                         <small style="margin-left: auto; color: #9ca3af;">Compatibile con AIOStreams addon</small>
                     </label>
                 </div>
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="introskip_enabled">
+                        <span>⏩ IntroSkip (Salta Intro Serie TV)</span>
+                        <small style="margin-left: auto; color: #9ca3af;">Solo Debrid - usa IntroDB</small>
+                    </label>
+                </div>
                 <div class="button-group">
                     <button id="install_button" disabled>Installa Addon</button>
                     <button id="copy_button" disabled>Copia Link</button>
@@ -766,7 +774,11 @@
         const useRarbgCheckbox = document.getElementById("use_rarbg");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
+
+        // Feature toggles
         const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
+        const introSkipEnabledCheckbox = document.getElementById("introskip_enabled");
+
 
         // Buttons
         const installButton = document.getElementById("install_button");
@@ -871,9 +883,12 @@
                 }
             }
 
-            // AIOStreams compatibility mode
+            // Feature toggles
             if (aioStreamsModeCheckbox.checked) {
                 config.aiostreams_mode = true;
+            }
+            if (introSkipEnabledCheckbox.checked) {
+                config.introskip_enabled = true;
             }
 
             // Check if at least one search site is selected
@@ -1054,16 +1069,24 @@
                     }
                 }
 
-                // AIOStreams mode
+                // Feature toggles
                 if (cfg.aiostreams_mode) {
-                    const aioStreamsCheckbox = document.getElementById('aiostreams_mode');
-                    if (aioStreamsCheckbox) {
-                        aioStreamsCheckbox.checked = true;
-                        console.log('✅ Loaded aiostreams_mode:', cfg.aiostreams_mode);
+                    const el = document.getElementById('aiostreams_mode');
+                    if (el) {
+                        el.checked = true;
+                        console.log('✅ Loaded aiostreams_mode');
+                    }
+                }
+                if (cfg.introskip_enabled) {
+                    const el = document.getElementById('introskip_enabled');
+                    if (el) {
+                        el.checked = true;
+                        console.log('✅ Loaded introskip_enabled');
                     }
                 }
 
                 console.log('✅ Configuration preloaded successfully');
+
 
                 // Trigger updateInstallLink to refresh the UI
                 updateInstallLink();
@@ -1093,7 +1116,10 @@
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
+
+        // Event listeners for feature toggles
         aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
+        introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
 
         // Initial call to enable buttons
         updateInstallLink();
@@ -1194,4 +1220,3 @@
 </body>
 
 </html>
-

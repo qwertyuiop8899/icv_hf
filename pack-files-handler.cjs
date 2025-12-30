@@ -20,7 +20,7 @@ const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$
 const SEASON_EPISODE_PATTERNS = [
     // S01E04, s01e04, S1E04
     { pattern: /[sS](\d{1,2})[eE](\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
-    // S01EP04 (Common in Italian releases) - FIX: Added for Il Trono di Spade pack support
+    // S01EP04 (Common in Italian releases)
     { pattern: /[sS](\d{1,2})[eE][pP](\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
     // 1x04, 01x04
     { pattern: /(?<!\w)(\d{1,2})[xX](\d{1,3})(?!\w)/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
@@ -105,8 +105,7 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         );
 
         if (!addResponse.data || !addResponse.data.id) {
-            console.error('❌ [PACK-HANDLER] Failed to add magnet to RD');
-            return null;
+            throw new Error('Failed to add magnet to RD');
         }
 
         const torrentId = addResponse.data.id;
@@ -118,10 +117,9 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         );
 
         if (!infoResponse.data || !infoResponse.data.files) {
-            console.error('❌ [PACK-HANDLER] No files in torrent info');
             // Cancella torrent
             await axios.delete(`${baseUrl}/torrents/delete/${torrentId}`, { headers }).catch(() => { });
-            return null;
+            throw new Error('No files in torrent info');
         }
 
         const files = infoResponse.data.files.map(f => ({
@@ -142,7 +140,8 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
 
     } catch (error) {
         console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);
-        return null;
+        // return null; // OLD
+        throw error; // NEW: Rethrow to allow fail-open in caller
     }
 }
 
@@ -168,8 +167,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
         );
 
         if (!addResponse.data || !addResponse.data.data || !addResponse.data.data.torrent_id) {
-            console.error('❌ [PACK-HANDLER] Failed to add magnet to Torbox');
-            return null;
+            throw new Error('Failed to add magnet to Torbox');
         }
 
         const torrentId = addResponse.data.data.torrent_id;
@@ -185,13 +183,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
 
         const torrent = infoResponse.data?.data?.find(t => t.id === torrentId);
         if (!torrent || !torrent.files) {
-            console.error('❌ [PACK-HANDLER] No files in Torbox torrent info');
             // Cancella torrent
             await axios.get(`${baseUrl}/torrents/controltorrent`, {
                 headers,
                 params: { torrent_id: torrentId, operation: 'delete' }
             }).catch(() => { });
-            return null;
+            throw new Error('No files in Torbox torrent info');
         }
 
         const files = torrent.files.map((f, idx) => ({
@@ -215,7 +212,8 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
 
     } catch (error) {
         console.error(`❌ [PACK-HANDLER] Torbox API error: ${error.message}`);
-        return null;
+        // return null; // OLD
+        throw error; // NEW: Rethrow
     }
 }
 
@@ -329,8 +327,9 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     }
 
     if (!filesResult || !filesResult.files || filesResult.files.length === 0) {
-        console.error('❌ [PACK-HANDLER] Failed to get files from Debrid');
-        return null;
+        // console.error('❌ [PACK-HANDLER] Failed to get files from Debrid'); // OLD
+        // return null; // OLD
+        throw new Error('Failed to get files from Debrid (Empty result)'); // NEW
     }
 
     // Calculate total pack size from all video files
@@ -381,8 +380,8 @@ function isSeasonPack(torrentTitle) {
     ];
 
     // Verifica che NON sia un singolo episodio
-    // FIX: Added negative lookahead (?!...) to prevent matching "S01E01" in "S01E01-10"
-    const singleEpisodePattern = /[sS]\d{1,2}[eExX]\d{1,3}(?!\s*[-–—]\s*[eExX]?\d)/;
+    // Fix: Added (?!\d) to prevent backtracking matching partial numbers (e.g. S01E0 in S01E01-10)
+    const singleEpisodePattern = /[sS]\d{1,2}[eExX]\d{1,3}(?!\d)(?!\s*[-–—]\s*[eExX]?\d)/;
 
     if (singleEpisodePattern.test(torrentTitle)) {
         return false; // È un singolo episodio

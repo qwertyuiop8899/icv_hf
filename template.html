@@ -732,6 +732,20 @@
                 </div>
                 <div
                     style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span>🎨 Custom Formatter</span>
+                        <button id="formatter_button" type="button"
+                            style="padding: 6px 12px; background: linear-gradient(135deg, #8b5cf6, #ec4899); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">
+                            Configura
+                        </button>
+                        <small id="formatter_status" style="margin-left: auto; color: #9ca3af;">Preset: Default</small>
+                        <input type="hidden" id="formatter_preset" value="default">
+                        <input type="hidden" id="formatter_custom_name" value="">
+                        <input type="hidden" id="formatter_custom_desc" value="">
+                    </div>
+                </div>
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
                     <label style="display: flex; align-items: center; gap: 10px;">
                         <input type="checkbox" id="introskip_enabled">
                         <span>⏩ IntroSkip (Salta Intro Serie TV)</span>
@@ -890,6 +904,18 @@
             }
             if (introSkipEnabledCheckbox.checked) {
                 config.introskip_enabled = true;
+            }
+
+            // Custom Formatter
+            const formatterPreset = document.getElementById('formatter_preset').value;
+            if (formatterPreset && formatterPreset !== 'default') {
+                config.formatter_preset = formatterPreset;
+                if (formatterPreset === 'custom') {
+                    const customName = document.getElementById('formatter_custom_name').value;
+                    const customDesc = document.getElementById('formatter_custom_desc').value;
+                    if (customName) config.formatter_custom_name = customName;
+                    if (customDesc) config.formatter_custom_desc = customDesc;
+                }
             }
 
             // Check if at least one search site is selected
@@ -1121,6 +1147,33 @@
         // Event listeners for feature toggles
         aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
         introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
+
+        // Custom Formatter button handler
+        document.getElementById('formatter_button').addEventListener('click', () => {
+            const currentPreset = document.getElementById('formatter_preset').value;
+            const popup = window.open(`/formatter.html?preset=${currentPreset}`, 'formatter', 'width=1000,height=700');
+        });
+
+        // Listen for formatter config from popup
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'formatter-config') {
+                const cfg = event.data.config;
+                document.getElementById('formatter_preset').value = cfg.preset || 'default';
+                document.getElementById('formatter_custom_name').value = cfg.customName || '';
+                document.getElementById('formatter_custom_desc').value = cfg.customDesc || '';
+
+                // Update status display
+                const presetNames = {
+                    default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                    verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                    dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+                };
+                document.getElementById('formatter_status').textContent =
+                    'Preset: ' + (presetNames[cfg.preset] || cfg.preset);
+
+                updateInstallLink();
+            }
+        });
 
         // Initial call to enable buttons
         updateInstallLink();

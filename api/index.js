@@ -74,6 +74,70 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
 
         if (!templates) return stream;
 
+        // Extract additional data from filename if not present
+        const filename = result.filename || result.title || '';
+
+        // Helper to extract patterns from filename
+        const extractPattern = (str, patterns) => {
+            for (const [key, regex] of Object.entries(patterns)) {
+                if (regex.test(str)) return key;
+            }
+            return '';
+        };
+
+        const extractMultiple = (str, patterns) => {
+            const matches = [];
+            for (const [key, regex] of Object.entries(patterns)) {
+                if (regex.test(str)) matches.push(key);
+            }
+            return matches;
+        };
+
+        // Simplified patterns for quick extraction
+        const visualPatterns = {
+            'HDR10+': /hdr.?10.?\+|hdr.?10.?plus/i,
+            'HDR10': /hdr.?10(?!.?\+)/i,
+            'HDR': /\bhdr\b(?!.?10)/i,
+            'DV': /dolby.?vision|dovi|\bdv\b/i,
+            '10bit': /10.?bit/i,
+            'IMAX': /\bimax\b/i
+        };
+
+        const audioPatterns = {
+            'Atmos': /\batmos\b/i,
+            'DD+': /dd\+|ddp|e.?ac.?3/i,
+            'DD': /\bdd\b|dolby.?digital|ac.?3/i,
+            'DTS-HD MA': /dts.?hd.?ma/i,
+            'DTS-HD': /dts.?hd(?!.?ma)/i,
+            'DTS': /\bdts\b(?!.?hd)/i,
+            'TrueHD': /true.?hd/i,
+            '5.1': /5\.?1/i,
+            '7.1': /7\.?1/i,
+            'AAC': /\baac\b/i,
+            'FLAC': /\bflac\b/i
+        };
+
+        const codecPatterns = {
+            'HEVC': /hevc|x.?265|h.?265/i,
+            'AVC': /avc|x.?264|h.?264/i,
+            'AV1': /\bav1\b/i
+        };
+
+        const qualityPatterns = {
+            '2160p': /2160p|4k|uhd/i,
+            '1080p': /1080p|fhd/i,
+            '720p': /720p|hd(?!r)/i,
+            '480p': /480p|sd/i
+        };
+
+        const languagePatterns = {
+            '🇮🇹': /\bita(lian)?\b|italiano/i,
+            '🇬🇧': /\beng(lish)?\b/i,
+            '🇫🇷': /\bfre(nch)?\b|fra(ncese)?/i,
+            '🇩🇪': /\bger(man)?\b|deu(tsch)?/i,
+            '🇪🇸': /\bspa(nish)?\b|esp(añol)?/i
+        };
+
         // Build data object for template parsing
         const data = {
             stream: {
@@ -82,27 +146,27 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
                 folderName: result.folderName || '',
                 size: result.matchedFileSize || result.size || 0,
                 packSize: result.packSize || result.size || 0,
-                quality: result.quality || '',
-                resolution: result.quality || '',
-                codec: result.codec || result.videoCodec || '',
+                quality: result.quality || result.resolution || extractPattern(filename, qualityPatterns) || '',
+                resolution: result.resolution || result.quality || extractPattern(filename, qualityPatterns) || '',
+                codec: result.codec || result.videoCodec || extractPattern(filename, codecPatterns) || '',
                 audio: result.audioCodec || '',
                 source: result.source || '',
                 seeders: result.seeders || 0,
                 age: result.uploadTime || result.age || '',
                 languages: result.languages || [],
-                languageEmojis: result.languageEmojis || [],
+                languageEmojis: result.languageEmojis?.length ? result.languageEmojis : extractMultiple(filename, languagePatterns),
                 cached: isCached,
                 isPack: result.isPack || false,
-                releaseGroup: result.groupTag || result.releaseGroup || '',
-                visualTags: result.visualTags || [],
-                audioTags: result.audioTags || [],
+                releaseGroup: result.groupTag || result.releaseGroup || result.group || '',
+                visualTags: result.visualTags?.length ? result.visualTags : extractMultiple(filename, visualPatterns),
+                audioTags: result.audioTags?.length ? result.audioTags : extractMultiple(filename, audioPatterns),
                 season: result.season || '',
                 episode: result.episode || '',
                 indexer: result.provider || result.source || ''
             },
             service: {
                 id: serviceName.toLowerCase(),
-                name: serviceName === 'RD' ? 'Real-Debrid' : serviceName,
+                name: serviceName === 'RD' ? 'Real-Debrid' : (serviceName === 'TB' ? 'Torbox' : serviceName),
                 shortName: serviceName,
                 cached: isCached
             },

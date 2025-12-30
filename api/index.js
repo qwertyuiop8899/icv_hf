@@ -17,6 +17,7 @@ const { searchRARBG } = require('../rarbg.cjs');
 const aioFormatter = require('../aiostreams-formatter.cjs');
 const packFilesHandler = require('../pack-files-handler.cjs');
 const introSkip = require('../introskip.cjs');
+const customFormatter = require('../formatter.cjs');
 
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
@@ -53,6 +54,77 @@ function decodeHtmlEntities(text) {
 
 // ✅ DEBUG MODE
 const DEBUG_MODE = false;
+
+// ✅ Custom Formatter Helper
+function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', isCached = false) {
+    if (!userConfig || !userConfig.formatter_preset) return stream;
+
+    try {
+        const preset = userConfig.formatter_preset;
+        let templates;
+
+        if (preset === 'custom') {
+            templates = {
+                name: userConfig.formatter_custom_name || '',
+                description: userConfig.formatter_custom_desc || ''
+            };
+        } else {
+            templates = customFormatter.PRESET_TEMPLATES[preset];
+        }
+
+        if (!templates) return stream;
+
+        // Build data object for template parsing
+        const data = {
+            stream: {
+                title: result.title || result.filename || '',
+                filename: result.filename || result.title || '',
+                folderName: result.folderName || '',
+                size: result.matchedFileSize || result.size || 0,
+                packSize: result.packSize || result.size || 0,
+                quality: result.quality || '',
+                resolution: result.quality || '',
+                codec: result.codec || result.videoCodec || '',
+                audio: result.audioCodec || '',
+                source: result.source || '',
+                seeders: result.seeders || 0,
+                age: result.uploadTime || result.age || '',
+                languages: result.languages || [],
+                languageEmojis: result.languageEmojis || [],
+                cached: isCached,
+                isPack: result.isPack || false,
+                releaseGroup: result.groupTag || result.releaseGroup || '',
+                visualTags: result.visualTags || [],
+                audioTags: result.audioTags || [],
+                season: result.season || '',
+                episode: result.episode || '',
+                indexer: result.provider || result.source || ''
+            },
+            service: {
+                id: serviceName.toLowerCase(),
+                name: serviceName === 'RD' ? 'Real-Debrid' : serviceName,
+                shortName: serviceName,
+                cached: isCached
+            },
+            addon: {
+                name: 'IlCorsaroViola',
+                version: '3.0.0'
+            }
+        };
+
+        // Apply templates
+        if (templates.name) {
+            stream.name = customFormatter.parseTemplate(templates.name, data);
+        }
+        if (templates.description) {
+            stream.title = customFormatter.parseTemplate(templates.description, data);
+        }
+    } catch (e) {
+        console.error('⚠️ [Formatter] Error applying custom format:', e.message);
+    }
+
+    return stream;
+}
 
 // ✅ Enhanced Query Cleaning (from uiai.js)
 function cleanSearchQuery(query) {
@@ -6798,6 +6870,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         rdStream.fileIdx = result.fileIndex;
                     }
 
+                    // ✅ Apply custom formatter if configured
+                    applyCustomFormatter(rdStream, result, config, 'RD', isCached);
+
                     streams.push(rdStream);
                 }
 
@@ -6942,6 +7017,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (result.fileIndex !== null && result.fileIndex !== undefined) {
                         torboxStream.fileIdx = result.fileIndex;
                     }
+
+                    // ✅ Apply custom formatter if configured
+                    applyCustomFormatter(torboxStream, result, config, 'TB', isCached);
 
                     streams.push(torboxStream);
                 }
@@ -7778,7 +7856,7 @@ export default async function handler(req, res) {
                 id: 'community.ilcorsaroviola.ita',
                 version: '3.0.0',
                 name: addonName,
-                description: 'Torrent da CorsaroNero DB local, Knaben e tanti altri con supporto Jackettio con o senza Real-Debrid, Torbox.',
+                description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
                 resources: ['stream'],
                 types: ['movie', 'series', 'anime'],

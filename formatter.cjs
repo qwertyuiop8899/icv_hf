@@ -1,24 +1,50 @@
 /**
- * ICV Custom Formatter Module - Full AIOStreams Syntax
+ * ICV Custom Formatter Module
  * 
- * Template parser completo con sintassi AIOStreams.
- * Supporta: ::and::, ::or::, ::xor::, ::~pattern, ::replace, ::truncate, 
- * ::length, ::reverse, ::time, ::bytes, ::hex, ::first, ::last, {tools.*}
+ * Template parser per personalizzare nome e descrizione degli stream.
+ * 
+ * ============================================================================
+ * CREDITS & LICENSE
+ * ============================================================================
+ * 
+ * The custom formatter code in this file was adapted from:
+ * https://github.com/Viren070/AIOStreams
+ * 
+ * AIOStreams - One addon to rule them all
+ * Copyright (c) 2024 Viren070
+ * Licensed under the MIT License
+ * 
+ * The original template parsing logic was adapted from:
+ * https://github.com/diced/zipline/blob/trunk/src/lib/parser/index.ts
+ * 
+ * Copyright (c) 2023 dicedtomato
+ * Licensed under the MIT License
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * ============================================================================
  */
 
 // ============================================
 // UTILITY FUNCTIONS
 // ============================================
 
-function formatBytes(bytes, decimals = 2, base2 = false) {
-    if (!bytes || bytes === 0) return '0 Bytes';
-    const k = base2 ? 1024 : 1000;
-    const sizes = base2 ? ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB'] : ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
+function formatBytes(bytes, base = 1000, round = false) {
+    if (!bytes || bytes === 0) return '0 B';
+    const sizes = base === 1024 ? ['B', 'KiB', 'MiB', 'GiB', 'TiB'] : ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(base));
+    const value = bytes / Math.pow(base, i);
+    return (round ? Math.round(value) : value.toFixed(2)) + ' ' + sizes[i];
 }
 
-function formatTime(seconds) {
+function formatDuration(seconds) {
     if (!seconds || seconds <= 0) return '0:00';
     seconds = Math.floor(seconds);
     const h = Math.floor(seconds / 3600);
@@ -28,207 +54,246 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function getNestedValue(data, path) {
-    if (!path) return null;
-    const parts = path.split('.');
-    let value = data;
-    for (const part of parts) {
-        if (value === null || value === undefined) return null;
-        value = value[part];
-    }
-    return value;
+function formatHours(hours) {
+    if (!hours) return null;
+    if (hours < 1) return `${Math.round(hours * 60)}m`;
+    if (hours < 24) return `${Math.round(hours)}h`;
+    if (hours < 24 * 7) return `${Math.round(hours / 24)}d`;
+    if (hours < 24 * 30) return `${Math.round(hours / (24 * 7))}w`;
+    if (hours < 24 * 365) return `${Math.round(hours / (24 * 30))}mo`;
+    return `${Math.round(hours / (24 * 365))}y`;
+}
+
+// Small caps mapping (from AIOStreams)
+const SMALL_CAPS_MAP = {
+    A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ',
+    J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', Q: 'ꞯ', R: 'ʀ',
+    S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', X: 'x', Y: 'ʏ', Z: 'ᴢ',
+    '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+    '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
+};
+
+function makeSmall(str) {
+    return String(str).split('').map(char => SMALL_CAPS_MAP[char.toUpperCase()] || char).join('');
+}
+
+// Language to emoji mapping (from AIOStreams, adapted from g0ldy/comet)
+const languageEmojiMap = {
+    multi: '🌎', english: '🇬🇧', japanese: '🇯🇵', chinese: '🇨🇳', russian: '🇷🇺',
+    arabic: '🇸🇦', portuguese: '🇵🇹', spanish: '🇪🇸', french: '🇫🇷', german: '🇩🇪',
+    italian: '🇮🇹', korean: '🇰🇷', hindi: '🇮🇳', bengali: '🇧🇩', punjabi: '🇵🇰',
+    marathi: '🇮🇳', gujarati: '🇮🇳', tamil: '🇮🇳', telugu: '🇮🇳', kannada: '🇮🇳',
+    malayalam: '🇮🇳', thai: '🇹🇭', vietnamese: '🇻🇳', indonesian: '🇮🇩', turkish: '🇹🇷',
+    hebrew: '🇮🇱', persian: '🇮🇷', ukrainian: '🇺🇦', greek: '🇬🇷', lithuanian: '🇱🇹',
+    latvian: '🇱🇻', estonian: '🇪🇪', polish: '🇵🇱', czech: '🇨🇿', slovak: '🇸🇰',
+    hungarian: '🇭🇺', romanian: '🇷🇴', bulgarian: '🇧🇬', serbian: '🇷🇸', croatian: '🇭🇷',
+    slovenian: '🇸🇮', dutch: '🇳🇱', danish: '🇩🇰', finnish: '🇫🇮', swedish: '🇸🇪',
+    norwegian: '🇳🇴', malay: '🇲🇾', latino: '💃🏻', Latino: '🇲🇽',
+    // Common abbreviations
+    ita: '🇮🇹', eng: '🇬🇧', spa: '🇪🇸', fre: '🇫🇷', ger: '🇩🇪', rus: '🇷🇺',
+    por: '🇵🇹', jpn: '🇯🇵', kor: '🇰🇷', chi: '🇨🇳', ara: '🇸🇦', hin: '🇮🇳'
+};
+
+function languageToEmoji(language) {
+    if (!language) return undefined;
+    return languageEmojiMap[language.toLowerCase()];
 }
 
 // ============================================
-// MODIFIER APPLICATION
+// STRING MODIFIERS (from AIOStreams)
 // ============================================
 
-function applySingleModifier(value, modifier, args) {
-    if (value === null || value === undefined) return null;
-
-    switch (modifier) {
-        // String modifiers
-        case 'upper':
-            return String(value).toUpperCase();
-        case 'lower':
-            return String(value).toLowerCase();
-        case 'title':
-            return String(value).replace(/\w\S*/g, txt =>
-                txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()
-            );
-        case 'replace':
-            if (args.length >= 2) {
-                return String(value).split(args[0]).join(args[1]);
-            }
-            return value;
-        case 'truncate':
-            const maxLen = parseInt(args[0]) || 20;
-            const str = String(value);
-            return str.length > maxLen ? str.substring(0, maxLen) + '...' : str;
-        case 'length':
-            if (Array.isArray(value)) return value.length;
-            return String(value).length;
-        case 'reverse':
-            if (Array.isArray(value)) return [...value].reverse();
-            return String(value).split('').reverse().join('');
-
-        // Number modifiers
-        case 'bytes':
-            return formatBytes(Number(value), 2, false);
-        case 'bytes2':
-            return formatBytes(Number(value), 2, true);
-        case 'rbytes':
-            return formatBytes(Number(value), 0, false);
-        case 'rbytes2':
-            return formatBytes(Number(value), 0, true);
-        case 'time':
-            return formatTime(Number(value));
-        case 'hex':
-            return Number(value).toString(16);
-        case 'octal':
-            return Number(value).toString(8);
-        case 'binary':
-            return Number(value).toString(2);
-
-        // Array modifiers
-        case 'join':
-            if (Array.isArray(value)) {
-                return value.join(args[0] || ', ');
-            }
-            return value;
-        case 'first':
-            if (Array.isArray(value) && value.length > 0) return value[0];
-            return value;
-        case 'last':
-            if (Array.isArray(value) && value.length > 0) return value[value.length - 1];
-            return value;
-
-        default:
-            return value;
-    }
-}
-
-function parseModifierArgs(argsString) {
-    const args = [];
-    const regex = /'([^']*)'|"([^"]*)"|([^,]+)/g;
-    let match;
-    while ((match = regex.exec(argsString)) !== null) {
-        args.push(match[1] ?? match[2] ?? match[3]?.trim());
-    }
-    return args;
-}
+const stringModifiers = {
+    upper: (value) => String(value).toUpperCase(),
+    lower: (value) => String(value).toLowerCase(),
+    title: (value) => String(value).split(' ')
+        .map(word => word.toLowerCase())
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' '),
+    small: (value) => makeSmall(String(value)),
+    length: (value) => String(value).length.toString(),
+    reverse: (value) => String(value).split('').reverse().join(''),
+    base64: (value) => Buffer.from(String(value)).toString('base64'),
+    string: (value) => String(value),
+};
 
 // ============================================
-// CONDITION EVALUATION
+// ARRAY MODIFIERS (from AIOStreams)
 // ============================================
 
-function evaluateCondition(value, conditionExpr) {
-    if (!conditionExpr) return true;
+const arrayModifiers = {
+    join: (value) => Array.isArray(value) ? value.join(', ') : value,
+    length: (value) => Array.isArray(value) ? value.length.toString() : '0',
+    first: (value) => Array.isArray(value) && value.length > 0 ? String(value[0]) : '',
+    last: (value) => Array.isArray(value) && value.length > 0 ? String(value[value.length - 1]) : '',
+    random: (value) => Array.isArray(value) && value.length > 0 ? String(value[Math.floor(Math.random() * value.length)]) : '',
+    sort: (value) => Array.isArray(value) ? [...value].sort() : value,
+    reverse: (value) => Array.isArray(value) ? [...value].reverse() : value,
+};
 
-    // Pattern matching with ~
-    if (conditionExpr.startsWith('~')) {
-        const pattern = conditionExpr.substring(1);
-        return String(value || '').toLowerCase().includes(pattern.toLowerCase());
-    }
+// ============================================
+// NUMBER MODIFIERS (from AIOStreams)
+// ============================================
 
-    // Comparison operators
-    const opMatch = conditionExpr.match(/^([><!=]+)(.+)$/);
-    if (opMatch) {
-        const op = opMatch[1];
-        const thresh = opMatch[2];
-        switch (op) {
-            case '>': return Number(value) > Number(thresh);
-            case '>=': return Number(value) >= Number(thresh);
-            case '<': return Number(value) < Number(thresh);
-            case '<=': return Number(value) <= Number(thresh);
-            case '=': return String(value) === String(thresh);
-            case '!=': return String(value) !== String(thresh);
-        }
-    }
+const numberModifiers = {
+    comma: (value) => Number(value).toLocaleString(),
+    hex: (value) => Number(value).toString(16),
+    octal: (value) => Number(value).toString(8),
+    binary: (value) => Number(value).toString(2),
+    bytes: (value) => formatBytes(Number(value), 1000, false),
+    rbytes: (value) => formatBytes(Number(value), 1000, true),
+    bytes10: (value) => formatBytes(Number(value), 1000, false),
+    rbytes10: (value) => formatBytes(Number(value), 1000, true),
+    bytes2: (value) => formatBytes(Number(value), 1024, false),
+    rbytes2: (value) => formatBytes(Number(value), 1024, true),
+    string: (value) => String(value),
+    time: (value) => formatDuration(Number(value)),
+};
 
-    // Boolean/existence checks
-    switch (conditionExpr) {
-        case 'exists':
-            return value !== null && value !== undefined && value !== '' &&
-                !(Array.isArray(value) && value.length === 0);
-        case 'istrue':
-            return value === true;
-        case 'isfalse':
-            return value === false;
-        default:
+// ============================================
+// CONDITIONAL MODIFIERS (from AIOStreams)
+// ============================================
+
+const conditionalModifiers = {
+    exact: {
+        istrue: (value) => value === true,
+        isfalse: (value) => value === false,
+        exists: (value) => {
+            if (value === undefined || value === null) return false;
+            if (typeof value === 'string') return /\S/.test(value);
+            if (Array.isArray(value)) return value.length > 0;
             return true;
-    }
+        },
+    },
+    prefix: {
+        '$': (value, check) => String(value).toLowerCase().startsWith(check.toLowerCase()),
+        '^': (value, check) => String(value).toLowerCase().endsWith(check.toLowerCase()),
+        '~': (value, check) => String(value).toLowerCase().includes(check.toLowerCase()),
+        '=': (value, check) => String(value).toLowerCase() === check.toLowerCase(),
+        '>=': (value, check) => Number(value) >= Number(check),
+        '>': (value, check) => Number(value) > Number(check),
+        '<=': (value, check) => Number(value) <= Number(check),
+        '<': (value, check) => Number(value) < Number(check),
+    },
+};
+
+// ============================================
+// COMPARATORS (from AIOStreams)
+// ============================================
+
+const comparatorFuncs = {
+    and: (v1, v2) => v1 && v2,
+    or: (v1, v2) => v1 || v2,
+    xor: (v1, v2) => (v1 || v2) && !(v1 && v2),
+    neq: (v1, v2) => v1 !== v2,
+    equal: (v1, v2) => v1 === v2,
+    left: (v1, _) => v1,
+    right: (_, v2) => v2,
+};
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function getNestedValue(data, path) {
+    if (!path) return undefined;
+    const [namespace, property] = path.split('.');
+    if (!namespace || !property) return undefined;
+    const section = data[namespace];
+    if (!section || typeof section !== 'object') return undefined;
+    return section[property];
 }
 
-/**
- * Evaluate a complete condition chain with ::and::, ::or::, ::xor::
- * Format: varPath::condition::and::varPath2::condition2...
- */
-function evaluateConditionChain(expression, data) {
-    // Split by ::and::, ::or::, ::xor:: preserving the operator
-    const parts = [];
-    const operators = [];
+function applySingleModifier(value, mod, originalMod) {
+    if (value === undefined || value === null) return undefined;
 
-    // Regex to split while keeping track of logical operators
-    const segments = expression.split(/::(and|or|xor)::/i);
+    const modLower = mod.toLowerCase();
 
-    for (let i = 0; i < segments.length; i++) {
-        if (i % 2 === 0) {
-            // This is a condition segment
-            parts.push(segments[i]);
-        } else {
-            // This is an operator
-            operators.push(segments[i].toLowerCase());
+    // Check conditional modifiers first
+    const isExact = Object.keys(conditionalModifiers.exact).includes(modLower);
+    const prefixMatch = Object.keys(conditionalModifiers.prefix)
+        .sort((a, b) => b.length - a.length)
+        .find(key => modLower.startsWith(key));
+
+    if (isExact) {
+        if (!conditionalModifiers.exact.exists(value)) return false;
+        return conditionalModifiers.exact[modLower](value);
+    }
+
+    if (prefixMatch) {
+        if (!conditionalModifiers.exact.exists(value)) return false;
+        const checkValue = mod.substring(prefixMatch.length);
+        const stringValue = String(value).toLowerCase();
+        let stringCheck = checkValue.toLowerCase();
+        if (!/\s/.test(stringValue)) stringCheck = stringCheck.replace(/\s/g, '');
+
+        // Numeric comparison for >, <, >=, <=, =
+        if (['<', '<=', '>', '>=', '='].includes(prefixMatch)) {
+            const numValue = Number(String(value).replace(/,\s/g, ''));
+            const numCheck = Number(stringCheck.replace(/,\s/g, ''));
+            if (!isNaN(numValue) && !isNaN(numCheck)) {
+                return conditionalModifiers.prefix[prefixMatch](numValue, numCheck);
+            }
+        }
+        return conditionalModifiers.prefix[prefixMatch](stringValue, stringCheck);
+    }
+
+    // String modifiers
+    if (typeof value === 'string') {
+        if (modLower in stringModifiers) return stringModifiers[modLower](value);
+
+        // replace('find', 'replace')
+        if (modLower.startsWith('replace(') && modLower.endsWith(')')) {
+            const content = originalMod.substring(8, originalMod.length - 1);
+            const quoteChar = content.charAt(0);
+            const parts = content.split(new RegExp(`${quoteChar}\\s*,\\s*${quoteChar}`));
+            if (parts.length === 2) {
+                const find = parts[0].substring(1);
+                const replace = parts[1].substring(0, parts[1].length - 1);
+                return value.split(find).join(replace);
+            }
+        }
+
+        // truncate(N)
+        if (modLower.startsWith('truncate(') && modLower.endsWith(')')) {
+            const n = parseInt(originalMod.substring(9, originalMod.length - 1));
+            if (!isNaN(n) && n >= 0) {
+                if (value.length > n) return value.slice(0, n).replace(/\s+$/, '') + '…';
+                return value;
+            }
         }
     }
 
-    if (parts.length === 0) return true;
+    // Array modifiers
+    if (Array.isArray(value)) {
+        if (modLower in arrayModifiers) return arrayModifiers[modLower](value);
 
-    // Evaluate first condition
-    let result = evaluateSinglePart(parts[0], data);
-
-    // Apply operators left to right
-    for (let i = 0; i < operators.length; i++) {
-        const nextResult = evaluateSinglePart(parts[i + 1], data);
-        switch (operators[i]) {
-            case 'and':
-                result = result && nextResult;
-                break;
-            case 'or':
-                result = result || nextResult;
-                break;
-            case 'xor':
-                result = (result && !nextResult) || (!result && nextResult);
-                break;
+        // join('separator')
+        if (modLower.startsWith('join(') && modLower.endsWith(')')) {
+            const separator = originalMod.substring(6, originalMod.length - 2);
+            return value.join(separator);
         }
     }
 
-    return result;
-}
+    // Number modifiers
+    if (typeof value === 'number') {
+        if (modLower in numberModifiers) return numberModifiers[modLower](value);
+    }
 
-function evaluateSinglePart(part, data) {
-    // Part format: varPath::condition or just varPath
-    const segments = part.split('::');
-    const varPath = segments[0];
-    const condition = segments.slice(1).join('::') || 'exists';
-
-    const value = getNestedValue(data, varPath);
-    return evaluateCondition(value, condition);
+    return undefined;
 }
 
 // ============================================
-// MAIN PARSER
+// MAIN PARSER (AIOStreams-compatible)
 // ============================================
 
-function parseTemplate(template, data, maxDepth = 15) {
+function parseTemplate(template, data, maxDepth = 10) {
     if (!template || maxDepth <= 0) return template || '';
 
+    // Handle {tools.*}
+    template = template.replace(/\{tools\.newLine\}/g, '\n');
+
     let result = template;
-
-    // Handle {tools.*} first
-    result = result.replace(/\{tools\.newLine\}/g, '\n');
-    result = result.replace(/\{tools\.removeLine\}/g, ''); // Will be cleaned up later
-
     let lastResult = null;
     let iterations = 0;
 
@@ -236,87 +301,115 @@ function parseTemplate(template, data, maxDepth = 15) {
         lastResult = result;
         iterations++;
 
-        // Match variable expressions: {varPath...["true"||"false"]}
-        // This regex handles nested variables inside the true/false strings
-        const varRegex = /\{([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*(?:::[^\[\]{}]*)?)\s*(?:\["([^"]*)"\|\|"([^"]*)"\])?\}/g;
+        // Match: {var.prop::mod1::mod2...["true"||"false"]}
+        const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)([^[\]{}]*?)(?:\["([^"]*)"\|\|"([^"]*)"\])?\}/g;
 
         let match;
         const replacements = [];
 
-        while ((match = varRegex.exec(result)) !== null) {
+        while ((match = regex.exec(result)) !== null) {
             const fullMatch = match[0];
-            const expression = match[1];
-            const trueValue = match[2];
-            const falseValue = match[3];
+            const varPath = match[1];
+            const modifierString = match[2] || '';
+            const trueValue = match[3];
+            const falseValue = match[4];
 
-            const replacement = parseExpression(expression, trueValue, falseValue, data, maxDepth - 1);
-            replacements.push({ from: fullMatch, to: replacement });
+            const replacement = resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth - 1);
+            replacements.push({ fullMatch, replacement, index: match.index });
         }
 
-        // Apply all replacements
-        for (const rep of replacements) {
-            result = result.replace(rep.from, rep.to);
+        // Apply replacements in reverse order
+        for (let i = replacements.length - 1; i >= 0; i--) {
+            const { fullMatch, replacement, index } = replacements[i];
+            result = result.slice(0, index) + replacement + result.slice(index + fullMatch.length);
         }
     }
 
-    // Cleanup: remove lines that are entirely empty or whitespace-only
+    // Final cleanup
     result = result.split('\n')
-        .filter(line => line.trim() !== '' || line === '')
-        .join('\n');
-    result = result.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+        .filter(line => line.trim() !== '' && !line.includes('{tools.removeLine}'))
+        .join('\n')
+        .replace(/\n\s*\n\s*\n/g, '\n\n')
+        .trim();
 
     return result;
 }
 
-function parseExpression(expression, trueValue, falseValue, data, maxDepth) {
-    // Split expression into parts by ::
-    const parts = expression.split('::');
-    const varPath = parts[0];
-    const modifierParts = parts.slice(1);
+function resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth) {
+    // Split modifiers, handling comparators (::and::, ::or::, etc.)
+    const comparatorRegex = /::(and|or|xor|neq|equal|left|right)::/gi;
+    const segments = modifierString.split(comparatorRegex).filter(s => s);
 
-    let value = getNestedValue(data, varPath);
+    // Build list of variable+modifiers and comparators
+    const variableExpressions = [];
+    const comparators = [];
 
-    // If we have conditional output ["true"||"false"]
-    if (trueValue !== undefined) {
-        // Check if this is a chained condition (has and/or/xor)
-        const fullCondition = modifierParts.join('::');
-
-        let conditionResult;
-        if (/::(?:and|or|xor)::/i.test(fullCondition)) {
-            // Chained condition: build full expression and evaluate
-            conditionResult = evaluateConditionChain(varPath + '::' + fullCondition, data);
-        } else if (fullCondition) {
-            // Simple condition
-            conditionResult = evaluateCondition(value, fullCondition);
+    for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i].toLowerCase();
+        if (Object.keys(comparatorFuncs).includes(seg)) {
+            comparators.push(seg);
         } else {
-            // No condition specified, check existence
-            conditionResult = evaluateCondition(value, 'exists');
+            variableExpressions.push(segments[i]);
+        }
+    }
+
+    // If no expressions, use the main variable path
+    if (variableExpressions.length === 0) {
+        variableExpressions.push('');
+    }
+
+    // Resolve each variable expression
+    const resolvedValues = variableExpressions.map((expr, idx) => {
+        let currentVarPath = varPath;
+        let mods = expr;
+
+        // Check if expression starts with a new variable path
+        if (idx > 0 && expr.match(/^[a-zA-Z_]+\.[a-zA-Z_]+/)) {
+            const pathMatch = expr.match(/^([a-zA-Z_]+\.[a-zA-Z_]+)(.*)/);
+            if (pathMatch) {
+                currentVarPath = pathMatch[1];
+                mods = pathMatch[2];
+            }
         }
 
-        let output = conditionResult ? trueValue : (falseValue || '');
-        // Recursively parse the output for nested variables
+        let value = getNestedValue(data, currentVarPath);
+
+        // Apply modifiers
+        const modList = mods.split('::').filter(m => m);
+        for (const mod of modList) {
+            const newValue = applySingleModifier(value, mod, mod);
+            if (newValue === undefined) {
+                // If modifier failed but we need a boolean, treat as error
+                if (typeof value === 'boolean') return value;
+                return undefined;
+            }
+            value = newValue;
+        }
+
+        return value;
+    });
+
+    // Apply comparators between resolved values
+    let finalResult = resolvedValues[0];
+    for (let i = 0; i < comparators.length; i++) {
+        const comparator = comparators[i];
+        const nextValue = resolvedValues[i + 1];
+
+        if (comparatorFuncs[comparator]) {
+            finalResult = comparatorFuncs[comparator](finalResult, nextValue);
+        }
+    }
+
+    // Handle check ["true"||"false"]
+    if (trueValue !== undefined) {
+        const boolResult = Boolean(finalResult);
+        const output = boolResult ? trueValue : (falseValue || '');
         return parseTemplate(output, data, maxDepth);
     }
 
-    // Apply modifiers without conditional
-    for (const mod of modifierParts) {
-        // Parse modifier name and arguments
-        const argMatch = mod.match(/^([a-zA-Z_]+)\((.+)\)$/);
-        if (argMatch) {
-            const args = parseModifierArgs(argMatch[2]);
-            value = applySingleModifier(value, argMatch[1], args);
-        } else {
-            value = applySingleModifier(value, mod, []);
-        }
-        if (value === null) return '';
-    }
-
-    // Handle arrays
-    if (Array.isArray(value)) {
-        value = value.join(', ');
-    }
-
-    return value ?? '';
+    // Return value as string
+    if (Array.isArray(finalResult)) return finalResult.join(', ');
+    return finalResult ?? '';
 }
 
 // ============================================
@@ -392,7 +485,7 @@ Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTa
         name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}
 {stream.quality::=2160p["4K🔥UHD"||""]}{stream.quality::=1080p["FHD🚀1080p"||""]}{stream.quality::=720p["HD💿720p"||""]}{stream.quality::=480p["SD📺"||""]}{stream.quality::exists[""||"Unknown💩"]}
 [{addon.name}]`,
-        description: `{stream.title::exists["🎬 {stream.title} "||""]}
+        description: `{stream.title::exists["🎬 {stream.title::title} "||""]}
 {stream.quality::~Remux["💎 ʀᴇᴍᴜx "||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ "||""]}{stream.quality::~WEB["🖥 ᴡᴇʙ "||""]}{stream.codec::exists["| 🎞️ {stream.codec} "||""]}{stream.visualTags::exists["| 🔆 {stream.visualTags::join(' | ')} "||""]}
 {stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.languageEmojis::exists["| 🗣️ {stream.languageEmojis::join(' / ')}"||""]}
 {stream.size::>0["📁 {stream.size::bytes} "||""]}{stream.releaseGroup::exists["| 🏷️ {stream.releaseGroup} "||""]}{stream.duration::>0["| ⏱️ {stream.duration::time} "||""]}
@@ -407,8 +500,17 @@ Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTa
 module.exports = {
     parseTemplate,
     formatBytes,
-    formatTime,
-    evaluateCondition,
-    evaluateConditionChain,
-    PRESET_TEMPLATES
+    formatDuration,
+    formatHours,
+    makeSmall,
+    languageToEmoji,
+    languageEmojiMap,
+    SMALL_CAPS_MAP,
+    PRESET_TEMPLATES,
+    // Export for testing/advanced use
+    stringModifiers,
+    arrayModifiers,
+    numberModifiers,
+    conditionalModifiers,
+    comparatorFuncs,
 };

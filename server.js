@@ -19,6 +19,28 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ⏩ IntroSkip HLS Proxy endpoint
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const hlsProxy = require('./hls-proxy.cjs');
+
+// Accept both /introskip/hls and /introskip/hls.m3u8
+app.get(['/introskip/hls', '/introskip/hls.m3u8'], async (req, res) => {
+    try {
+        await hlsProxy.handleHlsProxy(req, res);
+    } catch (error) {
+        console.error('⏩ [HLS] Route error:', error);
+        if (!res.headersSent) {
+            const stream = req.query.stream;
+            if (stream) {
+                res.redirect(302, decodeURIComponent(stream));
+            } else {
+                res.status(500).send('HLS proxy error');
+            }
+        }
+    }
+});
+
 // Route catch-all: inoltra tutte le richieste all'handler Vercel
 app.all('*', async (req, res) => {
     try {

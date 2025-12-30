@@ -7776,9 +7776,9 @@ export default async function handler(req, res) {
 
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '2.0.0',
+                version: '3.0.0',
                 name: addonName,
-                description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
+                description: 'Torrent da CorsaroNero DB local, Knaben e tanti altri con supporto Jackettio con o senza Real-Debrid, Torbox.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
                 resources: ['stream'],
                 types: ['movie', 'series', 'anime'],

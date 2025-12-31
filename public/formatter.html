@@ -752,7 +752,11 @@
         }
 
         function loadPreset(presetId) {
-            if (presetId === 'custom') return;
+            if (presetId === 'custom') {
+                // ✅ FIX: Update selectedPreset even for 'custom'
+                selectedPreset = 'custom';
+                return;
+            }
             const preset = PRESETS[presetId];
             if (preset) {
                 nameTemplate.value = preset.name;

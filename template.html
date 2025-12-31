@@ -990,7 +990,12 @@
             }
 
             // Generate install URL
-            const encodedConfig = btoa(JSON.stringify(config));
+            // Fix for Unicode/Emoji in btoa: https://developer.mozilla.org/en-US/docs/Glossary/Base64#the_unicode_problem
+            const jsonConfig = JSON.stringify(config);
+            const encodedConfig = btoa(encodeURIComponent(jsonConfig).replace(/%([0-9A-F]{2})/g,
+                function toSolidBytes(match, p1) {
+                    return String.fromCharCode('0x' + p1);
+                }));
             const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
 
             installLinkDisplay.value = installUrl;

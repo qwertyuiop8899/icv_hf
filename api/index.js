@@ -68,8 +68,10 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
                 name: userConfig.formatter_custom_name || '',
                 description: userConfig.formatter_custom_desc || ''
             };
+            console.log(`🎨 [Formatter] Custom preset detected - name template: "${templates.name?.substring(0, 50)}...", desc template: "${templates.description?.substring(0, 50)}..."`);
         } else {
             templates = customFormatter.PRESET_TEMPLATES[preset];
+            console.log(`🎨 [Formatter] Using preset: ${preset}`);
         }
 
         if (!templates) return stream;
@@ -8102,7 +8104,20 @@ export default async function handler(req, res) {
             if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
                 try {
                     const encodedConfigStr = pathParts[1];
-                    const config = JSON.parse(atob(encodedConfigStr));
+                    let config;
+                    try {
+                        config = JSON.parse(atob(encodedConfigStr));
+                    } catch (e1) {
+                        console.warn('⚠️ Standard config parsing failed, trying URI decode fallback:', e1.message);
+                        try {
+                            // Fallback for double-encoded or legacy formats
+                            const decoded = atob(encodedConfigStr);
+                            config = JSON.parse(decodeURIComponent(escape(decoded)));
+                        } catch (e2) {
+                            console.error('❌ Config parsing failed completely:', e2.message);
+                            throw e1; // Re-throw original error
+                        }
+                    }
 
                     // Determine which debrid services are configured
                     const hasRD = config.rd_key && config.rd_key.length > 0;

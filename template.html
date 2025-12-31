@@ -782,6 +782,14 @@
                                 {field::~pattern["match"||"no"]}, {text::small}
                             </div>
                         </details>
+                        <div style="margin-top: 10px; display: flex; gap: 10px;">
+                            <button type="button" id="formatter_save_btn"
+                                style="padding: 8px 16px; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer; font-weight: bold;">
+                                💾 SALVA Template
+                            </button>
+                            <span id="formatter_save_status"
+                                style="color: #10b981; font-size: 11px; align-self: center;"></span>
+                        </div>
                     </div>
                 </div>
                 <div
@@ -953,6 +961,8 @@
                 if (formatterPreset === 'custom') {
                     const customName = document.getElementById('formatter_custom_name').value;
                     const customDesc = document.getElementById('formatter_custom_desc').value;
+                    console.log('🎨 [Formatter Save] name:', customName ? customName.substring(0, 30) + '...' : '(empty)');
+                    console.log('🎨 [Formatter Save] desc:', customDesc ? customDesc.substring(0, 30) + '...' : '(empty)');
                     if (customName) config.formatter_custom_name = customName;
                     if (customDesc) config.formatter_custom_desc = customDesc;
                 }
@@ -1232,6 +1242,7 @@
         const customFormatterContainer = document.getElementById('custom_formatter_container');
         const formatterCustomName = document.getElementById('formatter_custom_name');
         const formatterCustomDesc = document.getElementById('formatter_custom_desc');
+        const formatterPreviewLink = document.getElementById('formatter_preview_link');
 
         formatterPresetSelect.addEventListener('change', () => {
             const preset = formatterPresetSelect.value;
@@ -1247,6 +1258,37 @@
         // Update link when custom templates change
         formatterCustomName.addEventListener('input', updateInstallLink);
         formatterCustomDesc.addEventListener('input', updateInstallLink);
+
+        // Preview link opens popup with current templates
+        formatterPreviewLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            const currentPreset = formatterPresetSelect.value;
+            const customName = encodeURIComponent(formatterCustomName.value || '');
+            const customDesc = encodeURIComponent(formatterCustomDesc.value || '');
+            window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1100,height=750');
+        });
+
+        // Save button explicitly updates install link with current formatter values
+        const formatterSaveBtn = document.getElementById('formatter_save_btn');
+        const formatterSaveStatus = document.getElementById('formatter_save_status');
+
+        formatterSaveBtn.addEventListener('click', () => {
+            // Force read the values from textareas
+            const nameVal = formatterCustomName.value;
+            const descVal = formatterCustomDesc.value;
+
+            console.log('💾 [SAVE] Name template:', nameVal);
+            console.log('💾 [SAVE] Desc template:', descVal);
+
+            // Trigger updateInstallLink to regenerate the URL
+            updateInstallLink();
+
+            // Show confirmation
+            formatterSaveStatus.textContent = '✅ Template salvato!';
+            setTimeout(() => {
+                formatterSaveStatus.textContent = '';
+            }, 3000);
+        });
 
         // Initial call to enable buttons
         updateInstallLink();

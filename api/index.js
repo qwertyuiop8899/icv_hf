@@ -7540,6 +7540,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
 
                     streams.push(p2pStream);
+
+                    // ✅ Apply custom formatter if configured (same as RD/TB)
+                    applyCustomFormatter(p2pStream, result, config, 'P2P', false);
                 }
 
             } catch (error) {

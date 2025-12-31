@@ -1151,7 +1151,9 @@
         // Custom Formatter button handler
         document.getElementById('formatter_button').addEventListener('click', () => {
             const currentPreset = document.getElementById('formatter_preset').value;
-            const popup = window.open(`/formatter.html?preset=${currentPreset}`, 'formatter', 'width=1000,height=700');
+            const customName = encodeURIComponent(document.getElementById('formatter_custom_name').value || '');
+            const customDesc = encodeURIComponent(document.getElementById('formatter_custom_desc').value || '');
+            const popup = window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1000,height=700');
         });
 
         // Listen for formatter config from popup

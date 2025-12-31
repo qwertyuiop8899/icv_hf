@@ -234,7 +234,13 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             'Spanish': 'ES', 'Portuguese': 'PT', 'Russian': 'RU', 'Japanese': 'JA',
             'Multi': 'MUL', 'ITA': 'IT', 'ENG': 'EN'
         };
-        const SMALL_CAPS = { A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ', J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', R: 'ʀ', S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', Y: 'ʏ', Z: 'ᴢ' };
+        // Small caps with mathematical monospace digits (same as AIOStreams)
+        const SMALL_CAPS = {
+            A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ',
+            J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', Q: 'ǫ', R: 'ʀ',
+            S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', X: '𝘅', Y: 'ʏ', Z: 'ᴢ',
+            '0': '𝟢', '1': '𝟣', '2': '𝟤', '3': '𝟥', '4': '𝟦', '5': '𝟧', '6': '𝟨', '7': '𝟩', '8': '𝟪', '9': '𝟫'
+        };
         const makeSmall = (s) => s.split('').map(c => SMALL_CAPS[c.toUpperCase()] || c).join('');
 
         const languages = result.languages?.length ? result.languages :

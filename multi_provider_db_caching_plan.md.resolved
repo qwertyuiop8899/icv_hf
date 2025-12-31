@@ -1,0 +1,251 @@
+# 📦 Piano: Caching Multi-Provider nel Database
+
+> **Stato**: Da implementare  
+> **Priorità**: Media  
+> **Complessità**: Media-Alta
+
+## 🎯 Obiettivo
+
+Inserire nel DB **tutti** i torrent trovati durante le ricerche (non solo CorsaroNero), permettendo:
+- Cache persistente degli info torrent
+- Riutilizzo pack files già verificati
+- Ricerche future più veloci
+- Enrichment condiviso tra utenti
+
+---
+
+## 🏗️ Architettura Attuale
+
+### Database ([db-helper.cjs](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs))
+
+**Tecnologia**: PostgreSQL con pool di connessioni
+
+#### Tabella `torrents`
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `info_hash` | TEXT PK | Hash univoco del torrent |
+| `provider` | TEXT | "ilcorsaronero", "knaben", etc. |
+| [title](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/formatter.cjs#110-114) | TEXT | Titolo originale |
+| [size](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/template.html#1264-1269) | BIGINT | Size in bytes |
+| `type` | TEXT | "movie" o "series" |
+| `seeders` | INT | Numero seeders |
+| `imdb_id` | TEXT | IMDb ID (tt1234567) |
+| `tmdb_id` | INT | TMDb ID |
+| `all_imdb_ids` | JSONB | Array IMDb per pack multi-film |
+| `cached_rd` | BOOLEAN | Se è in cache RD |
+| `last_cached_check` | TIMESTAMP | Ultima verifica cache (TTL 20gg) |
+| `file_index` | INT | File selezionato (per film) |
+| `file_title` | TEXT | Nome file selezionato |
+| `title_vector` | TSVECTOR | Per Full-Text Search |
+
+#### Tabella `files` (episodi in pack)
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `info_hash` | TEXT FK | Hash del torrent parent |
+| `file_index` | INT | ID file dentro il torrent |
+| [title](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/formatter.cjs#110-114) | TEXT | Nome file |
+| `imdb_id` | TEXT | IMDb della serie |
+| `imdb_season` | INT | Stagione |
+| `imdb_episode` | INT | Episodio |
+
+#### Tabella `pack_files` (film in pack saga)
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `pack_hash` | TEXT | Hash del pack |
+| `imdb_id` | TEXT | IMDb del singolo film |
+| `file_index` | INT | Posizione nel pack |
+| `file_path` | TEXT | Path completo |
+| `file_size` | BIGINT | Size file |
+
+### Enrichment Flow Attuale
+
+```
+1. Ricerca utente ("Game of Thrones S01E01")
+           ↓
+2. Query parallele ai provider:
+   - CorsaroNero (dal DB esistente)
+   - Knaben (scraping live)
+   - TorrentGalaxy (scraping live)
+   - UIndex (scraping live)
+   - RARBG (scraping live)
+   - ExternalAddons (Torrentio, etc.)
+           ↓
+3. rawResultsByProvider = { ... }
+           ↓
+4. allRawResults = merge + dedup per infoHash
+           ↓
+5. Cache Check RD/TB (Leviathan: Add→Status→Delete)
+           ↓
+6. enrichCacheBackground() → salva cached_rd nel DB
+           ↓
+7. Ritorna streams all'utente
+```
+
+### File Coinvolti
+
+| File | Responsabilità |
+|------|----------------|
+| [db-helper.cjs](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs) | CRUD database PostgreSQL |
+| [rd-cache-checker.cjs](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/rd-cache-checker.cjs) | Verifica cache RD stile Leviathan |
+| [api/index.js](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/api/index.js) | Stream handler, orchestrazione ricerche |
+| [pack-files-handler.cjs](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/pack-files-handler.cjs) | Verifica episodi in pack stagionali |
+
+---
+
+## 🔧 Modifiche Necessarie
+
+### 1. Salvataggio Torrent Scraped (api/index.js ~riga 5973)
+
+**Dopo**: `allRawResults = merge...`
+
+```javascript
+// NUOVO: Salva TUTTI i risultati scraped nel DB
+const scrapedToSave = allRawResults
+    .filter(r => r.infoHash) // Solo con hash valido
+    .map(r => ({
+        info_hash: r.infoHash.toLowerCase(),
+        provider: r.source || r.provider || 'unknown',
+        title: r.title || r.websiteTitle,
+        size: r.sizeInBytes || 0,
+        type: type, // movie/series
+        seeders: r.seeders || 0,
+        imdb_id: mediaDetails.imdbId,
+        tmdb_id: mediaDetails.tmdbId,
+        // cached_rd non impostato - verrà fatto dal cache checker
+    }));
+
+if (scrapedToSave.length > 0) {
+    // Fire-and-forget, non blocca la risposta
+    dbHelper.batchInsertTorrents(scrapedToSave).catch(e => 
+        console.error('⚠️ [DB] Background save failed:', e.message)
+    );
+    console.log(`💾 [DB] Queued ${scrapedToSave.length} scraped torrents for DB save`);
+}
+```
+
+### 2. Salvataggio Episode Files dopo Pack Verify (api/index.js ~riga 6700)
+
+**Dopo**: Pack verification con RD/TB
+
+```javascript
+// NUOVO: Salva mapping episodi nel DB
+if (packInfo?.files?.length > 0) {
+    const episodeFiles = packInfo.files
+        .filter(f => f.matchedEpisode)
+        .map(f => ({
+            info_hash: infoHash,
+            file_index: f.id,
+            title: f.path.split('/').pop(),
+            size: f.size,
+            imdb_id: seriesImdbId,
+            imdb_season: seasonNum,
+            imdb_episode: f.matchedEpisode
+        }));
+    
+    if (episodeFiles.length > 0) {
+        dbHelper.insertEpisodeFiles(episodeFiles).catch(e =>
+            console.warn('⚠️ [DB] Episode files save failed:', e.message)
+        );
+    }
+}
+```
+
+### 3. Estensione Schema DB (Opzionale)
+
+```sql
+-- Per tracking accessi e cleanup
+ALTER TABLE torrents ADD COLUMN IF NOT EXISTS 
+    enriched_at TIMESTAMP,
+    last_accessed TIMESTAMP DEFAULT NOW();
+
+-- Index per cleanup job
+CREATE INDEX IF NOT EXISTS idx_torrents_last_accessed 
+    ON torrents(last_accessed);
+
+-- Trigger per aggiornare last_accessed su SELECT
+-- (opzionale, da valutare per performance)
+```
+
+### 4. Job Cleanup (Nuovo file: cleanup-job.cjs)
+
+```javascript
+// Eseguire settimanalmente via cron
+async function cleanupOldTorrents() {
+    const query = `
+        DELETE FROM torrents 
+        WHERE last_accessed < NOW() - INTERVAL '30 days'
+        AND provider != 'ilcorsaronero'  -- Mai eliminare CorsaroNero
+    `;
+    // ...
+}
+```
+
+---
+
+## ✅ Cosa È Già Funzionante
+
+| Funzionalità | Status | Note |
+|--------------|--------|------|
+| [batchInsertTorrents()](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs#330-396) | ✅ Ready | Usa ON CONFLICT, accetta qualsiasi provider |
+| Campo `provider` | ✅ Esiste | Basta passare nome corretto |
+| [insertEpisodeFiles()](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs#842-892) | ✅ Ready | Per mapping episodi |
+| [insertPackFiles()](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs#730-767) | ✅ Ready | Per mapping film in saga |
+| [searchByImdbId()](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs#40-89) | ✅ Ready | Cerca in TUTTO il DB, non filtra per provider |
+| [updateRdCacheStatus()](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs#242-275) | ✅ Ready | Salva risultati cache check |
+
+---
+
+## 📊 Benefici Attesi
+
+| Metrica | Prima | Dopo |
+|---------|-------|------|
+| Torrent nel DB | Solo CorsaroNero | Tutti i provider |
+| Pack files mappati | Solo CorsaroNero | Tutti i provider |
+| Cache RD persistente | ✅ 20 giorni | ✅ 20 giorni |
+| Seconda ricerca stesso contenuto | Query live a tutti | Istantaneo da DB |
+| Episodi già verificati | Solo CorsaroNero | Tutti |
+
+---
+
+## ⚠️ Considerazioni
+
+### Storage
+- ~500 byte per torrent
+- 100.000 torrent = ~50MB
+- Gestibile su qualsiasi PostgreSQL
+
+### Race Conditions
+- `ON CONFLICT DO UPDATE` già gestisce duplicati
+- Nessun problema con inserimenti paralleli
+
+### Provider Names (da standardizzare)
+```
+"ilcorsaronero" | "knaben" | "torrentgalaxy" | "uindex" | 
+"rarbg" | "torrentio" | "jackettio" | "mediafusion"
+```
+
+### Cleanup Strategy
+- Eliminare torrent `last_accessed > 30 giorni`
+- MAI eliminare provider "ilcorsaronero" (fonte primaria)
+- Eseguire settimanalmente
+
+---
+
+## 🚀 Ordine Implementazione
+
+1. **[LOW EFFORT]** Aggiungere salvataggio scraped results dopo merge
+2. **[LOW EFFORT]** Aggiungere salvataggio episode files dopo pack verify  
+3. **[MEDIUM]** Aggiungere campo `last_accessed` + migration
+4. **[MEDIUM]** Creare cleanup job
+5. **[OPTIONAL]** Dashboard per monitorare crescita DB
+
+---
+
+## 📁 File da Modificare
+
+| File | Modifiche |
+|------|-----------|
+| [api/index.js](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/api/index.js) | Inserire save dopo merge (~riga 5973) e dopo pack verify (~riga 6700) |
+| [db-helper.cjs](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/db-helper.cjs) | Nessuna modifica necessaria (già pronto) |
+| [package.json](file:///Users/eschiano/Documents/Fatture%20asilo/itaevent/icv_hf-main/package.json) | Nessuna modifica |
+| *nuovo* `cleanup-job.cjs` | Job per pulizia periodica |

@@ -748,6 +748,9 @@
                             <option value="pri">Pri</option>
                             <option value="custom">Custom...</option>
                         </select>
+                        <a href="/formatter.html" target="_blank" id="formatter_preview_link"
+                            style="font-size: 11px; color: #a78bfa; text-decoration: underline; cursor: pointer;">📋
+                            Anteprima & Variabili</a>
                         <small id="formatter_status" style="margin-left: auto; color: #9ca3af;"></small>
                     </div>
                     <!-- Custom formatter textarea (hidden by default) -->
@@ -756,14 +759,29 @@
                             <label style="font-size: 11px; color: #9ca3af;">Name Template:</label>
                             <textarea id="formatter_custom_name" rows="2"
                                 style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
-                                placeholder="{stream.quality} {stream.resolution}"></textarea>
+                                placeholder="Es: {stream.resolution} {stream.quality}"></textarea>
                         </div>
-                        <div>
+                        <div style="margin-bottom: 8px;">
                             <label style="font-size: 11px; color: #9ca3af;">Description Template:</label>
                             <textarea id="formatter_custom_desc" rows="3"
                                 style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
-                                placeholder="{stream.filename}\n{stream.size::bytes}"></textarea>
+                                placeholder="Es: {stream.filename}\n{stream.size::bytes}"></textarea>
                         </div>
+                        <details style="font-size: 10px; color: #9ca3af;">
+                            <summary style="cursor: pointer; color: #a78bfa;">📖 Variabili disponibili</summary>
+                            <div
+                                style="margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-family: monospace;">
+                                <strong>Stream:</strong> {stream.quality}, {stream.resolution}, {stream.filename},
+                                {stream.size::bytes}, {stream.seeders}, {stream.codec}, {stream.encode},
+                                {stream.languageEmojis::join(' ')}, {stream.audioTags::join(' ')},
+                                {stream.visualTags::join(' ')}, {stream.releaseGroup}<br>
+                                <strong>Service:</strong> {service.name}, {service.shortName},
+                                {service.cached::istrue["⚡"||"❌"]}<br>
+                                <strong>Addon:</strong> {addon.name}<br>
+                                <strong>Syntax:</strong> {field::exists["show"||"hide"]}, {field::&gt;0["yes"||"no"]},
+                                {field::~pattern["match"||"no"]}, {text::small}
+                            </div>
+                        </details>
                     </div>
                 </div>
                 <div

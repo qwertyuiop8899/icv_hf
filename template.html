@@ -1190,26 +1190,67 @@
             const popup = window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1000,height=700');
         });
 
-        // Listen for formatter config from popup
+        // Listen for formatter config from popup (postMessage)
         window.addEventListener('message', (event) => {
+            console.log('📨 [Formatter] Received message:', event.data);
             if (event.data && event.data.type === 'formatter-config') {
-                const cfg = event.data.config;
-                document.getElementById('formatter_preset').value = cfg.preset || 'default';
-                document.getElementById('formatter_custom_name').value = cfg.customName || '';
-                document.getElementById('formatter_custom_desc').value = cfg.customDesc || '';
-
-                // Update status display
-                const presetNames = {
-                    default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
-                    verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
-                    dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
-                };
-                document.getElementById('formatter_status').textContent =
-                    'Preset: ' + (presetNames[cfg.preset] || cfg.preset);
-
-                updateInstallLink();
+                applyFormatterConfig(event.data.config);
             }
         });
+
+        // Also listen to localStorage changes (more reliable cross-origin)
+        window.addEventListener('storage', (event) => {
+            if (event.key === 'formatter_config') {
+                try {
+                    const cfg = JSON.parse(event.newValue);
+                    console.log('📨 [Formatter] Received from localStorage:', cfg);
+                    applyFormatterConfig(cfg);
+                } catch (e) {
+                    console.error('Failed to parse formatter config:', e);
+                }
+            }
+        });
+
+        // Also check localStorage when window gains focus (fallback for same-tab)
+        window.addEventListener('focus', () => {
+            const savedConfig = localStorage.getItem('formatter_config');
+            const savedTimestamp = localStorage.getItem('formatter_config_timestamp');
+            if (savedConfig && savedTimestamp) {
+                // Only apply if timestamp is recent (within last 30 seconds)
+                const age = Date.now() - parseInt(savedTimestamp);
+                if (age < 30000) {
+                    try {
+                        const cfg = JSON.parse(savedConfig);
+                        console.log('📨 [Formatter] Loaded from localStorage on focus:', cfg);
+                        applyFormatterConfig(cfg);
+                        // Clear to prevent reapplying
+                        localStorage.removeItem('formatter_config');
+                        localStorage.removeItem('formatter_config_timestamp');
+                    } catch (e) {
+                        console.error('Failed to parse formatter config:', e);
+                    }
+                }
+            }
+        });
+
+        // Helper function to apply formatter config
+        function applyFormatterConfig(cfg) {
+            document.getElementById('formatter_preset').value = cfg.preset || 'default';
+            document.getElementById('formatter_custom_name').value = cfg.customName || '';
+            document.getElementById('formatter_custom_desc').value = cfg.customDesc || '';
+            console.log('✅ [Formatter] Applied config:', cfg.preset);
+
+            // Update status display
+            const presetNames = {
+                default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+            };
+            document.getElementById('formatter_status').textContent =
+                'Preset: ' + (presetNames[cfg.preset] || cfg.preset);
+
+            updateInstallLink();
+        }
 
         // Initial call to enable buttons
         updateInstallLink();

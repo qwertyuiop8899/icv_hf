@@ -483,14 +483,15 @@ Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTa
 {stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
     },
     pri: {
+        // AIOStreams-identical Pri preset
         name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}
-{stream.quality::=2160p["4K🔥UHD"||""]}{stream.quality::=1080p["FHD🚀1080p"||""]}{stream.quality::=720p["HD💿720p"||""]}{stream.quality::=480p["SD📺"||""]}{stream.quality::exists[""||"Unknown💩"]}
+{stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists[""||"Unknown💩"]}
 [{addon.name}]`,
-        description: `{stream.title::exists["🎬 {stream.title::title} "||""]}
-{stream.quality::~Remux["💎 ʀᴇᴍᴜx "||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ "||""]}{stream.quality::~WEB["🖥 ᴡᴇʙ "||""]}{stream.codec::exists["| 🎞️ {stream.codec} "||""]}{stream.visualTags::exists["| 🔆 {stream.visualTags::join(' | ')} "||""]}
-{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.languageEmojis::exists["| 🗣️ {stream.languageEmojis::join(' / ')}"||""]}
-{stream.size::>0["📁 {stream.size::bytes} "||""]}{stream.releaseGroup::exists["| 🏷️ {stream.releaseGroup} "||""]}{stream.duration::>0["| ⏱️ {stream.duration::time} "||""]}
-📄 ▶️{stream.filename}◀️`
+        description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}
+{stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.quality::~DVDRip["💿 ᴅᴠᴅʀɪᴘ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}
+{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}
+{stream.size::>0["📁 {stream.size::bytes}"||""]}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"||""]}{stream.duration::>0[" | ⏱️ {stream.duration::time}"||""]}
+📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
     }
 };
 

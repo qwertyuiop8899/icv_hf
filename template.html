@@ -1112,6 +1112,40 @@
                     }
                 }
 
+                // Custom Formatter settings
+                if (cfg.formatter_preset) {
+                    const formatterPresetEl = document.getElementById('formatter_preset');
+                    const formatterStatusEl = document.getElementById('formatter_status');
+                    if (formatterPresetEl) {
+                        formatterPresetEl.value = cfg.formatter_preset;
+                        console.log('✅ Loaded formatter_preset:', cfg.formatter_preset);
+
+                        // Update status display
+                        const presetNames = {
+                            default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                            verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                            dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+                        };
+                        if (formatterStatusEl) {
+                            formatterStatusEl.textContent = 'Preset: ' + (presetNames[cfg.formatter_preset] || cfg.formatter_preset);
+                        }
+                    }
+                }
+                if (cfg.formatter_custom_name) {
+                    const el = document.getElementById('formatter_custom_name');
+                    if (el) {
+                        el.value = cfg.formatter_custom_name;
+                        console.log('✅ Loaded formatter_custom_name');
+                    }
+                }
+                if (cfg.formatter_custom_desc) {
+                    const el = document.getElementById('formatter_custom_desc');
+                    if (el) {
+                        el.value = cfg.formatter_custom_desc;
+                        console.log('✅ Loaded formatter_custom_desc');
+                    }
+                }
+
                 console.log('✅ Configuration preloaded successfully');
 
 

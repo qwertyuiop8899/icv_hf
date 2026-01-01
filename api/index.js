@@ -56,7 +56,11 @@ function decodeHtmlEntities(text) {
 const DEBUG_MODE = false;
 
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
+// ✅ Custom Formatter Helper - Full AIOStreams compatible
 function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', isCached = false) {
+    // If AIOStreams mode is enabled, SKIP custom formatting to preserve AIO format
+    if (userConfig && userConfig.aiostreams_mode) return stream;
+
     if (!userConfig || !userConfig.formatter_preset) return stream;
 
     try {

@@ -7079,7 +7079,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                         }
                     } else {
-                        titleLine1 = `🎬 ${result.title}`;
+                        // ✅ AIO Mode: Use file_title if available (even for non-packs)
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `🎬 ${result.file_title}`;
+                        } else {
+                            titleLine1 = `🎬 ${result.title}`;
+                        }
                     }
 
                     // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
@@ -7254,7 +7259,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                         }
                     } else {
-                        titleLine1 = `🎬 ${result.title}`;
+                        // ✅ AIO Mode: Use file_title if available (even for non-packs)
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `🎬 ${result.file_title}`;
+                        } else {
+                            titleLine1 = `🎬 ${result.title}`;
+                        }
                     }
 
                     // Size display with pack/episode format
@@ -7394,7 +7404,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                         }
                     } else {
-                        titleLine1 = `🎬 ${result.title}`;
+                        // ✅ AIO Mode: Use file_title if available (even for non-packs)
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `🎬 ${result.file_title}`;
+                        } else {
+                            titleLine1 = `🎬 ${result.title}`;
+                        }
                     }
 
                     // Size display with pack/episode format

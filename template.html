@@ -1157,6 +1157,8 @@
                     if (el) {
                         el.checked = true;
                         console.log('✅ Loaded aiostreams_mode');
+                        // ✅ Disable formatter UI when AIOStreams is loaded as active
+                        setTimeout(() => { if (typeof updateFormatterState === 'function') updateFormatterState(); }, 100);
                     }
                 }
                 if (cfg.introskip_enabled) {
@@ -1248,6 +1250,29 @@
         const formatterCustomName = document.getElementById('formatter_custom_name');
         const formatterCustomDesc = document.getElementById('formatter_custom_desc');
         const formatterPreviewLink = document.getElementById('formatter_preview_link');
+        const formatterStatus = document.getElementById('formatter_status');
+
+        // ✅ Helper: Toggle formatter based on AIOStreams mode
+        function updateFormatterState() {
+            const aioActive = aioStreamsModeCheckbox.checked;
+            formatterPresetSelect.disabled = aioActive;
+            formatterPresetSelect.style.opacity = aioActive ? '0.5' : '1';
+            formatterPresetSelect.style.cursor = aioActive ? 'not-allowed' : 'pointer';
+            formatterPreviewLink.style.opacity = aioActive ? '0.5' : '1';
+            formatterPreviewLink.style.pointerEvents = aioActive ? 'none' : 'auto';
+
+            if (aioActive) {
+                formatterStatus.textContent = '⚠️ Disabilitato in modalità AIOStreams';
+                formatterStatus.style.color = '#f59e0b';
+                customFormatterContainer.style.display = 'none';
+            } else {
+                formatterStatus.textContent = '';
+            }
+            updateInstallLink();
+        }
+
+        // AIOStreams mode toggle
+        aioStreamsModeCheckbox.addEventListener('change', updateFormatterState);
 
         formatterPresetSelect.addEventListener('change', () => {
             const preset = formatterPresetSelect.value;

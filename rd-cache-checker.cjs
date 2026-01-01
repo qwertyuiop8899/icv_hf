@@ -130,14 +130,34 @@ async function checkSingleHash(infoHash, magnet, token) {
         // 4. Check status - If 'downloaded', it's fully cached
         const isCached = info?.status === 'downloaded';
 
-        // 5. Clean up - Always delete the torrent we just added
+        // 5. ✅ NEW: Extract main video file name for deduplication
+        let mainFileName = '';
+        if (info?.files && Array.isArray(info.files)) {
+            // Video extensions to look for
+            const videoExtensions = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
+
+            // Find video files and sort by size (largest is usually the main file)
+            const videoFiles = info.files
+                .filter(f => videoExtensions.test(f.path))
+                .sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+
+            if (videoFiles.length > 0) {
+                // Get filename from path (remove leading slashes/folders)
+                const fullPath = videoFiles[0].path;
+                mainFileName = fullPath.split('/').pop() || fullPath;
+                console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}...`);
+            }
+        }
+
+        // 6. Clean up - Always delete the torrent we just added
         await deleteTorrent(token, torrentId);
 
         console.log(`🔍 [RD Cache Check] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'} (status: ${info?.status})`);
 
         return {
             hash: infoHash,
-            cached: isCached
+            cached: isCached,
+            file_title: mainFileName || null // ✅ Return main video filename
         };
 
     } catch (error) {
@@ -213,7 +233,8 @@ async function enrichCacheBackground(items, token, dbHelper) {
             if (dbHelper && typeof dbHelper.updateRdCacheStatus === 'function') {
                 const cacheUpdates = results.map(r => ({
                     hash: r.hash,
-                    cached: r.cached
+                    cached: r.cached,
+                    file_title: r.file_title || null // ✅ Include extracted filename
                 }));
 
                 await dbHelper.updateRdCacheStatus(cacheUpdates);

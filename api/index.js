@@ -6985,6 +6985,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const rdCacheData = rdCacheResults[infoHashLower];
                     const rdUserTorrent = rdUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
 
+                    // ✅ NEW: Populate file_title from DB cache if not already set
+                    if (!result.file_title && rdCacheData?.file_title) {
+                        result.file_title = rdCacheData.file_title;
+                        console.log(`📄 [RD] Using cached file_title: ${result.file_title.substring(0, 40)}...`);
+                    }
+
                     let streamUrl = '';
                     let cacheType = 'none';
                     let streamError = null;

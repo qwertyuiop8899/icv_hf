@@ -7054,16 +7054,23 @@ async function handleStream(type, id, config, workerOrigin) {
                     const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
-                        titleLine1 = `🗳️ ${result.title}`;
-                        // If we have a specific file title (from DB or constructed), show it
-                        if (result.file_title) {
-                            titleLine2 = `📂 ${result.file_title}`;
-                        } else if (type === 'series' && season && episode && mediaDetails) {
-                            const seasonStr = String(season).padStart(2, '0');
-                            const episodeStr = String(episode).padStart(2, '0');
-                            titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                        // ✅ AIO Mode: Prioritize File Name for visibility
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `📂 ${result.file_title}`;
+                            titleLine2 = `🗳️ ${result.title}`;
                         } else {
-                            titleLine2 = `📂 ${result.filename || result.title}`;
+                            // Standard Mode
+                            titleLine1 = `🗳️ ${result.title}`;
+                            // If we have a specific file title (from DB or constructed), show it
+                            if (result.file_title) {
+                                titleLine2 = `📂 ${result.file_title}`;
+                            } else if (type === 'series' && season && episode && mediaDetails) {
+                                const seasonStr = String(season).padStart(2, '0');
+                                const episodeStr = String(episode).padStart(2, '0');
+                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                            } else {
+                                titleLine2 = `📂 ${result.filename || result.title}`;
+                            }
                         }
                     } else {
                         titleLine1 = `🎬 ${result.title}`;
@@ -7224,15 +7231,21 @@ async function handleStream(type, id, config, workerOrigin) {
                     const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
-                        titleLine1 = `🗳️ ${result.title}`;
-                        if (result.file_title) {
-                            titleLine2 = `📂 ${result.file_title}`;
-                        } else if (type === 'series' && season && episode && mediaDetails) {
-                            const seasonStr = String(season).padStart(2, '0');
-                            const episodeStr = String(episode).padStart(2, '0');
-                            titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                        // ✅ AIO Mode: Prioritize File Name for visibility
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `📂 ${result.file_title}`;
+                            titleLine2 = `🗳️ ${result.title}`;
                         } else {
-                            titleLine2 = `📂 ${result.filename || result.title}`;
+                            titleLine1 = `🗳️ ${result.title}`;
+                            if (result.file_title) {
+                                titleLine2 = `📂 ${result.file_title}`;
+                            } else if (type === 'series' && season && episode && mediaDetails) {
+                                const seasonStr = String(season).padStart(2, '0');
+                                const episodeStr = String(episode).padStart(2, '0');
+                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                            } else {
+                                titleLine2 = `📂 ${result.filename || result.title}`;
+                            }
                         }
                     } else {
                         titleLine1 = `🎬 ${result.title}`;
@@ -7358,15 +7371,21 @@ async function handleStream(type, id, config, workerOrigin) {
                     const isPack = packFilesHandler.isSeasonPack(result.title);
 
                     if (isPack) {
-                        titleLine1 = `🗳️ ${result.title}`;
-                        if (result.file_title) {
-                            titleLine2 = `📂 ${result.file_title}`;
-                        } else if (type === 'series' && season && episode && mediaDetails) {
-                            const seasonStr = String(season).padStart(2, '0');
-                            const episodeStr = String(episode).padStart(2, '0');
-                            titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                        // ✅ AIO Mode: Prioritize File Name for visibility
+                        if (config.aiostreams_mode && result.file_title) {
+                            titleLine1 = `📂 ${result.file_title}`;
+                            titleLine2 = `🗳️ ${result.title}`;
                         } else {
-                            titleLine2 = `📂 ${result.filename || result.title}`;
+                            titleLine1 = `🗳️ ${result.title}`;
+                            if (result.file_title) {
+                                titleLine2 = `📂 ${result.file_title}`;
+                            } else if (type === 'series' && season && episode && mediaDetails) {
+                                const seasonStr = String(season).padStart(2, '0');
+                                const episodeStr = String(episode).padStart(2, '0');
+                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                            } else {
+                                titleLine2 = `📂 ${result.filename || result.title}`;
+                            }
                         }
                     } else {
                         titleLine1 = `🎬 ${result.title}`;

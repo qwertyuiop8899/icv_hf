@@ -7153,7 +7153,10 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-realdebrid-optimized',
-                            notWebReady: false
+                            notWebReady: false,
+                            // AIOStreams compatibility: provide file size and name for dedup
+                            videoSize: isPack ? (result.file_size || result.size) : result.size,
+                            filename: isPack ? (result.file_title || result.title) : (result.filename || result.title)
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7313,7 +7316,10 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-torbox-optimized',
-                            notWebReady: false
+                            notWebReady: false,
+                            // AIOStreams compatibility
+                            videoSize: isPack ? (result.file_size || result.size) : result.size,
+                            filename: isPack ? (result.file_title || result.title) : (result.filename || result.title)
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7458,7 +7464,10 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         behaviorHints: {
                             bingeGroup: 'uindex-alldebrid-optimized',
-                            notWebReady: false
+                            notWebReady: false,
+                            // AIOStreams compatibility
+                            videoSize: isPack ? (result.file_size || result.size) : result.size,
+                            filename: isPack ? (result.file_title || result.title) : (result.filename || result.title)
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7574,7 +7583,10 @@ async function handleStream(type, id, config, workerOrigin) {
                         infoHash: result.infoHash,
                         behaviorHints: {
                             bingeGroup: 'uindex-p2p',
-                            notWebReady: true
+                            notWebReady: true,
+                            // AIOStreams compatibility
+                            videoSize: isPack ? (result.file_size || result.size) : result.size,
+                            filename: isPack ? (result.file_title || result.title) : (result.filename || result.title)
                         },
                         _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
                     };

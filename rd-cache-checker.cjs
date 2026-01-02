@@ -132,6 +132,7 @@ async function checkSingleHash(infoHash, magnet, token) {
 
         // 5. ✅ NEW: Extract main video file name for deduplication
         let mainFileName = '';
+        let mainFileSize = 0;
         if (info?.files && Array.isArray(info.files)) {
             // Video extensions to look for
             const videoExtensions = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
@@ -145,7 +146,8 @@ async function checkSingleHash(infoHash, magnet, token) {
                 // Get filename from path (remove leading slashes/folders)
                 const fullPath = videoFiles[0].path;
                 mainFileName = fullPath.split('/').pop() || fullPath;
-                console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}...`);
+                mainFileSize = videoFiles[0].bytes || 0; // ✅ Capture file size
+                console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}... (${(mainFileSize / 1024 / 1024).toFixed(2)} MB)`);
             }
         }
 
@@ -157,7 +159,9 @@ async function checkSingleHash(infoHash, magnet, token) {
         return {
             hash: infoHash,
             cached: isCached,
-            file_title: mainFileName || null // ✅ Return main video filename
+            cached: isCached,
+            file_title: mainFileName || null, // ✅ Return main video filename
+            file_size: mainFileSize || null // ✅ Return main video file size
         };
 
     } catch (error) {
@@ -189,6 +193,8 @@ async function checkCacheSync(items, token, limit = 5) {
         const result = await checkSingleHash(item.hash, item.magnet, token);
         results[result.hash.toLowerCase()] = {
             cached: result.cached,
+            file_title: result.file_title,
+            file_size: result.file_size,
             fromLiveCheck: true
         };
 
@@ -234,7 +240,8 @@ async function enrichCacheBackground(items, token, dbHelper) {
                 const cacheUpdates = results.map(r => ({
                     hash: r.hash,
                     cached: r.cached,
-                    file_title: r.file_title || null // ✅ Include extracted filename
+                    file_title: r.file_title || null, // ✅ Include extracted filename
+                    file_size: r.file_size || null // ✅ Provide file_size for DB update
                 }));
 
                 await dbHelper.updateRdCacheStatus(cacheUpdates);

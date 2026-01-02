@@ -7251,7 +7251,9 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility: provide file size and name for dedup
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                            // ✅ AIOStreams: Add folderName for pack torrents (pack title = folder, file_title = filename)
+                            ...(isPack && result.title ? { folderName: result.title } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7284,9 +7286,16 @@ async function handleStream(type, id, config, workerOrigin) {
                     // ✅ Populate file_title from cache only for MOVIES
                     // For series, resolveSeriesPackFile already set the correct episode file_title  
                     // Cache returns the largest file which is wrong for series packs
-                    if (type === 'movie' && !result.file_title && torboxCacheData?.file_title) {
-                        result.file_title = torboxCacheData.file_title;
-                        console.log(`📄 [Torbox] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                    if (type === 'movie' && !result.file_title) {
+                        // Try Torbox cache first, then RD cache (cross-debrid sharing)
+                        if (torboxCacheData?.file_title) {
+                            result.file_title = torboxCacheData.file_title;
+                            console.log(`📄 [Torbox] Using Torbox cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                        } else if (rdCacheResults[infoHashLower]?.file_title) {
+                            // ✅ Use RD-extracted file_title for Torbox streams (cross-debrid benefit!)
+                            result.file_title = rdCacheResults[infoHashLower].file_title;
+                            console.log(`📄 [Torbox] Using RD cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                        }
                     }
 
                     let streamUrl = '';
@@ -7456,7 +7465,9 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                            // ✅ AIOStreams: Add folderName for pack torrents
+                            ...(isPack && result.title ? { folderName: result.title } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,

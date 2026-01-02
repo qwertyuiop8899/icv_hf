@@ -448,7 +448,7 @@ const PRESET_TEMPLATES = {
 🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
     },
     fra: {
-        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K UHD"||""]}{stream.quality::exists[""||"UNK"]}`,
+        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.resolution::exists["{stream.resolution::replace('2160p','UHD')::replace('4k','UHD')::replace('2160','UHD')::replace('1080p','FHD')::replace('1080','FHD')::replace('720p','HD')::replace('720','HD')}"||"UNK"]}`,
         description: `{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
 ✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}{stream.indexer::exists[" • {stream.indexer}"||""]}
 {stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}

@@ -8782,14 +8782,13 @@ export default async function handler(req, res) {
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
 
-                    // ✅ CACHE SUCCESS: Mark torrent as cached in DB (5-day TTL)
+                    // ✅ CACHE SUCCESS: Refresh cache timestamp (+10 days from now)
                     if (dbEnabled && infoHash) {
                         try {
-                            // Update cache status only (not file-specific data)
-                            await dbHelper.updateRdCacheStatus([{ hash: infoHash, cached: true }]);
-                            console.log(`💾 [DB] Marked ${infoHash} as RD cached (5-day TTL)`);
+                            // Refresh cache timestamp - extends validity to 10 more days
+                            await dbHelper.refreshRdCacheTimestamp(infoHash);
                         } catch (dbErr) {
-                            console.error(`❌ [DB] Error updating DB: ${dbErr.message}`, dbErr);
+                            console.error(`❌ [DB] Error refreshing cache: ${dbErr.message}`, dbErr);
                         }
 
                         // ✅ SAVE FILE INFO: Save ALL files from the pack for future lookups

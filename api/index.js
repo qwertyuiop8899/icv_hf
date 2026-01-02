@@ -8285,12 +8285,6 @@ export default async function handler(req, res) {
             // Usa solo la configurazione dall'URL, senza fallback.
             const result = await handleStream(type, id, config, url.origin);
 
-            // DEBUG LOGGING
-            if (result.streams && result.streams.length > 0) {
-                console.log('✅ [RESPONSE] Sending ' + result.streams.length + ' streams.');
-                console.log('🔍 [DEBUG] First stream sample:', JSON.stringify(result.streams[0], null, 2));
-            }
-
             const responseTime = Date.now() - startTime;
 
             console.log(`✅ Stream request completed in ${responseTime}ms`);

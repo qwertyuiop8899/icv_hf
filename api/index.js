@@ -299,7 +299,11 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
         // For packs: folderName = torrent title, filename = specific file
         // For single files: folderName = empty, filename = file name
         const isPack = result.fileIndex !== undefined && result.file_title && result.file_title !== result.title;
-        const actualFilename = result.file_title || result.filename || result.title || '';
+        let actualFilename = result.file_title || result.filename || result.title || '';
+        // Fix: If filename contains path separator, take only the clean filename
+        if (actualFilename && actualFilename.includes('/')) {
+            actualFilename = actualFilename.split('/').pop();
+        }
         const actualFolderName = isPack ? (result.title || '') : (result.folderName || '');
 
         const data = {

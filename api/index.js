@@ -7137,10 +7137,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (type === 'movie') {
                         if (isPack) {
-                            // Pack: Combined display "Pack / File"
-                            titleLine1 = `🗳️ ${result.title} / 📂 ${cleanFileTitle}`;
-                            if (!config.aiostreams_mode) {
-                                // For non-AIO, keep separate lines if preferred, or stick to requested format
+                            // Pack: For AIOStreams, put pack on first line, file on second (AIO parses first line as context)
+                            if (config.aiostreams_mode) {
+                                // AIOStreams format: Pack name on line 1, file on line 2
+                                // behaviorHints.filename provides the actual filename for parsing
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${cleanFileTitle}`;
+                            } else {
+                                // Normal mode: pack first, file second
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${cleanFileTitle}`;
                             }
@@ -7152,18 +7156,34 @@ async function handleStream(type, id, config, workerOrigin) {
                         // SERIES logic
                         if (isPack) {
                             if (result.file_title) {
-                                // "Pack / EpisodeFile"
-                                titleLine1 = `🗳️ ${result.title} / 📂 ${cleanFileTitle}`;
-                                if (!config.aiostreams_mode) {
+                                // Pack with resolved file title
+                                if (config.aiostreams_mode) {
+                                    // AIOStreams: pack on line 1, file on line 2
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                } else {
+                                    // Normal mode: pack first, file second
                                     titleLine1 = `🗳️ ${result.title}`;
                                     titleLine2 = `📂 ${cleanFileTitle}`;
                                 }
                             } else if (season && episode && mediaDetails) {
                                 const seasonStr = String(season).padStart(2, '0');
                                 const episodeStr = String(episode).padStart(2, '0');
-                                titleLine1 = `🗳️ ${result.title} / 📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                if (config.aiostreams_mode) {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                } else {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                }
                             } else {
-                                titleLine1 = `🗳️ ${result.title} / 📂 ${cleanMainFilename}`;
+                                if (config.aiostreams_mode) {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanMainFilename}`;
+                                } else {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanMainFilename}`;
+                                }
                             }
                         } else {
                             // Single episode: show ONLY the filename
@@ -7370,11 +7390,11 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (type === 'movie') {
                         if (isPack) {
-                            // Movie collection: show BOTH pack and file
+                            // Movie collection: show BOTH pack and file (pack first, file second for consistency)
                             if (config.aiostreams_mode) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
+                                // AIOStreams: pack on line 1, file on line 2 (matches RD format)
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${cleanFileTitle}`;
                             } else {
                                 // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
@@ -7389,9 +7409,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (isPack) {
                             // Season pack: show BOTH pack and episode file
                             if (config.aiostreams_mode && result.file_title) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
+                                // AIOStreams: pack on line 1, file on line 2 (matches RD format)
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${cleanFileTitle}`;
                             } else {
                                 // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;

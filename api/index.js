@@ -7246,6 +7246,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         // AIOStreams: Explicitly pass sizes at root level if needed (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
                         folderSize: Number(result.packSize || result.sizeInBytes || 0),
+                        // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
+                        ...(isPack && result.title ? { folderName: result.title } : {}),
+                        ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
                         behaviorHints: {
                             bingeGroup: 'uindex-realdebrid-optimized',
                             notWebReady: false,
@@ -7460,6 +7463,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         // AIOStreams: Explicitly pass sizes at root level (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
                         folderSize: Number(result.packSize || result.sizeInBytes || 0),
+                        // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
+                        ...(isPack && result.title ? { folderName: result.title } : {}),
+                        ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
                         behaviorHints: {
                             bingeGroup: 'uindex-torbox-optimized',
                             notWebReady: false,

@@ -6063,7 +6063,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const episodeNum = parseInt(episode);
                 const seriesImdbId = mediaDetails.imdbId;
                 const MAX_PACK_VERIFY = 20;
-                const DELAY_MS = 100;
+                const DELAY_MS = 200; // Balance between rate limiting and speed
 
                 // Separate verified (in DB) from unverified packs
                 const verifiedPacks = [];
@@ -6607,7 +6607,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const episodeNum = parseInt(episode);
                 const seriesImdbId = mediaDetails.imdbId;
                 const MAX_PACK_VERIFY = 20;
-                const DELAY_MS = 100;
+                const DELAY_MS = 200; // Balance between rate limiting and speed
 
                 // Separate verified from unverified packs
                 const verifiedPacks = [];

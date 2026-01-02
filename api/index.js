@@ -6897,11 +6897,13 @@ async function handleStream(type, id, config, workerOrigin) {
                                 if (dbEnabled) {
                                     const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => ({
                                         hash,
-                                        cached: data.cached
+                                        cached: data.cached,
+                                        file_title: data.file_title || null,  // ✅ Save file_title for deduplication
+                                        file_size: data.file_size || null     // ✅ Save file_size
                                     }));
                                     if (liveResultsToSave.length > 0) {
                                         await dbHelper.updateRdCacheStatus(liveResultsToSave);
-                                        console.log(`💾 [DB] Saved ${liveResultsToSave.length} live check results to DB`);
+                                        console.log(`💾 [DB] Saved ${liveResultsToSave.length} live check results to DB (with file info)`);
                                     }
                                 }
                             }
@@ -7008,10 +7010,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const rdCacheData = rdCacheResults[infoHashLower];
                     const rdUserTorrent = rdUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
 
-                    // ✅ NEW: Populate file_title from DB cache if not already set
-                    if (!result.file_title && rdCacheData?.file_title) {
+                    // ✅ Populate file_title from cache only for MOVIES
+                    // For series, resolveSeriesPackFile already set the correct episode file_title
+                    // Cache returns the largest file which is wrong for series packs
+                    if (type === 'movie' && !result.file_title && rdCacheData?.file_title) {
                         result.file_title = rdCacheData.file_title;
-                        console.log(`📄 [RD] Using cached file_title: ${result.file_title.substring(0, 40)}...`);
+                        console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
                     }
 
                     let streamUrl = '';
@@ -7212,10 +7216,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const torboxCacheData = torboxCacheResults[infoHashLower];
                     const torboxUserTorrent = torboxUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
 
-                    // ✅ Populate file_title from Torbox cache if not already set (same as RD)
-                    if (!result.file_title && torboxCacheData?.file_title) {
+                    // ✅ Populate file_title from cache only for MOVIES
+                    // For series, resolveSeriesPackFile already set the correct episode file_title  
+                    // Cache returns the largest file which is wrong for series packs
+                    if (type === 'movie' && !result.file_title && torboxCacheData?.file_title) {
                         result.file_title = torboxCacheData.file_title;
-                        console.log(`📄 [Torbox] Using cached file_title: ${result.file_title.substring(0, 40)}...`);
+                        console.log(`📄 [Torbox] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
                     }
 
                     let streamUrl = '';

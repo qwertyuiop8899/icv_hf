@@ -7129,7 +7129,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
                         // Pack with known episode size: show both
-                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        // ✅ AIOStreams: Use separate line for folderSize so regex can potentially extract it
+                        if (config.aiostreams_mode) {
+                            // Format: "💾 pack / file" - AIOStreams extracts first size as stream.size
+                            // But we want file size as stream.size, so put it first
+                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                        } else {
+                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        }
                         console.log(`✅ [SIZE LINE] DUAL format: "${sizeLine}" (isPack=${isPack}, ep=${episodeSize}, pack=${packSize})`);
                     } else {
                         // Single file or pack without episode size
@@ -7313,7 +7320,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const packSize = result.packSize || 0;
                     const episodeSize = result.file_size || 0;
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        // ✅ AIOStreams: File size first, pack size second with different emoji
+                        if (config.aiostreams_mode) {
+                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                        } else {
+                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        }
                     } else {
                         sizeLine = `💾 ${result.size || 'Unknown'}`;
                     }
@@ -7464,7 +7476,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     const packSize = result.packSize || 0;
                     const episodeSize = result.file_size || 0;
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        // ✅ AIOStreams: File size first, pack size second with different emoji
+                        if (config.aiostreams_mode) {
+                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                        } else {
+                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        }
                     } else {
                         sizeLine = `💾 ${result.size || 'Unknown'}`;
                     }
@@ -7587,7 +7604,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
 
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        // ✅ AIOStreams: File size first, pack size second with different emoji
+                        if (config.aiostreams_mode) {
+                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                        } else {
+                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        }
                     } else {
                         sizeLine = `💾 ${result.size || 'Unknown'}`;
                     }

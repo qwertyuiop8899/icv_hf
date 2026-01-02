@@ -7088,26 +7088,33 @@ async function handleStream(type, id, config, workerOrigin) {
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
+                    // Logic: Single file = only filename, Pack = pack name + file name
                     if (type === 'movie') {
                         if (isPack) {
                             // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${result.file_title}`;
                             }
                         } else {
-                            titleLine1 = `🎬 ${result.file_title || result.title}`;
+                            // Single movie: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
+                            // Season pack: show BOTH pack and episode file
                             if (config.aiostreams_mode && result.file_title) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 if (result.file_title) {
                                     titleLine2 = `📂 ${result.file_title}`;
@@ -7120,11 +7127,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 }
                             }
                         } else {
-                            if (config.aiostreams_mode && result.file_title) {
-                                titleLine1 = `🎬 ${result.file_title}`;
-                            } else {
-                                titleLine1 = `🎬 ${result.title}`;
-                            }
+                            // Single episode: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     }
 
@@ -7307,26 +7311,33 @@ async function handleStream(type, id, config, workerOrigin) {
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
+                    // Logic: Single file = only filename, Pack = pack name + file name
                     if (type === 'movie') {
                         if (isPack) {
                             // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${result.file_title}`;
                             }
                         } else {
-                            titleLine1 = `🎬 ${result.file_title || result.title}`;
+                            // Single movie: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
+                            // Season pack: show BOTH pack and episode file
                             if (config.aiostreams_mode && result.file_title) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 if (result.file_title) {
                                     titleLine2 = `📂 ${result.file_title}`;
@@ -7339,11 +7350,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 }
                             }
                         } else {
-                            if (config.aiostreams_mode && result.file_title) {
-                                titleLine1 = `🎬 ${result.file_title}`;
-                            } else {
-                                titleLine1 = `🎬 ${result.title}`;
-                            }
+                            // Single episode: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     }
 
@@ -7481,25 +7489,33 @@ async function handleStream(type, id, config, workerOrigin) {
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
+                    // Logic: Single file = only filename, Pack = pack name + file name
                     if (type === 'movie') {
                         if (isPack) {
+                            // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${result.file_title}`;
                             }
                         } else {
-                            titleLine1 = `🎬 ${result.file_title || result.title}`;
+                            // Single movie: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
+                            // Season pack: show BOTH pack and episode file
                             if (config.aiostreams_mode && result.file_title) {
+                                // AIO mode: file first, then pack
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
+                                // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 if (result.file_title) {
                                     titleLine2 = `📂 ${result.file_title}`;
@@ -7512,11 +7528,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 }
                             }
                         } else {
-                            if (config.aiostreams_mode && result.file_title) {
-                                titleLine1 = `🎬 ${result.file_title}`;
-                            } else {
-                                titleLine1 = `🎬 ${result.title}`;
-                            }
+                            // Single episode: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     }
 
@@ -7631,16 +7644,20 @@ async function handleStream(type, id, config, workerOrigin) {
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
+                    // Logic: Single file = only filename, Pack = pack name + file name
                     if (type === 'movie') {
                         if (isPack) {
+                            // Movie collection: show BOTH pack and file
                             titleLine1 = `🗳️ ${result.title}`;
                             titleLine2 = `📂 ${result.file_title}`;
                         } else {
-                            titleLine1 = `🎬 ${result.file_title || result.title}`;
+                            // Single movie: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
+                            // Season pack: show BOTH pack and episode file
                             titleLine1 = `🗳️ ${result.title}`;
                             if (result.file_title) {
                                 titleLine2 = `📂 ${result.file_title}`;
@@ -7652,7 +7669,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 titleLine2 = `📂 ${result.filename || result.title}`;
                             }
                         } else {
-                            titleLine1 = `🎬 ${result.title}`;
+                            // Single episode: show ONLY the filename (not the torrent name)
+                            titleLine1 = `🎬 ${result.file_title || result.filename || result.title}`;
                         }
                     }
 

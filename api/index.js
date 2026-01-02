@@ -337,8 +337,9 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
                 filename: actualFilename,
                 folderName: isPack ? actualFolderName : '',
                 title: displayTitle,
-                size: result.matchedFileSize || result.size || 0,
-                folderSize: result.packSize || result.folderSize || 0,
+                // ✅ Use numeric bytes, not formatted strings like "10.5 GB"
+                size: Number(result.file_size || result.sizeInBytes || result.matchedFileSize || 0),
+                folderSize: Number(result.packSize || result.sizeInBytes || 0),
                 library: false,
 
                 // Quality info

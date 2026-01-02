@@ -3114,21 +3114,44 @@ class Torbox {
             const data = await response.json();
 
             if (data.success && data.data) {
-                // Torrentio uses format=list, so data.data is an array of cached entries
-                const cachedHashes = new Set(
-                    (Array.isArray(data.data) ? data.data : [])
-                        .map(entry => entry.hash?.toLowerCase())
-                        .filter(Boolean)
-                );
+                // Build a map for quick lookup
+                const cachedEntriesMap = new Map();
+                (Array.isArray(data.data) ? data.data : []).forEach(entry => {
+                    if (entry.hash) {
+                        cachedEntriesMap.set(entry.hash.toLowerCase(), entry);
+                    }
+                });
+
+                // Video extensions to look for
+                const videoExtensions = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
                 hashes.forEach(hash => {
                     const hashLower = hash.toLowerCase();
-                    const isCached = cachedHashes.has(hashLower);
+                    const cachedEntry = cachedEntriesMap.get(hashLower);
+                    const isCached = !!cachedEntry;
+
+                    // Extract main video file name and size if cached
+                    let mainFileName = null;
+                    let mainFileSize = null;
+
+                    if (isCached && cachedEntry.files && Array.isArray(cachedEntry.files)) {
+                        // Find video files and sort by size (largest is usually the main file)
+                        const videoFiles = cachedEntry.files
+                            .filter(f => videoExtensions.test(f.name || f.short_name || ''))
+                            .sort((a, b) => (b.size || 0) - (a.size || 0));
+
+                        if (videoFiles.length > 0) {
+                            mainFileName = videoFiles[0].name || videoFiles[0].short_name;
+                            mainFileSize = videoFiles[0].size || 0;
+                        }
+                    }
 
                     results[hashLower] = {
                         cached: isCached,
                         downloadLink: null,
-                        service: 'Torbox'
+                        service: 'Torbox',
+                        file_title: mainFileName,  // ✅ Add main video filename
+                        file_size: mainFileSize    // ✅ Add main video file size
                     };
                 });
             }
@@ -7159,7 +7182,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility: provide file size and name for dedup
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.title ? { filename: isPack ? (result.file_title || result.title) : (result.filename || result.title) } : {})
+                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7188,6 +7211,12 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (useTorbox) {
                     const torboxCacheData = torboxCacheResults[infoHashLower];
                     const torboxUserTorrent = torboxUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
+
+                    // ✅ Populate file_title from Torbox cache if not already set (same as RD)
+                    if (!result.file_title && torboxCacheData?.file_title) {
+                        result.file_title = torboxCacheData.file_title;
+                        console.log(`📄 [Torbox] Using cached file_title: ${result.file_title.substring(0, 40)}...`);
+                    }
 
                     let streamUrl = '';
                     let cacheType = 'none';
@@ -7325,7 +7354,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.title ? { filename: isPack ? (result.file_title || result.title) : (result.filename || result.title) } : {})
+                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7476,7 +7505,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.title ? { filename: isPack ? (result.file_title || result.title) : (result.filename || result.title) } : {})
+                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7600,7 +7629,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: true,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.title ? { filename: isPack ? (result.file_title || result.title) : (result.filename || result.title) } : {})
+                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
                         },
                         _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
                     };

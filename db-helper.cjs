@@ -259,19 +259,18 @@ async function updateRdCacheStatus(cacheResults) {
       let params;
 
       if (result.file_title) {
-        // Update cache status AND file_title
+        // Update cache status AND file_title AND file_size if present
         query = `
           UPDATE torrents 
-          SET cached_rd = $1, last_cached_check = NOW(), file_title = $3
+          SET cached_rd = $1, last_cached_check = NOW(), file_title = $3, file_size = COALESCE($4, file_size)
           WHERE info_hash = $2 AND (file_title IS NULL OR file_title = '')
         `;
-        params = [result.cached, result.hash.toLowerCase(), result.file_title];
+        params = [result.cached, result.hash.toLowerCase(), result.file_title, result.file_size || null];
       } else {
         // Only update cache status (no file_title available)
         query = `
           UPDATE torrents 
           SET cached_rd = $1, last_cached_check = NOW()
-          WHERE info_hash = $2
         `;
         params = [result.cached, result.hash.toLowerCase()];
       }
@@ -304,7 +303,7 @@ async function getRdCachedAvailability(hashes) {
     // Get cached results that are less than 20 days old
     // ✅ NEW: Also fetch file_title for deduplication
     const query = `
-      SELECT info_hash, cached_rd, last_cached_check, file_title
+      SELECT info_hash, cached_rd, last_cached_check, file_title, size, file_size
       FROM torrents
       WHERE info_hash = ANY($1)
         AND cached_rd IS NOT NULL
@@ -320,7 +319,9 @@ async function getRdCachedAvailability(hashes) {
         cached: row.cached_rd,
         lastCheck: row.last_cached_check,
         fromCache: true,
-        file_title: row.file_title || null // ✅ Include file_title
+        file_title: row.file_title || null, // ✅ Include file_title
+        size: row.size ? parseInt(row.size) : null,
+        file_size: row.file_size ? parseInt(row.file_size) : null
       };
     });
 

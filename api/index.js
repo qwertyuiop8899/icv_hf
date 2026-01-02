@@ -314,6 +314,20 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
 
         const actualFolderName = isPack ? (result.title || '') : (result.folderName || '');
 
+        // ✅ Smart Title Logic (User Request)
+        // 1. Single Movie/Episode: Show ONLY the filename (actualFilename)
+        // 2. Packs: Show "Pack Name / File Name"
+        let displayTitle = result.title || result.filename || '';
+        if (actualFilename) {
+            if (!isPack) {
+                // Single: Use filename only
+                displayTitle = actualFilename;
+            } else {
+                // Pack: Combine Pack + File
+                displayTitle = `${result.title || 'Pack'} / ${actualFilename}`;
+            }
+        }
+
         const data = {
             config: {
                 addonName: 'IlCorsaroViola'
@@ -322,7 +336,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
                 // Basic - properly separated folder and file
                 filename: actualFilename,
                 folderName: isPack ? actualFolderName : '',
-                title: result.title || result.filename || '',
+                title: displayTitle,
                 size: result.matchedFileSize || result.size || 0,
                 folderSize: result.packSize || result.folderSize || 0,
                 library: false,
@@ -7032,9 +7046,13 @@ async function handleStream(type, id, config, workerOrigin) {
                     // ✅ Populate file_title from cache only for MOVIES
                     // For series, resolveSeriesPackFile already set the correct episode file_title
                     // Cache returns the largest file which is wrong for series packs
-                    if (type === 'movie' && !result.file_title && rdCacheData?.file_title) {
-                        result.file_title = rdCacheData.file_title;
-                        console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                    if (type === 'movie') {
+                        if (!result.file_title && rdCacheData?.file_title) {
+                            result.file_title = rdCacheData.file_title;
+                            console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                        } else if (result.file_title) {
+                            console.log(`📄 [RD] Using DB file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                        }
                     }
 
                     let streamUrl = '';

@@ -7082,16 +7082,15 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
+                    // ✅ Define isPack at top level for size calculation
+                    const isPack = type === 'movie'
+                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        : packFilesHandler.isSeasonPack(result.title);
+
                     // ✅ MOVIE/SERIES TITLE DISPLAY
                     if (type === 'movie') {
-                        // For movies: detect if it's a collection pack
-                        // A collection pack has fileIndex AND file_title differs from title
-                        const isMovieCollection = result.fileIndex !== undefined &&
-                            result.file_title &&
-                            result.file_title !== result.title;
-
-                        if (isMovieCollection) {
-                            // Movie collection: show BOTH pack and file (like series)
+                        if (isPack) {
+                            // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
@@ -7100,13 +7099,10 @@ async function handleStream(type, id, config, workerOrigin) {
                                 titleLine2 = `📂 ${result.file_title}`;
                             }
                         } else {
-                            // Single movie: only show file_title (or fallback to title)
                             titleLine1 = `🎬 ${result.file_title || result.title}`;
                         }
                     } else {
-                        // SERIES logic (unchanged)
-                        const isPack = packFilesHandler.isSeasonPack(result.title);
-
+                        // SERIES logic
                         if (isPack) {
                             if (config.aiostreams_mode && result.file_title) {
                                 titleLine1 = `📂 ${result.file_title}`;
@@ -7305,13 +7301,15 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
+                    // ✅ Define isPack at top level for size calculation
+                    const isPack = type === 'movie'
+                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        : packFilesHandler.isSeasonPack(result.title);
+
                     // ✅ MOVIE/SERIES TITLE DISPLAY
                     if (type === 'movie') {
-                        const isMovieCollection = result.fileIndex !== undefined &&
-                            result.file_title &&
-                            result.file_title !== result.title;
-
-                        if (isMovieCollection) {
+                        if (isPack) {
+                            // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
@@ -7324,8 +7322,6 @@ async function handleStream(type, id, config, workerOrigin) {
                         }
                     } else {
                         // SERIES logic
-                        const isPack = packFilesHandler.isSeasonPack(result.title);
-
                         if (isPack) {
                             if (config.aiostreams_mode && result.file_title) {
                                 titleLine1 = `📂 ${result.file_title}`;
@@ -7479,13 +7475,14 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
+                    // ✅ Define isPack at top level for size calculation
+                    const isPack = type === 'movie'
+                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        : packFilesHandler.isSeasonPack(result.title);
+
                     // ✅ MOVIE/SERIES TITLE DISPLAY
                     if (type === 'movie') {
-                        const isMovieCollection = result.fileIndex !== undefined &&
-                            result.file_title &&
-                            result.file_title !== result.title;
-
-                        if (isMovieCollection) {
+                        if (isPack) {
                             if (config.aiostreams_mode) {
                                 titleLine1 = `📂 ${result.file_title}`;
                                 titleLine2 = `🗳️ ${result.title}`;
@@ -7498,8 +7495,6 @@ async function handleStream(type, id, config, workerOrigin) {
                         }
                     } else {
                         // SERIES logic
-                        const isPack = packFilesHandler.isSeasonPack(result.title);
-
                         if (isPack) {
                             if (config.aiostreams_mode && result.file_title) {
                                 titleLine1 = `📂 ${result.file_title}`;
@@ -7630,14 +7625,14 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine1 = '';
                     let titleLine2 = '';
 
+                    // ✅ Define isPack at top level for size calculation
+                    const isPack = type === 'movie'
+                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        : packFilesHandler.isSeasonPack(result.title);
+
                     // ✅ MOVIE/SERIES TITLE DISPLAY
                     if (type === 'movie') {
-                        const isMovieCollection = result.fileIndex !== undefined &&
-                            result.file_title &&
-                            result.file_title !== result.title;
-
-                        if (isMovieCollection) {
-                            // Movie collection: show BOTH pack and file
+                        if (isPack) {
                             titleLine1 = `🗳️ ${result.title}`;
                             titleLine2 = `📂 ${result.file_title}`;
                         } else {
@@ -7645,8 +7640,6 @@ async function handleStream(type, id, config, workerOrigin) {
                         }
                     } else {
                         // SERIES logic
-                        const isPack = packFilesHandler.isSeasonPack(result.title);
-
                         if (isPack) {
                             titleLine1 = `🗳️ ${result.title}`;
                             if (result.file_title) {

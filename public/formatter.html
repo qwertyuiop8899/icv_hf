@@ -253,6 +253,36 @@
             ✓ Preset attuale: <span id="currentPresetName">-</span>
         </div>
 
+        <!-- Preset Selector -->
+        <div class="preset-selector"
+            style="margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 200px;">
+                <label
+                    style="display: block; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 0.4rem;">Preset</label>
+                <select id="presetSelect"
+                    style="width: 100%; padding: 0.6rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.9rem;">
+                    <option value="default">Default</option>
+                    <option value="torrentio">Torrentio Style</option>
+                    <option value="minimal">Minimal</option>
+                    <option value="verbose">Verbose</option>
+                    <option value="italiano">Italiano</option>
+                    <option value="fra">FRA Style</option>
+                    <option value="dav">DAV Style</option>
+                    <option value="and">AND Style</option>
+                    <option value="lad">LAD Style</option>
+                    <option value="pri">PRI Style</option>
+                    <option value="custom">✏️ Personalizzato</option>
+                </select>
+            </div>
+            <div class="button-row" style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
+                <button id="saveBtn"
+                    style="padding: 0.6rem 1.2rem; background: var(--accent); border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: 600;">💾
+                    Salva</button>
+                <button id="cancelBtn"
+                    style="padding: 0.6rem 1.2rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: pointer;">Annulla</button>
+            </div>
+        </div>
+
         <div class="main-grid">
             <!-- Left: Editor -->
             <div class="panel">

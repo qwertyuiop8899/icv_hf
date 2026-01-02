@@ -271,6 +271,7 @@ async function updateRdCacheStatus(cacheResults) {
         query = `
           UPDATE torrents 
           SET cached_rd = $1, last_cached_check = NOW()
+          WHERE info_hash = $2
         `;
         params = [result.cached, result.hash.toLowerCase()];
       }

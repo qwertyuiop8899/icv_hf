@@ -7151,6 +7151,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         title: streamTitle,
                         infoHash: result.infoHash,
                         url: streamUrl,
+                        // AIOStreams: Explicitly pass sizes at root level if needed
+                        size: isPack ? (result.file_size || result.size) : result.size,
+                        folderSize: result.size,
                         behaviorHints: {
                             bingeGroup: 'uindex-realdebrid-optimized',
                             notWebReady: false,
@@ -7314,6 +7317,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         title: streamTitle,
                         infoHash: result.infoHash,
                         url: streamUrl,
+                        // AIOStreams: Explicitly pass sizes at root level
+                        size: isPack ? (result.file_size || result.size) : result.size,
+                        folderSize: result.size,
                         behaviorHints: {
                             bingeGroup: 'uindex-torbox-optimized',
                             notWebReady: false,
@@ -7462,6 +7468,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         title: streamTitle,
                         infoHash: result.infoHash,
                         url: streamUrl,
+                        // AIOStreams
+                        size: isPack ? (result.file_size || result.size) : result.size,
+                        folderSize: result.size,
                         behaviorHints: {
                             bingeGroup: 'uindex-alldebrid-optimized',
                             notWebReady: false,

@@ -7120,57 +7120,52 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
+                    // Relaxed check: valid if we have specific file_title differing from torrent title
                     const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        ? (result.file_title && result.file_title !== result.title)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
-                    // Logic: Single file = only filename, Pack = pack name + file name
+                    // Logic: Single file = only filename, Pack = pack name / file name
                     const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
                     const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
 
                     if (type === 'movie') {
                         if (isPack) {
-                            // Movie collection: show BOTH pack and file
-                            if (config.aiostreams_mode) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
-                            } else {
-                                // Normal mode: pack first, then file
+                            // Pack: Combined display "Pack / File"
+                            titleLine1 = `🗳️ ${result.title} / 📂 ${cleanFileTitle}`;
+                            if (!config.aiostreams_mode) {
+                                // For non-AIO, keep separate lines if preferred, or stick to requested format
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${cleanFileTitle}`;
                             }
                         } else {
-                            // Single movie: show ONLY the filename (not the torrent name)
+                            // Single movie: show ONLY the filename
                             titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
-                            // Season pack: show BOTH pack and episode file
-                            if (config.aiostreams_mode && result.file_title) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
-                            } else {
-                                // Normal mode: pack first, then file
-                                titleLine1 = `🗳️ ${result.title}`;
-                                if (result.file_title) {
+                            if (result.file_title) {
+                                // "Pack / EpisodeFile"
+                                titleLine1 = `🗳️ ${result.title} / 📂 ${cleanFileTitle}`;
+                                if (!config.aiostreams_mode) {
+                                    titleLine1 = `🗳️ ${result.title}`;
                                     titleLine2 = `📂 ${cleanFileTitle}`;
-                                } else if (season && episode && mediaDetails) {
-                                    const seasonStr = String(season).padStart(2, '0');
-                                    const episodeStr = String(episode).padStart(2, '0');
-                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                                } else {
-                                    titleLine2 = `📂 ${cleanMainFilename}`;
                                 }
+                            } else if (season && episode && mediaDetails) {
+                                const seasonStr = String(season).padStart(2, '0');
+                                const episodeStr = String(episode).padStart(2, '0');
+                                titleLine1 = `🗳️ ${result.title} / 📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                            } else {
+                                titleLine1 = `🗳️ ${result.title} / 📂 ${cleanMainFilename}`;
                             }
                         } else {
-                            // Single episode: show ONLY the filename (not the torrent name)
+                            // Single episode: show ONLY the filename
                             titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
                     }
+
 
                     // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
                     let sizeLine;

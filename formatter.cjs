@@ -448,14 +448,14 @@ const PRESET_TEMPLATES = {
 🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
     },
     fra: {
-        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K"||""]}{stream.quality::exists[""||"UNK"]}`,
+        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K UHD"||""]}{stream.quality::exists[""||"UNK"]}`,
         description: `{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
 ✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}{stream.indexer::exists[" • {stream.indexer}"||""]}
 {stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}
-{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{service.cached::isfalse[" / 👥 ❯ {stream.seeders}"||""]}
+{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{stream.seeders::>0[" 👥 ❯ {stream.seeders}"||""]}
 {stream.audioTags::exists["🔉 ❯ {stream.audioTags::join(' • ')}"||""]}
-{stream.folderName::exists["📂 ❯ {stream.folderName}
-"||""]}{stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
+{stream.folderName::exists["📂 ❯ {stream.folderName}"||""]}
+{stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
     },
     dav: {
         name: `{stream.resolution::exists["{stream.resolution::replace('2160p', '🎥4K UHD')::replace('1440p','🎬 QHD')::replace('1080p','📀 FHD')::replace('720p','💿 HD')::replace('576p','💩 Low Quality')::replace('480p','💩 Low Quality')::replace('360p','💩 Low Quality')::replace('240p','💩 Low Quality')::replace('144p','💩 Low Quality')}"||"❓ Unknown"]}`,

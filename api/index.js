@@ -7153,7 +7153,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         // AIOStreams: Explicitly pass sizes at root level if needed (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.sizeInBytes || 0),
+                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
                         behaviorHints: {
                             bingeGroup: 'uindex-realdebrid-optimized',
                             notWebReady: false,
@@ -7319,7 +7319,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         // AIOStreams: Explicitly pass sizes at root level (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.sizeInBytes || 0),
+                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
                         behaviorHints: {
                             bingeGroup: 'uindex-torbox-optimized',
                             notWebReady: false,
@@ -7470,7 +7470,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         url: streamUrl,
                         // AIOStreams (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.sizeInBytes || 0),
+                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
                         behaviorHints: {
                             bingeGroup: 'uindex-alldebrid-optimized',
                             notWebReady: false,
@@ -7593,7 +7593,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         // AIOStreams (Ensure NUMBER)
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.sizeInBytes || 0),
+                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
 
                         behaviorHints: {
                             bingeGroup: 'uindex-p2p',

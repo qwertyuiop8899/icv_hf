@@ -449,23 +449,24 @@ const PRESET_TEMPLATES = {
     },
     fra: {
         name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K"||""]}{stream.quality::exists[""||"UNK"]}`,
-        description: `📄 ❯ {stream.filename}
-{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
+        description: `{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
 ✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}{stream.indexer::exists[" • {stream.indexer}"||""]}
 {stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}
 {stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{service.cached::isfalse[" / 👥 ❯ {stream.seeders}"||""]}
-{stream.audioTags::exists["🔉 ❯ {stream.audioTags::join(' • ')}"||""]}`
+{stream.audioTags::exists["🔉 ❯ {stream.audioTags::join(' • ')}"||""]}
+{stream.folderName::exists["📂 ❯ {stream.folderName}
+"||""]}{stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
     },
     dav: {
         name: `{stream.resolution::exists["{stream.resolution::replace('2160p', '🎥4K UHD')::replace('1440p','🎬 QHD')::replace('1080p','📀 FHD')::replace('720p','💿 HD')::replace('576p','💩 Low Quality')::replace('480p','💩 Low Quality')::replace('360p','💩 Low Quality')::replace('240p','💩 Low Quality')::replace('144p','💩 Low Quality')}"||"❓ Unknown"]}`,
         description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}
 "||""]}{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}
 {stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}
-{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}
-"||""]}{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}
+{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}
+{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}
 {service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]}{stream.type::=p2p["⚠️ P2P "||""]}{stream.type::=http["💻 Web Link "||""]}{stream.type::=youtube["▶️ Youtube "||""]}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}
-{stream.folderName::exists["📂 {stream.folderName}
-"||""]}{stream.filename::exists["📄 {stream.filename}"||""]}`
+{stream.folderName::exists["📂 {stream.folderName}"||""]}
+{stream.filename::exists["📄 {stream.filename}"||""]}`
     },
     and: {
         name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,

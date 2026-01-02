@@ -6898,7 +6898,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         // If cached=false or undefined, we should re-check
                         const isConfirmedCached = dbCachedResults[h]?.cached === true;
                         const inUserDownloaded = userDownloadedHashes.has(h);
-                        return !isConfirmedCached && !inUserDownloaded;
+
+                        // ✅ NEW: Also re-check if cached but missing file_title (for packs)
+                        const hasFileTitle = !!dbCachedResults[h]?.file_title;
+                        const needsFileTitle = isConfirmedCached && !hasFileTitle;
+
+                        return (!isConfirmedCached && !inUserDownloaded) || needsFileTitle;
                     });
 
                     if (uncachedHashes.length > 0 && config.rd_key) {
@@ -7341,8 +7346,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
+                    // Relaxed check: valid if we have specific file_title differing from torrent title
                     const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        ? (result.file_title && result.file_title !== result.title)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY

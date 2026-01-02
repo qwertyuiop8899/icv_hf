@@ -7233,7 +7233,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility: provide file size and name for dedup
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7437,7 +7437,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7618,7 +7618,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
                         },
                         _meta: {
                             infoHash: result.infoHash,
@@ -7769,7 +7769,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             notWebReady: true,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(result.file_title || result.filename || result.title ? { filename: result.file_title || result.filename || result.title } : {})
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
                         },
                         _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
                     };

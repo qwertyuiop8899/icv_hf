@@ -259,8 +259,8 @@ async function updateRdCacheStatus(cacheResults) {
       // ✅ UPSERT: Insert minimal row if doesn't exist, then update cache status
       // This ensures external addon results (not in torrents table) still get cached
       const upsertQuery = `
-        INSERT INTO torrents (info_hash, cached_rd, last_cached_check, file_title, title, provider, type)
-        VALUES ($1, $2, NOW(), $3, $4, 'rd_cache', 'series')
+        INSERT INTO torrents (info_hash, cached_rd, last_cached_check, file_title, title, provider, type, upload_date)
+        VALUES ($1, $2, NOW(), $3, $4, 'rd_cache', 'series', NOW())
         ON CONFLICT (info_hash) DO UPDATE SET
           cached_rd = EXCLUDED.cached_rd,
           last_cached_check = NOW(),

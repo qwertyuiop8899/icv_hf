@@ -53,7 +53,7 @@ function decodeHtmlEntities(text) {
 }
 
 // ✅ DEBUG MODE
-const DEBUG_MODE = false;
+const DEBUG_MODE = true;
 
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
@@ -6398,7 +6398,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
                         return false;
                     } else {
-                        console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
+                        if (DEBUG_MODE) console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
                     }
                 }
             }
@@ -6564,12 +6564,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
             if (!bestResults.has(hash)) {
                 bestResults.set(hash, result);
-                console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
+                if (DEBUG_MODE) console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
             } else {
                 const existing = bestResults.get(hash);
-                console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
-                console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
-                console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
+                if (DEBUG_MODE) console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
+                if (DEBUG_MODE) console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
+                if (DEBUG_MODE) console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
                 const existingLangInfo = getLanguageInfo(existing.title, italianTitle, existing.source);
 
                 let isNewBetter = false;
@@ -6597,22 +6597,22 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 if (isNewBetter) {
-                    console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
+                    if (DEBUG_MODE) console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
                     // Preserve file_title from existing if new doesn't have it
                     if (!result.file_title && existing.file_title) {
                         result.file_title = existing.file_title;
                         result.fileIndex = existing.fileIndex;
-                        console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
+                        if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
                     }
                     bestResults.set(hash, result);
                 } else {
-                    console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
+                    if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
                     // Preserve file_title from new if existing doesn't have it
                     if (!existing.file_title && result.file_title) {
                         existing.file_title = result.file_title;
                         existing.fileIndex = result.fileIndex;
                         bestResults.set(hash, existing); // Update map with modified object
-                        console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
+                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
                     }
                 }
             }
@@ -6740,7 +6740,25 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
 
                     if (i > 0) {
-                        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                        // 🧠 SMART DELAY: Don't wait if we have cached file info in DB!
+                        // This removes the 200ms delay for cached content
+                        if (DEBUG_MODE) console.log(`🕵️ [SCRAPE VERIFY] Checking DB cache for hash: ${infoHash.substring(0, 8)}...`);
+
+                        let isCached = false;
+                        try {
+                            // Quick check if files exist in DB cache for this hash
+                            const currentFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                            if (currentFiles && currentFiles.length > 0) {
+                                isCached = true;
+                                if (DEBUG_MODE) console.log(`⚡ [SCRAPE VERIFY] Cache HIT for ${infoHash.substring(0, 8)} - Skipping delay!`);
+                            }
+                        } catch (e) {
+                            if (DEBUG_MODE) console.warn(`⚠️ [SCRAPE VERIFY] DB check failed, using safe delay: ${e.message}`);
+                        }
+
+                        if (!isCached) {
+                            await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                        }
                     }
 
                     console.log(`📦 [SCRAPE VERIFY] (${i + 1}/${toVerify.length}) Checking "${result.title.substring(0, 50)}..."`);
@@ -7171,93 +7189,55 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
                     const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
 
+                    // Define sizes for display logic
+                    const episodeSize = Number(result.file_size) || 0;
+                    const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
+
                     if (type === 'movie') {
                         if (isPack) {
-                            // Pack: For AIOStreams, put pack on first line, file on second (AIO parses first line as context)
                             if (config.aiostreams_mode) {
-                                // AIOStreams format: Pack name on line 1, file on line 2
-                                // behaviorHints.filename provides the actual filename for parsing
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${cleanFileTitle}`;
                             } else {
-                                // Normal mode: pack first, file second
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${cleanFileTitle}`;
                             }
                         } else {
-                            // Single movie: show ONLY the filename
                             titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
                     } else {
                         // SERIES logic
                         if (isPack) {
                             if (result.file_title) {
-                                // Pack with resolved file title
-                                if (config.aiostreams_mode) {
-                                    // AIOStreams: pack on line 1, file on line 2
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${cleanFileTitle}`;
-                                } else {
-                                    // Normal mode: pack first, file second
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${cleanFileTitle}`;
-                                }
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${cleanFileTitle}`;
                             } else if (season && episode && mediaDetails) {
                                 const seasonStr = String(season).padStart(2, '0');
                                 const episodeStr = String(episode).padStart(2, '0');
-                                if (config.aiostreams_mode) {
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                                } else {
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                                }
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
                             } else {
-                                if (config.aiostreams_mode) {
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${cleanMainFilename}`;
-                                } else {
-                                    titleLine1 = `🗳️ ${result.title}`;
-                                    titleLine2 = `📂 ${cleanMainFilename}`;
-                                }
+                                titleLine1 = `🗳️ ${result.title}`;
+                                titleLine2 = `📂 ${cleanMainFilename}`;
                             }
                         } else {
-                            // Single episode: show ONLY the filename
                             titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
                     }
 
-
                     // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
                     let sizeLine;
-                    // For packs: packSize should be the original pack size, episodeSize is the individual file
-                    // If packSize wasn't set, use sizeInBytes as the pack size when we have file_size
-                    // Force Number() to avoid string comparison issues
-                    const episodeSize = Number(result.file_size) || 0;
-                    const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
-
-                    // Debug: log sizes
-                    if (isPack) {
-                        console.log(`📦 [SIZE DEBUG] Pack: "${result.title.substring(0, 40)}..." packSize=${formatBytes(packSize)}, episodeSize=${formatBytes(episodeSize)}, sizeInBytes=${formatBytes(result.sizeInBytes || 0)}, rawPackSize=${formatBytes(result.packSize || 0)}`);
-                    }
 
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
                         // Pack with known episode size: show both
-                        // ✅ AIOStreams: Use separate line for folderSize so regex can potentially extract it
                         if (config.aiostreams_mode) {
-                            // Format: "💾 pack / file" - AIOStreams extracts first size as stream.size
-                            // But we want file size as stream.size, so put it first
                             sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
                         } else {
                             sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
                         }
-                        console.log(`✅ [SIZE LINE] DUAL format: "${sizeLine}" (isPack=${isPack}, ep=${episodeSize}, pack=${packSize})`);
                     } else {
                         // Single file or pack without episode size
                         sizeLine = `💾 ${result.size || 'Unknown'}`;
-                        if (isPack) {
-                            console.log(`❌ [SIZE LINE] SINGLE format: "${sizeLine}" (isPack=${isPack}, ep=${episodeSize}, pack=${packSize}, condition: ep>0=${episodeSize > 0}, pack>0=${packSize > 0}, ep<pack=${episodeSize < packSize})`);
-                        }
                     }
 
                     // Languages
@@ -10321,3 +10301,4 @@ export default async function handler(req, res) {
         }));
     }
 }
+        }

@@ -937,6 +937,35 @@ async function insertEpisodeFiles(episodeFiles) {
   }
 }
 
+/**
+ * Get all files for a series pack from the DB
+ * @param {string} infoHash - InfoHash of the torrent
+ * @returns {Promise<Array>} Array of cached files
+ */
+async function getSeriesPackFiles(infoHash) {
+  if (!pool) throw new Error('Database not initialized');
+
+  try {
+    const query = `
+            SELECT file_index as id, title as path, size as bytes
+            FROM files 
+            WHERE info_hash = $1
+            ORDER BY file_index ASC
+        `;
+
+    const result = await pool.query(query, [infoHash.toLowerCase()]);
+    return result.rows.map(row => ({
+      id: row.id,
+      path: row.path,
+      bytes: parseInt(row.bytes),
+      selected: 1
+    }));
+  } catch (error) {
+    console.error(`❌ [DB] Error getting series pack files: ${error.message}`);
+    return [];
+  }
+}
+
 module.exports = {
   initDatabase,
   searchByImdbId,
@@ -955,6 +984,7 @@ module.exports = {
   searchPacksByImdbId,
   insertPackFiles,
   getPackFiles,
+  getSeriesPackFiles,
   updatePackAllImdbIds,
   insertEpisodeFiles,
   closeDatabase

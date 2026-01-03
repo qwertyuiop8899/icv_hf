@@ -5757,7 +5757,7 @@ async function handleStream(type, id, config, workerOrigin) {
         console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
 
         // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
-        console.log(`🔍 Starting live search...`);
+        console.log(`🔍 Starting parallel live search...`);
 
         // ✅ Initialize Jackettio if ENV vars are set
         let jackettioInstance = null;
@@ -5770,259 +5770,265 @@ async function handleStream(type, id, config, workerOrigin) {
             console.log('🔍 [Jackettio] Instance initialized (ITALIAN ONLY mode)');
         }
 
-        // 1️⃣ UINDEX: Logica Specifica - Priorità al titolo italiano pulito
+        const parallelSearchTasks = [];
+
+        // 1️⃣ TASK: UIndex
         if (useUIndex) {
-            const uindexQueries = [];
-            const seasonStr = String(season).padStart(2, '0');
+            parallelSearchTasks.push(async () => {
+                const uindexQueries = [];
+                const seasonStr = String(season).padStart(2, '0');
 
-            // ✅ Costruisci validationMetadata per UIndex (come Knaben)
-            const uindexValidationMetadata = {
-                titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
-                year: mediaDetails.year,
-                season: season ? parseInt(season, 10) : undefined,
-                episode: episode ? parseInt(episode, 10) : undefined,
-            };
-            console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
-
-            // 🇮🇹 PRIORITY: Italian title first (cleaned, without symbols)
-            if (italianTitle) {
-                const cleanedItalian = cleanTitleForSearch(italianTitle);
-                // Most specific to least specific
-                uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
-                uindexQueries.push(`${cleanedItalian} ita`);
-                uindexQueries.push(`${cleanedItalian} S${seasonStr}`);
-                uindexQueries.push(`${cleanedItalian}`);
-            }
-
-            // 🌍 FALLBACK: English title (only if different from Italian)
-            const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
-            const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-            if (cleanedEnglish !== cleanedItalian) {
-                uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
-                uindexQueries.push(`${cleanedEnglish} ita`);
-            }
-
-            const uniqueUindexQueries = [...new Set(uindexQueries)];
-            console.log(`📊 [UIndex] Running optimized queries (ITA priority):`, uniqueUindexQueries);
-
-            // Track if we found results with Italian title (to enable early-exit)
-            let foundWithItalianTitle = false;
-            const italianQueryCount = italianTitle ? 4 : 0; // First 4 queries are Italian title
-
-            for (let i = 0; i < uniqueUindexQueries.length; i++) {
-                const q = uniqueUindexQueries[i];
-
-                // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
-                if (foundWithItalianTitle && i >= italianQueryCount) {
-                    console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
-                    break;
-                }
-
-                try {
-                    const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
-                    if (res && res.length > 0) {
-                        console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
-                        rawResultsByProvider.UIndex.push(...res);
-
-                        // Mark that we found results with Italian title queries
-                        if (i < italianQueryCount && rawResultsByProvider.UIndex.length >= 5) {
-                            foundWithItalianTitle = true;
-                        }
-                    }
-                } catch (e) {
-                    console.error(`❌ [UIndex] Error searching "${q}":`, e.message);
-                }
-                await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
-            }
-        }
-
-        // 2️⃣ MAIN LOOP: CorsaroNero, Knaben, Jackettio (Query Complete)
-        // 🛑 EARLY EXIT LOGIC: Track results from Italian title queries vs English fallback
-        let foundWithItalianTitleQueries = 0; // Count results from Italian title queries
-        const cleanedItalianTitle = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-        const cleanedEnglishTitle = cleanTitleForSearch(mediaDetails.title || '');
-
-        for (const query of finalSearchQueries) {
-            // 🛑 EARLY EXIT: If we found good results with Italian title queries, skip English fallback
-            const isEnglishFallbackQuery = cleanedEnglishTitle &&
-                query.toLowerCase().startsWith(cleanedEnglishTitle) &&
-                !query.toLowerCase().includes(cleanedItalianTitle);
-
-            if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
-                console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
-                continue; // Skip this query, don't break - we might have more ITA queries after
-            }
-
-            console.log(`\n🔍 Searching sources for: "${query}"`);
-
-            // Stop searching if we have a good number of results (checking total accumulated)
-            const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
-            if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
-                console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
-                break;
-            }
-
-            const searchPromises = [];
-
-            // 🔥 FILTER: Skip Knaben for Corsaro-specific queries (Stagione/Completa)
-            const isCorsaroSpecific = query.match(/\b(stagione\s+\d+|serie\s+completa)\b/i);
-
-            // CorsaroNero
-            if (useCorsaroNero) {
-                if (!skipLiveSearch) {
-                    searchPromises.push({
-                        name: 'CorsaroNero',
-                        promise: fetchCorsaroNeroData(query, searchType)
-                    });
-                }
-            }
-
-            // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
-            if (useKnaben) {
-                // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
-                // Build metadata object for Knaben API
-                const knabenMetadata = {
-                    primaryTitle: mediaDetails.title,
-                    title: mediaDetails.title,
-                    titles: mediaDetails.titles || [mediaDetails.title],
+                // ✅ Costruisci validationMetadata per UIndex (come Knaben)
+                const uindexValidationMetadata = {
+                    titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
                     year: mediaDetails.year,
-                    imdbId: mediaDetails.imdbId,
-                    tmdbId: mediaDetails.tmdbId,
-                    absoluteEpisode: mediaDetails.absoluteEpisode,
-                };
-
-                // Build parsedId for Knaben
-                const knabenParsedId = {
-                    mediaType: searchType,
-                    season: season,
-                    episode: episode,
-                };
-
-                searchPromises.push({
-                    name: 'Knaben',
-                    promise: fetchKnabenData(query, searchType, knabenMetadata, knabenParsedId)
-                });
-            }
-
-            // TorrentGalaxy
-            if (useTorrentGalaxy) {
-                const tgxMetadata = {
-                    primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
-                    title: originalTitle || mediaDetails.title,
-                    year: mediaDetails.year,
-                    titles: [cleanedItalianTitle, originalTitle, mediaDetails.title].filter(Boolean),
-                };
-                const tgxParsedId = {
                     season: season ? parseInt(season, 10) : undefined,
                     episode: episode ? parseInt(episode, 10) : undefined,
                 };
+                console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
 
-                searchPromises.push({
-                    name: 'TorrentGalaxy',
-                    promise: fetchTorrentGalaxyData(query, searchType, tgxMetadata, tgxParsedId)
-                });
-            }
+                // 🇮🇹 PRIORITY: Italian title first (cleaned, without symbols)
+                if (italianTitle) {
+                    const cleanedItalian = cleanTitleForSearch(italianTitle);
+                    // Most specific to least specific
+                    uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
+                    uindexQueries.push(`${cleanedItalian} ita`);
+                    uindexQueries.push(`${cleanedItalian} S${seasonStr}`);
+                    uindexQueries.push(`${cleanedItalian}`);
+                }
 
-            // Jackettio
-            if (jackettioInstance) {
-                searchPromises.push({
-                    name: 'Jackettio',
-                    promise: fetchJackettioData(query, searchType, jackettioInstance)
-                });
-            }
+                // 🌍 FALLBACK: English title (only if different from Italian)
+                const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
+                const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                if (cleanedEnglish !== cleanedItalian) {
+                    uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
+                    uindexQueries.push(`${cleanedEnglish} ita`);
+                }
 
-            if (searchPromises.length === 0) {
-                continue;
-            }
+                const uniqueUindexQueries = [...new Set(uindexQueries)];
+                console.log(`📊 [UIndex] Running optimized queries (ITA priority):`, uniqueUindexQueries);
 
-            const results = await Promise.allSettled(searchPromises.map(sp => sp.promise));
+                // Track if we found results with Italian title (to enable early-exit)
+                let foundWithItalianTitle = false;
+                const italianQueryCount = italianTitle ? 4 : 0; // First 4 queries are Italian title
 
-            results.forEach((result, index) => {
-                const sourceName = searchPromises[index].name;
-                if (result.status === 'fulfilled' && result.value) {
-                    console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
-                    if (rawResultsByProvider[sourceName]) {
-                        rawResultsByProvider[sourceName].push(...result.value);
+                for (let i = 0; i < uniqueUindexQueries.length; i++) {
+                    const q = uniqueUindexQueries[i];
+
+                    // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
+                    if (foundWithItalianTitle && i >= italianQueryCount) {
+                        console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
+                        break;
                     }
 
-                    // 🛑 Track results from Italian title queries for early exit
-                    const isItalianTitleQuery = cleanedItalianTitle &&
-                        query.toLowerCase().includes(cleanedItalianTitle);
-                    if (isItalianTitleQuery && result.value.length > 0) {
-                        foundWithItalianTitleQueries += result.value.length;
-                        console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                    try {
+                        const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
+                        if (res && res.length > 0) {
+                            console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
+                            rawResultsByProvider.UIndex.push(...res);
+
+                            // Mark that we found results with Italian title queries
+                            if (i < italianQueryCount && rawResultsByProvider.UIndex.length >= 5) {
+                                foundWithItalianTitle = true;
+                            }
+                        }
+                    } catch (e) {
+                        console.error(`❌ [UIndex] Error searching "${q}":`, e.message);
                     }
-                } else if (result.status === 'rejected') {
-                    console.error(`❌ ${sourceName} search failed:`, result.reason);
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
                 }
             });
-
-            totalQueries++;
-            if (totalQueries < finalSearchQueries.length) {
-                await new Promise(resolve => setTimeout(resolve, 250));
-            }
         }
 
-        // 3️⃣ POST-PROCESSING: MOVED AFTER SEASON FILTERING
-        // We no longer filter by language here to avoid discarding correct English seasons 
-        // when only incorrect Italian seasons are found.
-        // See "LANGUAGE FILTERING (Post-Season Filter)" below.
+        // 2️⃣ TASK: Main Loop (Corsaro, Knaben, Galaxy, Jackettio)
+        parallelSearchTasks.push(async () => {
+            // 🛑 EARLY EXIT LOGIC: Track results from Italian title queries vs English fallback
+            let foundWithItalianTitleQueries = 0; // Count results from Italian title queries
+            const cleanedItalianTitle = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+            const cleanedEnglishTitle = cleanTitleForSearch(mediaDetails.title || '');
 
-        // ✅ 4️⃣ EXTERNAL ADDONS: Fetch from Torrentio, MediaFusion, Comet in parallel
+            for (const query of finalSearchQueries) {
+                // 🛑 EARLY EXIT: If we found good results with Italian title queries, skip English fallback
+                const isEnglishFallbackQuery = cleanedEnglishTitle &&
+                    query.toLowerCase().startsWith(cleanedEnglishTitle) &&
+                    !query.toLowerCase().includes(cleanedItalianTitle);
 
-        if (enabledExternalAddons.length > 0) {
-            console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
-
-            // Build Stremio-format ID for addon APIs
-            let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
-            if (type === 'series' && season && episode) {
-                stremioId = `${stremioId}:${season}:${episode}`;
-            }
-
-            try {
-                const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
-
-                if (externalResults.length > 0) {
-                    console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
-                    rawResultsByProvider.ExternalAddons.push(...externalResults);
-                } else {
-                    console.log(`⚠️ [External Addons] No results received`);
+                if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
+                    console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
+                    continue; // Skip this query, don't break - we might have more ITA queries after
                 }
-            } catch (externalError) {
-                console.error(`❌ [External Addons] Error:`, externalError.message);
-            }
-        }
 
-        // ✅ 5️⃣ RARBG (Standalone Proxy)
-        if (config.use_rarbg !== false) {
-            // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
-            const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
-            console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
-            try {
-                // Timeout 4500ms come richiesto
-                // Build Stremio-format ID
+                console.log(`\n🔍 Searching sources for: "${query}"`);
+
+                // Stop searching if we have a good number of results (checking total accumulated)
+                const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
+                if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
+                    console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
+                    break;
+                }
+
+                const searchPromises = [];
+
+                // CorsaroNero
+                if (useCorsaroNero) {
+                    if (!skipLiveSearch) {
+                        searchPromises.push({
+                            name: 'CorsaroNero',
+                            promise: fetchCorsaroNeroData(query, searchType)
+                        });
+                    }
+                }
+
+                // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
+                if (useKnaben) {
+                    // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
+                    // Build metadata object for Knaben API
+                    const knabenMetadata = {
+                        primaryTitle: mediaDetails.title,
+                        title: mediaDetails.title,
+                        titles: mediaDetails.titles || [mediaDetails.title],
+                        year: mediaDetails.year,
+                        imdbId: mediaDetails.imdbId,
+                        tmdbId: mediaDetails.tmdbId,
+                        absoluteEpisode: mediaDetails.absoluteEpisode,
+                    };
+
+                    // Build parsedId for Knaben
+                    const knabenParsedId = {
+                        mediaType: searchType,
+                        season: season,
+                        episode: episode,
+                    };
+
+                    searchPromises.push({
+                        name: 'Knaben',
+                        promise: fetchKnabenData(query, searchType, knabenMetadata, knabenParsedId)
+                    });
+                }
+
+                // TorrentGalaxy
+                if (useTorrentGalaxy) {
+                    const tgxMetadata = {
+                        primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
+                        title: originalTitle || mediaDetails.title,
+                        year: mediaDetails.year,
+                        titles: [cleanedItalianTitle, originalTitle, mediaDetails.title].filter(Boolean),
+                    };
+                    const tgxParsedId = {
+                        season: season ? parseInt(season, 10) : undefined,
+                        episode: episode ? parseInt(episode, 10) : undefined,
+                    };
+
+                    searchPromises.push({
+                        name: 'TorrentGalaxy',
+                        promise: fetchTorrentGalaxyData(query, searchType, tgxMetadata, tgxParsedId)
+                    });
+                }
+
+                // Jackettio
+                if (jackettioInstance) {
+                    searchPromises.push({
+                        name: 'Jackettio',
+                        promise: fetchJackettioData(query, searchType, jackettioInstance)
+                    });
+                }
+
+                if (searchPromises.length === 0) {
+                    continue;
+                }
+
+                const results = await Promise.allSettled(searchPromises.map(sp => sp.promise));
+
+                results.forEach((result, index) => {
+                    const sourceName = searchPromises[index].name;
+                    if (result.status === 'fulfilled' && result.value) {
+                        console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
+                        if (rawResultsByProvider[sourceName]) {
+                            rawResultsByProvider[sourceName].push(...result.value);
+                        }
+
+                        // 🛑 Track results from Italian title queries for early exit
+                        const isItalianTitleQuery = cleanedItalianTitle &&
+                            query.toLowerCase().includes(cleanedItalianTitle);
+                        if (isItalianTitleQuery && result.value.length > 0) {
+                            foundWithItalianTitleQueries += result.value.length;
+                            console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                        }
+                    } else if (result.status === 'rejected') {
+                        console.error(`❌ ${sourceName} search failed:`, result.reason);
+                    }
+                });
+
+                totalQueries++;
+                if (totalQueries < finalSearchQueries.length) {
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                }
+            }
+        });
+
+        // 3️⃣ TASK: External Addons
+        if (enabledExternalAddons.length > 0) {
+            parallelSearchTasks.push(async () => {
+                console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+
+                // Build Stremio-format ID for addon APIs
                 let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
                 if (type === 'series' && season && episode) {
                     stremioId = `${stremioId}:${season}:${episode}`;
                 }
 
-                const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
-                if (rarbgRes && rarbgRes.length > 0) {
-                    console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
-                    rawResultsByProvider.RARBG = rarbgRes.map(r => ({
-                        title: r.title,
-                        link: r.magnet,
-                        size: r.size,
-                        seeders: r.seeders,
-                        quality: r.quality,  // ✅ Add quality from RARBG
-                        source: "RARBG",
-                        infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
-                    }));
+                try {
+                    const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
+
+                    if (externalResults.length > 0) {
+                        console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                        rawResultsByProvider.ExternalAddons.push(...externalResults);
+                    } else {
+                        console.log(`⚠️ [External Addons] No results received`);
+                    }
+                } catch (externalError) {
+                    console.error(`❌ [External Addons] Error:`, externalError.message);
                 }
-            } catch (e) {
-                console.log(`❌ [RARBG] Error: ${e.message}`);
-            }
+            });
         }
+
+        // 4️⃣ TASK: RARBG
+        if (config.use_rarbg !== false) {
+            parallelSearchTasks.push(async () => {
+                // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
+                const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
+                console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
+                try {
+                    // Timeout 4500ms come richiesto
+                    // Build Stremio-format ID
+                    let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
+                    if (type === 'series' && season && episode) {
+                        stremioId = `${stremioId}:${season}:${episode}`;
+                    }
+
+                    const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
+                    if (rarbgRes && rarbgRes.length > 0) {
+                        console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
+                        rawResultsByProvider.RARBG = rarbgRes.map(r => ({
+                            title: r.title,
+                            link: r.magnet,
+                            size: r.size,
+                            seeders: r.seeders,
+                            quality: r.quality,  // ✅ Add quality from RARBG
+                            source: "RARBG",
+                            infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
+                        }));
+                    }
+                } catch (e) {
+                    console.log(`❌ [RARBG] Error: ${e.message}`);
+                }
+            });
+        }
+
+        // 🚀 EXECUTE ALL TASKS PARALLELY
+        console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
+        await Promise.allSettled(parallelSearchTasks.map(task => task()));
+        console.log(`🏁 All parallel search tasks completed.`);
 
         // Merge finale
         const allRawResults = [

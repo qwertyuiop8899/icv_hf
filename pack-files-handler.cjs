@@ -345,59 +345,72 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     // Variable to track total pack size
     let totalPackSize = 0;
 
-    // 1. Prima cerca nel DB
-    if (dbHelper && typeof dbHelper.searchEpisodeFiles === 'function') {
+    // 1️⃣ CHECK DB CACHE for Index (Fastest, FREE)
+    // Check if we already have the file structure for this pack in local DB
+    if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
         try {
-            const dbFiles = await dbHelper.searchEpisodeFiles(seriesImdbId, season, episode);
+            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+            if (cachedFiles && cachedFiles.length > 0) {
+                console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
 
-            // Cerca specificamente per questo infoHash
-            const matchingFile = dbFiles.find(f => f.info_hash === infoHash);
-            if (matchingFile) {
-                console.log(`✅ [PACK-HANDLER] Found in DB: ${matchingFile.file_title} (${(matchingFile.file_size / 1024 / 1024 / 1024).toFixed(2)} GB)`);
-                // Get total pack size from torrents table
-                totalPackSize = matchingFile.torrent_size || 0;
-                return {
-                    fileIndex: matchingFile.file_index,
-                    fileName: matchingFile.file_title,
-                    fileSize: matchingFile.file_size,
-                    totalPackSize: totalPackSize,
-                    source: 'database'
-                };
+                // Calculate total pack size from cached files (approximate)
+                totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+
+                // Process cached files to find our target
+                // We use processSeriesPackFiles even though they are already in DB, 
+                // mainly to parse season/ep and find exact match consistently
+                const processed = await processSeriesPackFiles(cachedFiles, infoHash, seriesImdbId, season, dbHelper, null, totalPackSize);
+                const match = findEpisodeFile(processed, episode);
+
+                if (match) {
+                    console.log(`✅ [PACK-HANDLER] Cache Hit! Found matching file: ${match.title}`);
+                    return {
+                        fileIndex: match.file_index,
+                        fileName: match.title,
+                        fileSize: match.size,
+                        source: "DB_CACHE",
+                        totalPackSize
+                    };
+                } else {
+                    console.log(`⚠️ [PACK-HANDLER] Cache Miss: Pack is indexed but S${season}E${episode} not found. Skipping external lookup.`);
+                    // If we have index but no file, assume pack doesn't contain it. 
+                    // Do NOT fall back to RD to avoid rate limits on incomplete packs.
+                    return null;
+                }
             }
-        } catch (error) {
-            console.warn(`⚠️ [PACK-HANDLER] DB search failed: ${error.message}`);
+        } catch (err) {
+            console.warn(`⚠️ [PACK-HANDLER] DB Cache check failed: ${err.message}`);
         }
     }
 
-    // 2. Non nel DB → Chiama API Debrid
-    let filesResult = null;
+    // 2️⃣ EXTERNAL PROVIDER (Slow, Expensive)
+    let fetchedData = null;
 
-    if (config.rd_key) {
-        filesResult = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
-    } else if (config.torbox_key) {
-        filesResult = await fetchFilesFromTorbox(infoHash, config.torbox_key);
-    } else {
-        console.error('❌ [PACK-HANDLER] No debrid key provided');
+    try {
+        if (config.rd_key) {
+            fetchedData = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
+        } else if (config.torbox_key) {
+            fetchedData = await fetchFilesFromTorbox(infoHash, config.torbox_key);
+        }
+    } catch (e) {
+        console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from provider: ${e.message}`);
         return null;
     }
 
-    if (!filesResult || !filesResult.files || filesResult.files.length === 0) {
-        // console.error('❌ [PACK-HANDLER] Failed to get files from Debrid'); // OLD
-        // return null; // OLD
-        throw new Error('Failed to get files from Debrid (Empty result)'); // NEW
+    if (!fetchedData || !fetchedData.files) {
+        return null;
     }
 
-    // Calculate total pack size from all video files
-    const allVideoFiles = filesResult.files.filter(f => isVideoFile(f.path));
-    totalPackSize = allVideoFiles.reduce((sum, f) => sum + (f.bytes || 0), 0);
+    // Calculate total pack size from fresh fetch
+    totalPackSize = fetchedData.files.reduce((acc, f) => acc + f.bytes, 0);
 
-    // 3. Processa file e salva nel DB
     // Generate torrent title from first video file or hash
+    const allVideoFiles = fetchedData.files.filter(f => isVideoFile(f.path));
     const firstVideoFile = allVideoFiles[0];
     const generatedTitle = firstVideoFile ? firstVideoFile.path.split('/')[0] || firstVideoFile.path : `Pack-${infoHash.substring(0, 16)}`;
 
     const processedFiles = await processSeriesPackFiles(
-        filesResult.files,
+        fetchedData.files,
         infoHash,
         seriesImdbId,
         season,

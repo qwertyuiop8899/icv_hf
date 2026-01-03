@@ -5232,6 +5232,22 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // ✅ STEP 2: SEARCH DATABASE FIRST (if enabled)
         let dbResults = [];
+
+        // ✅ BUILD SELECTED PROVIDERS LIST from user config
+        // Maps config keys to actual DB provider names
+        const selectedProviders = [];
+        if (config.use_corsaronero !== false) selectedProviders.push('ilcorsaronero');
+        if (config.use_knaben !== false) selectedProviders.push('knaben');
+        if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
+        if (config.use_uindex !== false) selectedProviders.push('uindex');
+        if (config.use_rarbg === true) selectedProviders.push('rarbg');
+        // Always include rd_cache (personal torrents) and external addons
+        selectedProviders.push('rd_cache');
+        if (config.use_external_addons !== false) {
+            selectedProviders.push('torrentio', 'mediafusion', 'comet');
+        }
+        console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
+
         if (dbEnabled && mediaDetails.imdbId) {
             if (type === 'series') {
                 // ✅ SOLUZIONE KITSU 6: Use converted season/episode if available (from absolute episode)
@@ -5243,11 +5259,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     dbResults = await dbHelper.searchEpisodeFiles(
                         mediaDetails.imdbId,
                         parseInt(season),
-                        parseInt(episode)
+                        parseInt(episode),
+                        selectedProviders  // ✅ PROVIDER FILTER
                     );
 
                     // 🔥 ALSO search for season packs and complete packs (they don't have file_index)
-                    const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type);
+                    const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
                     console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
 
                     // Merge: episode files + packs
@@ -5255,7 +5272,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 } else {
                     // No season/episode available (Kitsu without TMDb conversion fallback)
                     console.log(`🎌 [Anime] No season mapping available, fetching all packs`);
-                    dbResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type);
+                    dbResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
                 }
             } else {
                 // Search for movie - both singles AND packs
@@ -5266,51 +5283,51 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
-                const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type);
+                const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
 
                 // Merge: packs first (with file_index), then regular
                 dbResults = [...(packResults || []), ...regularResults];
             }
+        }
 
-            // If found in DB, check if IDs are complete and convert if needed
-            if (dbResults.length > 0) {
-                console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
+        // If found in DB, check if IDs are complete and convert if needed
+        if (dbResults.length > 0) {
+            console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
 
-                // ✅ SOLUZIONE 3: Check if we need to complete IDs and update DB
-                const firstResult = dbResults[0];
-                if ((firstResult.imdb_id && !firstResult.tmdb_id) ||
-                    (!firstResult.imdb_id && firstResult.tmdb_id)) {
-                    console.log(`💾 [DB] Completing missing IDs for database results...`);
-                    const completed = await completeIds(
-                        firstResult.imdb_id,
-                        firstResult.tmdb_id,
-                        type === 'series' ? 'series' : 'movie'
-                    );
+            // ✅ SOLUZIONE 3: Check if we need to complete IDs and update DB
+            const firstResult = dbResults[0];
+            if ((firstResult.imdb_id && !firstResult.tmdb_id) ||
+                (!firstResult.imdb_id && firstResult.tmdb_id)) {
+                console.log(`💾 [DB] Completing missing IDs for database results...`);
+                const completed = await completeIds(
+                    firstResult.imdb_id,
+                    firstResult.tmdb_id,
+                    type === 'series' ? 'series' : 'movie'
+                );
 
-                    // Update mediaDetails with completed IDs
-                    if (completed.tmdbId && !mediaDetails.tmdbId) {
-                        mediaDetails.tmdbId = completed.tmdbId;
-                        console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
-                    }
-                    if (completed.imdbId && !mediaDetails.imdbId) {
-                        mediaDetails.imdbId = completed.imdbId;
-                        console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
-                    }
+                // Update mediaDetails with completed IDs
+                if (completed.tmdbId && !mediaDetails.tmdbId) {
+                    mediaDetails.tmdbId = completed.tmdbId;
+                    console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
+                }
+                if (completed.imdbId && !mediaDetails.imdbId) {
+                    mediaDetails.imdbId = completed.imdbId;
+                    console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
+                }
 
-                    // ✅ SOLUZIONE 3: Update DB with completed IDs (auto-repair)
-                    if (completed.imdbId || completed.tmdbId) {
-                        console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
-                        // Extract all info_hash from dbResults
-                        const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
-                        if (infoHashes.length > 0) {
-                            const updatedCount = await dbHelper.updateTorrentsWithIds(
-                                infoHashes,           // ALL hashes from DB results
-                                completed.imdbId,     // Populate missing imdb_id
-                                completed.tmdbId      // Populate missing tmdb_id
-                            );
-                            if (updatedCount > 0) {
-                                console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
-                            }
+                // ✅ SOLUZIONE 3: Update DB with completed IDs (auto-repair)
+                if (completed.imdbId || completed.tmdbId) {
+                    console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
+                    // Extract all info_hash from dbResults
+                    const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
+                    if (infoHashes.length > 0) {
+                        const updatedCount = await dbHelper.updateTorrentsWithIds(
+                            infoHashes,           // ALL hashes from DB results
+                            completed.imdbId,     // Populate missing imdb_id
+                            completed.tmdbId      // Populate missing tmdb_id
+                        );
+                        if (updatedCount > 0) {
+                            console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
                         }
                     }
                 }
@@ -5325,13 +5342,13 @@ async function handleStream(type, id, config, workerOrigin) {
             if (type === 'series' && season && episode) {
                 try {
                     // Get IMDb ID from TMDb torrents table
-                    const tmdbTorrents = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type);
+                    const tmdbTorrents = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
                     if (tmdbTorrents.length > 0 && tmdbTorrents[0].imdb_id) {
                         const imdbId = tmdbTorrents[0].imdb_id;
                         console.log(`💾 [DB] Found imdbId ${imdbId} from TMDb, searching episode files...`);
 
                         // Search episode files
-                        const episodeFiles = await dbHelper.searchEpisodeFiles(imdbId, parseInt(season), parseInt(episode));
+                        const episodeFiles = await dbHelper.searchEpisodeFiles(imdbId, parseInt(season), parseInt(episode), selectedProviders);
                         console.log(`💾 [DB] Found ${episodeFiles.length} files for S${season}E${episode}`);
 
                         // 🔥 ALSO get all torrents (for packs)
@@ -5344,11 +5361,11 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
                 } catch (err) {
                     console.error(`❌ [DB] Error searching episode files by TMDb:`, err.message);
-                    dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type);
+                    dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
                 }
             } else {
                 // For movies or when no episode info, use regular TMDb search
-                dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type);
+                dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
             }
 
             if (dbResults.length > 0) {

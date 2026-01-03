@@ -53,7 +53,7 @@ function decodeHtmlEntities(text) {
 }
 
 // ✅ DEBUG MODE
-const DEBUG_MODE = true;
+const DEBUG_MODE = false;
 
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
@@ -6953,12 +6953,15 @@ async function handleStream(type, id, config, workerOrigin) {
                         const isConfirmedCached = dbCachedResults[h]?.cached === true;
                         const inUserDownloaded = userDownloadedHashes.has(h);
 
-                        // ✅ NEW: Also re-check if cached but missing file_title (for packs)
-                        const hasFileTitle = !!dbCachedResults[h]?.file_title;
-                        const needsFileTitle = isConfirmedCached && !hasFileTitle;
-
-                        return (!isConfirmedCached && !inUserDownloaded) || needsFileTitle;
+                        return !isConfirmedCached && !inUserDownloaded;
                     });
+
+                    // ✅ ONE-TIME enrichment: Items cached but never had file_title checked
+                    // file_title === undefined means never checked, '' means checked but not found
+                    const needsFileTitleEnrichment = hashes.filter(h => {
+                        const dbEntry = dbCachedResults[h];
+                        return dbEntry?.cached === true && dbEntry?.file_title === undefined;
+                    }).slice(0, 3); // Max 3 per request to avoid slowdown
 
                     if (uncachedHashes.length > 0 && config.rd_key) {
                         console.log(`🔍 [RD Live Check] ${uncachedHashes.length} hashes without cache info`);
@@ -7006,6 +7009,33 @@ async function handleStream(type, id, config, workerOrigin) {
                                 rdCacheChecker.enrichCacheBackground(asyncItems, config.rd_key, dbHelper);
                                 console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
                             }
+                        }
+                    }
+
+                    // ✅ ONE-TIME: Enrich file_title for cached items that never had it checked
+                    if (needsFileTitleEnrichment.length > 0 && config.rd_key) {
+                        console.log(`📝 [File Title] Background enrichment for ${needsFileTitleEnrichment.length} cached items missing file_title...`);
+                        const enrichItems = needsFileTitleEnrichment.map(hash => {
+                            const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                            return result ? { hash, magnet: result.magnetLink } : null;
+                        }).filter(Boolean);
+
+                        if (enrichItems.length > 0) {
+                            // Fire-and-forget background enrichment
+                            rdCacheChecker.checkCacheSync(enrichItems, config.rd_key, enrichItems.length)
+                                .then(async (enrichResults) => {
+                                    const toSave = Object.entries(enrichResults).map(([hash, data]) => ({
+                                        hash,
+                                        cached: data.cached,
+                                        // Use '' (empty string) if no file_title found - this marks it as "checked"
+                                        file_title: data.file_title || ''
+                                    }));
+                                    if (toSave.length > 0 && dbEnabled) {
+                                        await dbHelper.updateRdCacheStatus(toSave);
+                                        console.log(`✅ [File Title] Enriched ${toSave.length} items (one-time)`);
+                                    }
+                                })
+                                .catch(err => console.warn(`⚠️ [File Title] Enrichment failed: ${err.message}`));
                         }
                     }
                 })()

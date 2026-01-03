@@ -14,7 +14,7 @@ const TORRENTIO_BASE_DOMAIN = process.env.TORRENTIO_BASE_URL || '';
 
 const EXTERNAL_ADDONS = {
     torrentio: {
-        baseUrl: TORRENTIO_BASE_DOMAIN ? `${TORRENTIO_BASE_DOMAIN}/oResults=false/aHR0cHM6Ly90b3JyZW50aW8uc3RyZW0uZnVuL3Byb3ZpZGVycz15dHMsZXp0dixyYXJiZywxMzM3eCx0aGVwaXJhdGViYXksa2lja2Fzc3RvcnJlbnRzLHRvcnJlbnRnYWxheHksbWFnbmV0ZGwsaG9ycmlibGVzdWJzLG55YWFzaSx0b2t5b3Rvc2hvLGFuaWRleCxydXRvcixydXRyYWNrZXIsY29tYW5kbyxibHVkdix0b3JyZW50OSxpbGNvcnNhcm9uZXJvLG1lam9ydG9ycmVudCx3b2xmbWF4NGssY2luZWNhbGlkYWQsYmVzdHRvcnJlbnRzfGxhbmd1YWdlPWl0YWxpYW58c29ydD1xdWFsaXR5c2l6ZXxxdWFsaXR5ZmlsdGVyPXRocmVlZCxzY3IsY2FtfGxpbWl0PTY=` : null,
+        baseUrl: TORRENTIO_BASE_DOMAIN ? `${TORRENTIO_BASE_DOMAIN}/oResults=false/aHR0cHM6Ly90b3JyZW50aW8uc3RyZW0uZnVuL3Byb3ZpZGVycz15dHMsZXp0dixyYXJiZywxMzM3eCx0aGVwaXJhdGViYXksa2lja2Fzc3RvcnJlbnRzLHRvcnJlbnRnYWxheHksbWFnbmV0ZGwsaG9ycmlibGVzdWJzLG55YWFzaSx0b2t5b3Rvc2hvLGFuaWRleCxydXRvcixydXRyYWNrZXIsY29tYW5kbyxibHVkdix0b3JyZW50OSxpbGNvcnNhcm9uZXJvLG1lam9ydG9ycmVudCx3b2xmbWF4NGssY2luZWNhbGlkYWQsYmVzdHRvcnJlbnRzfGxhbmd1YWdlPWl0YWxpYW58c29ydD1xdWFsaXR5c2l6ZXxxdWFsaXR5ZmlsdGVyPXRocmVlZCxzY3IsY2FtfGxpbWl0PTc=/manifest.json` : null,
         name: 'Torrentio',
         emoji: '🅣',
         timeout: 4500

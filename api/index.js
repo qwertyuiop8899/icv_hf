@@ -7164,9 +7164,15 @@ async function handleStream(type, id, config, workerOrigin) {
                     // 1. Check DB cache (saved by any user, valid < 5 days)
                     // 2. Check user's personal torrents (already added to their RD account)
                     // 3. No cache available
+
+                    // DEBUG: Log cache lookup
+                    if (rdCacheData) {
+                        console.log(`🔍 [Cache Debug] ${infoHashLower.substring(0, 8)}: cached=${rdCacheData.cached}, file_title=${rdCacheData.file_title?.substring(0, 30) || 'null'}`);
+                    }
+
                     if (rdCacheData?.cached) {
                         cacheType = 'global';
-                        console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title}`);
+                        console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title.substring(0, 50)}...`);
                     } else if (rdUserTorrent && rdUserTorrent.status === 'downloaded') {
                         cacheType = 'personal';
                         console.log(`👑 👤 Found in RD PERSONAL cache: ${result.title}`);

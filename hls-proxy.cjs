@@ -315,6 +315,236 @@ async function handleHlsProxy(req, res) {
 }
 
 /**
+ * Extract chapters from video using ffprobe
+ * @param {string} url - Video URL
+ * @returns {Promise<Array<{startTime: number, endTime: number, title: string}>>}
+ */
+async function getChapters(url) {
+    return new Promise((resolve) => {
+        const args = [
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '-show_chapters',
+            '-v', 'error',
+            '-of', 'json',
+            url
+        ];
+
+        console.log(`⏩ [HLS] Probing chapters...`);
+        const proc = spawn('ffprobe', args);
+
+        const timeout = setTimeout(() => {
+            console.warn('⏩ [HLS] Chapter probe timeout');
+            proc.kill('SIGKILL');
+            resolve([]);
+        }, 15000);
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => stdout += data);
+        proc.stderr.on('data', (data) => stderr += data);
+
+        proc.on('close', (code) => {
+            clearTimeout(timeout);
+            if (code !== 0) {
+                console.warn(`⏩ [HLS] Chapter probe failed: ${stderr}`);
+                return resolve([]);
+            }
+
+            try {
+                const data = JSON.parse(stdout);
+                if (!data.chapters || data.chapters.length === 0) return resolve([]);
+
+                const chapters = data.chapters.map(c => ({
+                    startTime: parseFloat(c.start_time),
+                    endTime: parseFloat(c.end_time),
+                    title: c.tags ? (c.tags.title || c.tags.TITLE || 'Chapter') : 'Chapter'
+                }));
+
+                console.log(`⏩ [HLS] Found ${chapters.length} chapters`);
+                resolve(chapters);
+            } catch (e) {
+                console.error(`⏩ [HLS] Chapter parse error: ${e.message}`);
+                resolve([]);
+            }
+        });
+    });
+}
+
+/**
+ * Generate fragmented HLS manifest with multiple segments
+ * Better compatibility than single-segment manifest
+ * @param {string} videoUrl - Video URL
+ * @param {number} duration - Total video duration
+ * @param {number} totalLength - Total file size in bytes
+ * @param {Object|null} skipPoints - {startTime, endTime, endOffset} or null
+ * @returns {string} M3U8 manifest
+ */
+function generateFragmentedManifest(videoUrl, duration, totalLength, skipPoints = null) {
+    const SEGMENT_DURATION = 10;
+    const headerSize = 5000000; // 5MB header
+    const realDuration = duration || 7200;
+    const avgBitrate = totalLength ? (totalLength / realDuration) : (2500000 / 8); // Fallback 2.5Mbps
+
+    let m3u8 = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:${SEGMENT_DURATION}
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:1.0,
+#EXT-X-BYTERANGE:${headerSize}@0
+${videoUrl}
+`;
+
+    let currentTime = 0;
+    let currentByte = headerSize;
+    const skipStart = skipPoints ? skipPoints.startTime : -1;
+    const skipEnd = skipPoints ? skipPoints.endTime : -1;
+    const skipEndByte = skipPoints ? skipPoints.endOffset : -1;
+
+    let segmentsAdded = 0;
+
+    while (currentTime < realDuration) {
+        // Handle Skip zone
+        if (skipPoints && currentTime >= skipStart && currentTime < skipEnd) {
+            // Jump to end of skip zone
+            currentTime = skipEnd;
+            currentByte = skipEndByte !== -1 ? skipEndByte : Math.floor(skipEnd * avgBitrate);
+            m3u8 += `#EXT-X-DISCONTINUITY\n`;
+            continue;
+        }
+
+        let segDur = Math.min(SEGMENT_DURATION, realDuration - currentTime);
+        let segLen = Math.floor(segDur * avgBitrate);
+
+        // Don't go past totalLength
+        if (totalLength && (currentByte + segLen) > totalLength) {
+            segLen = totalLength - currentByte;
+        }
+
+        if (segLen <= 0 && segmentsAdded > 0) break;
+
+        m3u8 += `#EXTINF:${segDur.toFixed(3)},
+#EXT-X-BYTERANGE:${segLen}@${currentByte}
+${videoUrl}
+`;
+
+        currentTime += segDur;
+        currentByte += segLen;
+        segmentsAdded++;
+
+        if (segmentsAdded > 2000) break; // Safety limit
+    }
+
+    m3u8 += `#EXT-X-ENDLIST`;
+    return m3u8;
+}
+
+/**
+ * Process and patch an external HLS playlist to skip intro
+ * Works with existing M3U8 playlists (not direct video files)
+ * @param {string} playlistUrl - External M3U8 URL
+ * @param {number|null} skipStart - Intro start time in seconds
+ * @param {number|null} skipEnd - Intro end time in seconds
+ * @returns {Promise<string>} Patched M3U8 content
+ */
+async function processExternalPlaylist(playlistUrl, skipStart = null, skipEnd = null) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(playlistUrl, {
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const originalM3u8 = await response.text();
+        const lines = originalM3u8.split('\n');
+
+        // Base URL for resolving relative segments
+        const urlObj = new URL(playlistUrl);
+        const pathDir = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1);
+        const baseUrl = `${urlObj.origin}${pathDir}`;
+        const queryParams = urlObj.search;
+
+        let patchedM3u8 = '';
+        let currentTime = 0;
+        let discontinuityPending = false;
+
+        const isMaster = originalM3u8.includes('#EXT-X-STREAM-INF');
+
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i].trim();
+            if (!line) continue;
+
+            if (line.startsWith('#')) {
+                if (line.startsWith('#EXTINF:')) {
+                    const durationStr = line.substring(8).split(',')[0];
+                    const duration = parseFloat(durationStr);
+
+                    // Skip logic (only for media playlists)
+                    if (!isMaster && skipStart !== null && skipEnd !== null) {
+                        const segmentStart = currentTime;
+                        const segmentEnd = currentTime + duration;
+
+                        const isBefore = segmentEnd <= skipStart;
+                        const isAfter = segmentStart >= skipEnd;
+
+                        if (!isBefore && !isAfter) {
+                            // Drop this segment (it's in the intro zone)
+                            currentTime += duration;
+                            discontinuityPending = true;
+                            i++; // Skip next line (URL)
+                            continue;
+                        }
+                    }
+
+                    currentTime += duration;
+                }
+
+                patchedM3u8 += line + '\n';
+            } else {
+                // This is a URL line
+                if (discontinuityPending) {
+                    patchedM3u8 += '#EXT-X-DISCONTINUITY\n';
+                    discontinuityPending = false;
+                }
+
+                let segmentUrl = line;
+                // Rewrite to absolute if relative
+                if (!segmentUrl.startsWith('http')) {
+                    segmentUrl = baseUrl + segmentUrl;
+                }
+
+                // Append original query params (token) if present
+                if (queryParams && !segmentUrl.includes('?')) {
+                    segmentUrl += queryParams;
+                } else if (queryParams) {
+                    segmentUrl += '&' + queryParams.substring(1);
+                }
+
+                patchedM3u8 += segmentUrl + '\n';
+            }
+        }
+
+        console.log(`⏩ [HLS] Patched external playlist, removed intro segments`);
+        return patchedM3u8;
+
+    } catch (e) {
+        console.error(`⏩ [HLS] Failed to process external playlist: ${e.message}`);
+        throw e;
+    }
+}
+
+/**
  * Clear offset cache
  */
 function clearCache() {
@@ -338,6 +568,9 @@ module.exports = {
     getByteOffset,
     generateSkipManifest,
     generateSpliceManifest,
+    generateFragmentedManifest,
+    processExternalPlaylist,
+    getChapters,
     clearCache,
     getCacheStats,
     isSafeUrl

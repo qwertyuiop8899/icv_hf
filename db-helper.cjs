@@ -408,7 +408,11 @@ async function batchInsertTorrents(torrents) {
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
             size = CASE WHEN torrents.size = 0 OR torrents.size IS NULL THEN EXCLUDED.size ELSE torrents.size END,
             seeders = GREATEST(EXCLUDED.seeders, torrents.seeders),
-            cached_rd = COALESCE(EXCLUDED.cached_rd, torrents.cached_rd),
+            cached_rd = CASE 
+              WHEN torrents.cached_rd = true THEN true  -- Never overwrite true with false
+              WHEN EXCLUDED.cached_rd = true THEN true  -- Allow updating to true
+              ELSE COALESCE(torrents.cached_rd, EXCLUDED.cached_rd)
+            END,
             last_cached_check = CASE 
               WHEN EXCLUDED.last_cached_check IS NOT NULL 
               THEN GREATEST(EXCLUDED.last_cached_check, COALESCE(torrents.last_cached_check, EXCLUDED.last_cached_check))

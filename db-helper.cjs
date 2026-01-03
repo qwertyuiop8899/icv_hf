@@ -256,18 +256,20 @@ async function updateRdCacheStatus(cacheResults) {
 
       const hashLower = result.hash.toLowerCase();
 
-      // ✅ UPSERT: Insert if not exists, then update cache status
+      // ✅ UPSERT: Insert if not exists, then update cache status and size
       // Required NOT NULL columns: info_hash, provider, title, type, upload_date
       const upsertQuery = `
         INSERT INTO torrents (
           info_hash, provider, title, type, upload_date, 
-          cached_rd, last_cached_check, file_title
+          cached_rd, last_cached_check, file_title, size
         )
-        VALUES ($1, 'rd_cache', $2, 'unknown', NOW(), $3, NOW(), $4)
+        VALUES ($1, 'rd_cache', $2, 'unknown', NOW(), $3, NOW(), $4, $5)
         ON CONFLICT (info_hash) DO UPDATE SET
           cached_rd = EXCLUDED.cached_rd,
           last_cached_check = NOW(),
-          file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title)
+          file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title),
+          size = COALESCE(EXCLUDED.size, torrents.size),
+          title = CASE WHEN torrents.provider = 'rd_cache' AND EXCLUDED.file_title IS NOT NULL THEN EXCLUDED.file_title ELSE torrents.title END
       `;
 
       // Use file_title as fallback title, or generate one from hash
@@ -277,7 +279,8 @@ async function updateRdCacheStatus(cacheResults) {
         hashLower,                           // $1 info_hash
         fallbackTitle,                       // $2 title  
         result.cached,                       // $3 cached_rd
-        result.file_title || null            // $4 file_title
+        result.file_title || null,           // $4 file_title
+        result.size || null                  // $5 size
       ];
 
       const res = await pool.query(upsertQuery, params);

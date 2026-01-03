@@ -6962,24 +6962,24 @@ async function handleStream(type, id, config, workerOrigin) {
                             console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
 
                             if (syncItems.length > 0) {
-                                const liveCheckResults = await rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit);
-
-                                // Merge live check results into rdCacheResults
-                                Object.assign(rdCacheResults, liveCheckResults);
-
-                                // Save live check results to DB for future queries
-                                if (dbEnabled) {
-                                    const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => ({
-                                        hash,
-                                        cached: data.cached,
-                                        file_title: data.file_title || null,  // ✅ Save file_title for deduplication
-                                        file_size: data.file_size || null     // ✅ Save file_size
-                                    }));
-                                    if (liveResultsToSave.length > 0) {
-                                        await dbHelper.updateRdCacheStatus(liveResultsToSave);
-                                        console.log(`💾 [DB] Saved ${liveResultsToSave.length} live check results to DB (with file info)`);
-                                    }
-                                }
+                                // 🚀 Fire-and-forget: Check RD cache in background (add/delete is slow!)
+                                // Users won't see "⚡" immediately for NEW items, but searching again instantly will show it.
+                                console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
+                                rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
+                                    .then(async (liveCheckResults) => {
+                                        // Save results to DB
+                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => ({
+                                            hash,
+                                            cached: data.cached,
+                                            file_title: data.file_title || null,
+                                            file_size: data.file_size || null
+                                        }));
+                                        if (liveResultsToSave.length > 0 && dbEnabled) {
+                                            await dbHelper.updateRdCacheStatus(liveResultsToSave);
+                                            console.log(`💾 [DB] Saved ${liveResultsToSave.length} background live check results`);
+                                        }
+                                    })
+                                    .catch(err => console.warn(`⚠️ [RD Cache] Background check failed: ${err.message}`));
                             }
 
                             // ASYNC: Process remaining hashes in background (local, non-blocking)

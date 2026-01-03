@@ -254,29 +254,27 @@ async function updateRdCacheStatus(cacheResults) {
     for (const result of cacheResults) {
       if (!result.hash) continue;
 
-      // ✅ NEW: Also update file_title if provided (for deduplication)
-      let query;
-      let params;
+      const hashLower = result.hash.toLowerCase();
 
-      if (result.file_title) {
-        // Update cache status AND file_title
-        query = `
-          UPDATE torrents 
-          SET cached_rd = $1, last_cached_check = NOW(), file_title = $3
-          WHERE info_hash = $2 AND (file_title IS NULL OR file_title = '')
-        `;
-        params = [result.cached, result.hash.toLowerCase(), result.file_title];
-      } else {
-        // Only update cache status (no file_title available)
-        query = `
-          UPDATE torrents 
-          SET cached_rd = $1, last_cached_check = NOW()
-          WHERE info_hash = $2
-        `;
-        params = [result.cached, result.hash.toLowerCase()];
-      }
+      // ✅ UPSERT: Insert minimal row if doesn't exist, then update cache status
+      // This ensures external addon results (not in torrents table) still get cached
+      const upsertQuery = `
+        INSERT INTO torrents (info_hash, cached_rd, last_cached_check, file_title, title, provider)
+        VALUES ($1, $2, NOW(), $3, $4, 'rd_cache')
+        ON CONFLICT (info_hash) DO UPDATE SET
+          cached_rd = EXCLUDED.cached_rd,
+          last_cached_check = NOW(),
+          file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title)
+      `;
 
-      const res = await pool.query(query, params);
+      const params = [
+        hashLower,
+        result.cached,
+        result.file_title || null,
+        result.file_title || `RD Cache ${hashLower.substring(0, 8)}` // Fallback title
+      ];
+
+      const res = await pool.query(upsertQuery, params);
       updated += res.rowCount;
     }
 

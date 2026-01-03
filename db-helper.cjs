@@ -256,25 +256,22 @@ async function updateRdCacheStatus(cacheResults) {
 
       const hashLower = result.hash.toLowerCase();
 
-      // ✅ UPSERT: Insert minimal row if doesn't exist, then update cache status
-      // This ensures external addon results (not in torrents table) still get cached
-      const upsertQuery = `
-        INSERT INTO torrents (info_hash, cached_rd, last_cached_check, file_title, title, provider, type, upload_date)
-        VALUES ($1, $2, NOW(), $3, $4, 'rd_cache', 'series', NOW())
-        ON CONFLICT (info_hash) DO UPDATE SET
-          cached_rd = EXCLUDED.cached_rd,
-          last_cached_check = NOW(),
-          file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title)
+      // ✅ UPDATE-ONLY: Only update existing rows, skip if not found
+      // This avoids NOT NULL constraint issues from missing columns
+      const updateQuery = `
+        UPDATE torrents 
+        SET cached_rd = $1, last_cached_check = NOW(), 
+            file_title = COALESCE(NULLIF($3, ''), file_title)
+        WHERE info_hash = $2
       `;
 
       const params = [
-        hashLower,
         result.cached,
-        result.file_title || null,
-        result.file_title || `RD Cache ${hashLower.substring(0, 8)}` // Fallback title
+        hashLower,
+        result.file_title || null
       ];
 
-      const res = await pool.query(upsertQuery, params);
+      const res = await pool.query(updateQuery, params);
       updated += res.rowCount;
     }
 

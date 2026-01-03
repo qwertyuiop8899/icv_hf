@@ -6119,7 +6119,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const seasonNum = parseInt(season);
                 const episodeNum = parseInt(episode);
                 const seriesImdbId = mediaDetails.imdbId;
-                const MAX_PACK_VERIFY = 20;
+                const MAX_PACK_VERIFY = 6;
                 const DELAY_MS = 200; // Balance between rate limiting and speed
 
                 // Separate verified (in DB) from unverified packs
@@ -6616,6 +6616,31 @@ async function handleStream(type, id, config, workerOrigin) {
         console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
         // --- FINE NUOVA LOGICA ---
 
+        // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
+        if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
+            try {
+                const torrentsToSave = results
+                    .filter(r => r.infoHash) // Only save if we have infoHash
+                    .map(r => ({
+                        infoHash: r.infoHash.toLowerCase(),
+                        title: r.title || r.websiteTitle || 'Unknown',
+                        provider: r.source || r.externalAddon || 'unknown',
+                        size: r.sizeInBytes || null,
+                        type: type,
+                        seeders: r.seeders || 0,
+                        imdbId: mediaDetails.imdbId || null,
+                        tmdbId: mediaDetails.tmdbId || null
+                    }));
+
+                if (torrentsToSave.length > 0) {
+                    const inserted = await dbHelper.batchInsertTorrents(torrentsToSave);
+                    console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} torrents from all sources to DB`);
+                }
+            } catch (dbSaveError) {
+                console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
+            }
+        }
+
         if (!results || results.length === 0) {
             console.log('❌ No results found from any source after all fallbacks');
             return { streams: [] };
@@ -6663,7 +6688,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const seasonNum = parseInt(season);
                 const episodeNum = parseInt(episode);
                 const seriesImdbId = mediaDetails.imdbId;
-                const MAX_PACK_VERIFY = 20;
+                const MAX_PACK_VERIFY = 6;
                 const DELAY_MS = 200; // Balance between rate limiting and speed
 
                 // Separate verified from unverified packs

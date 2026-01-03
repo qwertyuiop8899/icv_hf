@@ -6875,11 +6875,29 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // Only apply if we actually filter something out
                 if (italianOnly.length < originalCount) {
-                    console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
+                    // console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
+
+                    // ✅ STRICT FILTER: Even if we keep non-Italian as fallback for display,
+                    // we mark them so they don't get saved to the DB if the user wants strict DB
+                    // Actually, user said "non ita non metterli nel db".
+                    // So we will just STRICTLY filter them out here if Italians are found.
+                    // But if NO Italians are found, we might want to return them for viewing but NOT save them.
+
+                    // Current implementation: filteredResults = italianOnly;
+                    // This already hides them from view AND DB because we continue with `filteredResults`.
                     filteredResults = italianOnly;
                 }
             } else {
-                console.log(`🌍 [Lang Filter] No Italian results for correct season. Keeping all ${filteredResults.length} international results.`);
+                // No Italian results found.
+                // User said: "non ita non metterli nel db... non servono..."
+                // If we want to prevent them from hitting the DB, we must filter them out.
+                // BUT if we filter them out here, the user sees "No streams".
+                // If we want to show them but not save them, we need a flag.
+                // Let's implement Strict Filtering: If no ITA, return NOTHING (or keep logic but block DB save).
+                // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
+
+                console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
+                filteredResults.forEach(r => r.skipDbSave = true);
             }
         }
 
@@ -6930,8 +6948,23 @@ async function handleStream(type, id, config, workerOrigin) {
                     // STEP 4: Save user's personal cache to DB (becomes global cache for all users)
                     if (dbEnabled && rdUserTorrents.length > 0) {
                         const userCacheToSave = rdUserTorrents
-                            .filter(t => t.hash && t.status === 'downloaded' && hashes.includes(t.hash.toLowerCase()))
-                            .map(t => ({ hash: t.hash.toLowerCase(), cached: true }));
+                            .filter(t => {
+                                if (!t.hash || t.status !== 'downloaded') return false;
+                                const hLower = t.hash.toLowerCase();
+                                if (!hashes.includes(hLower)) return false;
+
+                                // ✅ STRICT DB FILTER
+                                const res = filteredResults.find(r => r.infoHash?.toLowerCase() === hLower);
+                                if (res?.skipDbSave) return false;
+
+                                return true;
+                            })
+                            .map(t => ({
+                                hash: t.hash.toLowerCase(),
+                                cached: true,
+                                file_title: t.filename,
+                                size: t.bytes
+                            }));
 
                         if (userCacheToSave.length > 0) {
                             await dbHelper.updateRdCacheStatus(userCacheToSave);
@@ -6969,6 +7002,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         // Build items array with hash and magnet for checking
                         const itemsToCheck = uncachedHashes.map(hash => {
                             const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                            // ✅ STRICT DB FILTER: Don't live-check non-ITA items
+                            if (result?.skipDbSave) return null;
                             return result ? { hash, magnet: result.magnetLink } : null;
                         }).filter(Boolean);
 
@@ -6989,12 +7024,20 @@ async function handleStream(type, id, config, workerOrigin) {
                                 rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
                                     .then(async (liveCheckResults) => {
                                         // Save results to DB
-                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => ({
-                                            hash,
-                                            cached: data.cached,
-                                            file_title: data.file_title || null,
-                                            file_size: data.file_size || null
-                                        }));
+                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
+                                            // Ensure not blocked by strict filter
+                                            const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                            if (originalResult?.skipDbSave) {
+                                                return null;
+                                            }
+                                            return {
+                                                hash,
+                                                cached: data.cached,
+                                                file_title: data.file_title || null,
+                                                file_size: data.file_size || null
+                                            };
+                                        }).filter(Boolean);
+
                                         if (liveResultsToSave.length > 0 && dbEnabled) {
                                             await dbHelper.updateRdCacheStatus(liveResultsToSave);
                                             console.log(`💾 [DB] Saved ${liveResultsToSave.length} background live check results`);

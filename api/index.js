@@ -6622,14 +6622,14 @@ async function handleStream(type, id, config, workerOrigin) {
                 const torrentsToSave = results
                     .filter(r => r.infoHash) // Only save if we have infoHash
                     .map(r => ({
-                        infoHash: r.infoHash.toLowerCase(),
+                        info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
                         title: r.title || r.websiteTitle || 'Unknown',
                         provider: r.source || r.externalAddon || 'unknown',
                         size: r.sizeInBytes || null,
                         type: type,
                         seeders: r.seeders || 0,
-                        imdbId: mediaDetails.imdbId || null,
-                        tmdbId: mediaDetails.tmdbId || null
+                        imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
+                        tmdb_id: mediaDetails.tmdbId || null   // snake_case for DB
                     }));
 
                 if (torrentsToSave.length > 0) {

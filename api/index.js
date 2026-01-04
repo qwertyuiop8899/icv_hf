@@ -5241,10 +5241,13 @@ async function handleStream(type, id, config, workerOrigin) {
         if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
         if (config.use_uindex !== false) selectedProviders.push('uindex');
         if (config.use_rarbg === true) selectedProviders.push('rarbg');
-        // Always include rd_cache (personal torrents) and external addons
+        // Always include rd_cache (personal torrents)
         selectedProviders.push('rd_cache');
+        // External addons: Check individual toggles
         if (config.use_external_addons !== false) {
-            selectedProviders.push('torrentio', 'mediafusion', 'comet');
+            if (config.use_torrentio !== false) selectedProviders.push('torrentio');
+            if (config.use_mediafusion !== false) selectedProviders.push('mediafusion');
+            if (config.use_comet !== false) selectedProviders.push('comet');
         }
         console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
 

@@ -79,10 +79,12 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     }
 
     // ✅ PROVIDER FILTER: Only return torrents from selected providers
+    // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
-      const placeholders = providers.map((_, i) => `$${paramIndex + i}`).join(', ');
-      query += ` AND provider IN (${placeholders})`;
-      params.push(...providers);
+      const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
+      query += ` AND (${patterns})`;
+      // Add % wildcards for partial matching (e.g., 'knaben' matches 'Knaben (1337x)')
+      params.push(...providers.map(p => `%${p}%`));
     }
 
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
@@ -139,10 +141,11 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     }
 
     // ✅ PROVIDER FILTER: Only return torrents from selected providers
+    // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
-      const placeholders = providers.map((_, i) => `$${paramIndex + i}`).join(', ');
-      query += ` AND provider IN (${placeholders})`;
-      params.push(...providers);
+      const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
+      query += ` AND (${patterns})`;
+      params.push(...providers.map(p => `%${p}%`));
     }
 
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
@@ -195,10 +198,11 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     const params = [imdbId, season, episode];
 
     // ✅ PROVIDER FILTER: Only return torrents from selected providers
+    // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
-      const placeholders = providers.map((_, i) => `$${4 + i}`).join(', ');
-      query += ` AND t.provider IN (${placeholders})`;
-      params.push(...providers);
+      const patterns = providers.map((p, i) => `t.provider ILIKE $${4 + i}`).join(' OR ');
+      query += ` AND (${patterns})`;
+      params.push(...providers.map(p => `%${p}%`));
     }
 
     query += `

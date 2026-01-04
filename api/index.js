@@ -1000,7 +1000,7 @@ async function fetchCorsaroNeroData(originalQuery, type = 'movie') {
  * Crea un pattern che matcha solo parole intere, non prefissi/suffissi
  */
 function createRegex(pattern) {
-    return new RegExp(`(?<![^\\s\\[(_\\-.,])(${pattern})(?=[\\s\\)\\]_.\\-,]|$)`, 'i');
+    return new RegExp(`(?<![^\\s\\[(_\\-.,])(${pattern})(?=[\\s\\)\\]_./\\-,]|$)`, 'i');
 }
 
 /**
@@ -1087,7 +1087,7 @@ const PARSE_REGEX = {
         'Spanish': createLanguageRegex('spanish|spa|esp'),
         'French': createLanguageRegex('french|fra|fr|vf|vff|vfi|vf2|vfq|truefrench'),
         'German': createLanguageRegex('deu(tsch)?(land)?|ger(man)?'),
-        'Italian': createRegex('italian|ita|sub[.\\s\\-_]?ita'),  // ✅ Include "ita", "italian", "sub ita", "subita"
+        'Italian': createRegex('italian|italiano|italia|ital|ita|sub[.\\s\\-_]?ita'),  // ✅ Include tutte le varianti italiane
         'Korean': createLanguageRegex('korean|kor'),
         'Hindi': createLanguageRegex('hindi|hin'),
         'Bengali': createLanguageRegex('bengali|ben(?![ .\\-_]?the[ .\\-_]?men)'),
@@ -6653,7 +6653,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
                         const title = r.title || r.websiteTitle || '';
                         const langInfo = getLanguageInfo(title);
-                        const isItalian = langInfo.isItalian || langInfo.isMulti;
+                        const isItalian = langInfo.isItalian;  // ✅ Solo ITA, NO Multi/Dual
 
                         if (!isItalian) {
                             console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);

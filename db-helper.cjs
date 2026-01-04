@@ -312,10 +312,14 @@ async function updateRdCacheStatus(cacheResults) {
       // Use file_title as fallback title, or generate one from hash
       const fallbackTitle = result.file_title || `RD-${hashLower.substring(0, 8)}`;
 
+      // ✅ FIX: Force cached_rd to true (we only call this for cached items)
+      // Previously result.cached could be undefined which would insert NULL
+      const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+
       const params = [
         hashLower,                           // $1 info_hash
         fallbackTitle,                       // $2 title  
-        result.cached,                       // $3 cached_rd
+        cachedValue,                         // $3 cached_rd (forced to true if undefined)
         result.file_title || null,           // $4 file_title
         result.size || null                  // $5 size
       ];

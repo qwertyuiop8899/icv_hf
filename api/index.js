@@ -8585,12 +8585,21 @@ export default async function handler(req, res) {
                     if (hasTB) services.push('📦');  // Box for Torbox
                     if (hasAD) services.push('🅰️');   // Red A for AllDebrid
 
+                    // Feature flags
+                    const hasFullIta = config.full_ita === true;
+                    const hasSkipIntro = config.introskip_enabled === true;
+
+                    // Build feature suffix: 🇮🇹 for FULL ITA, ⏩ for Skip Intro
+                    let featureSuffix = '';
+                    if (hasFullIta) featureSuffix += '🇮🇹';
+                    if (hasSkipIntro) featureSuffix += '⏩';
+
                     if (services.length > 0) {
                         // Add proxy indicator only if RD is enabled
                         const proxyPrefix = (hasProxy && hasRD) ? '🕵️ ' : '';
-                        addonName = `${proxyPrefix}IlCorsaroViola ${services.join('+')}`;
+                        addonName = `${proxyPrefix}IlCorsaroViola ${services.join('+')}${featureSuffix}`;
                     } else {
-                        addonName = 'IlCorsaroViola 🧲';  // Magnet for P2P
+                        addonName = `IlCorsaroViola 🧲${featureSuffix}`;  // Magnet for P2P
                     }
 
                     console.log(`📛 [Manifest] Dynamic addon name: ${addonName}`);

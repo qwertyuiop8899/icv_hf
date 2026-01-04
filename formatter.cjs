@@ -1,861 +1,521 @@
-<!DOCTYPE html>
-<html lang="it">
+/**
+ * ICV Custom Formatter Module
+ * 
+ * Template parser per personalizzare nome e descrizione degli stream.
+ * 
+ * ============================================================================
+ * CREDITS & LICENSE
+ * ============================================================================
+ * 
+ * The custom formatter code in this file was adapted from:
+ * https://github.com/Viren070/AIOStreams
+ * 
+ * AIOStreams - One addon to rule them all
+ * Copyright (c) 2024 Viren070
+ * Licensed under the MIT License
+ * 
+ * The original template parsing logic was adapted from:
+ * https://github.com/diced/zipline/blob/trunk/src/lib/parser/index.ts
+ * 
+ * Copyright (c) 2023 dicedtomato
+ * Licensed under the MIT License
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * ============================================================================
+ */
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ICV Custom Formatter</title>
-    <style>
-        :root {
-            --bg-primary: #0a0a0f;
-            --bg-secondary: #12121a;
-            --bg-tertiary: #1a1a28;
-            --accent: #8b5cf6;
-            --accent-hover: #a78bfa;
-            --text-primary: #e4e4e7;
-            --text-secondary: #a1a1aa;
-            --text-muted: #71717a;
-            --border: #27272a;
-            --success: #22c55e;
-            --error: #ef4444;
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
+function formatBytes(bytes, base = 1000, round = false) {
+    if (!bytes || bytes === 0) return '0 B';
+    const sizes = base === 1024 ? ['B', 'KiB', 'MiB', 'GiB', 'TiB'] : ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(base));
+    const value = bytes / Math.pow(base, i);
+    return (round ? Math.round(value) : value.toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatDuration(seconds) {
+    if (!seconds || seconds <= 0) return '0:00';
+    seconds = Math.floor(seconds);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function formatHours(hours) {
+    if (!hours) return null;
+    if (hours < 1) return `${Math.round(hours * 60)}m`;
+    if (hours < 24) return `${Math.round(hours)}h`;
+    if (hours < 24 * 7) return `${Math.round(hours / 24)}d`;
+    if (hours < 24 * 30) return `${Math.round(hours / (24 * 7))}w`;
+    if (hours < 24 * 365) return `${Math.round(hours / (24 * 30))}mo`;
+    return `${Math.round(hours / (24 * 365))}y`;
+}
+
+// Small caps mapping (from AIOStreams) - Uses mathematical monospace digits
+const SMALL_CAPS_MAP = {
+    A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ',
+    J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', Q: 'ǫ', R: 'ʀ',
+    S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', X: '𝘅', Y: 'ʏ', Z: 'ᴢ',
+    // Mathematical Monospace Digits (same as AIOStreams)
+    '0': '𝟢', '1': '𝟣', '2': '𝟤', '3': '𝟥', '4': '𝟦',
+    '5': '𝟧', '6': '𝟨', '7': '𝟩', '8': '𝟪', '9': '𝟫'
+};
+
+function makeSmall(str) {
+    return String(str).split('').map(char => SMALL_CAPS_MAP[char.toUpperCase()] || char).join('');
+}
+
+// Language to emoji mapping (from AIOStreams, adapted from g0ldy/comet)
+const languageEmojiMap = {
+    multi: '🌎', english: '🇬🇧', japanese: '🇯🇵', chinese: '🇨🇳', russian: '🇷🇺',
+    arabic: '🇸🇦', portuguese: '🇵🇹', spanish: '🇪🇸', french: '🇫🇷', german: '🇩🇪',
+    italian: '🇮🇹', korean: '🇰🇷', hindi: '🇮🇳', bengali: '🇧🇩', punjabi: '🇵🇰',
+    marathi: '🇮🇳', gujarati: '🇮🇳', tamil: '🇮🇳', telugu: '🇮🇳', kannada: '🇮🇳',
+    malayalam: '🇮🇳', thai: '🇹🇭', vietnamese: '🇻🇳', indonesian: '🇮🇩', turkish: '🇹🇷',
+    hebrew: '🇮🇱', persian: '🇮🇷', ukrainian: '🇺🇦', greek: '🇬🇷', lithuanian: '🇱🇹',
+    latvian: '🇱🇻', estonian: '🇪🇪', polish: '🇵🇱', czech: '🇨🇿', slovak: '🇸🇰',
+    hungarian: '🇭🇺', romanian: '🇷🇴', bulgarian: '🇧🇬', serbian: '🇷🇸', croatian: '🇭🇷',
+    slovenian: '🇸🇮', dutch: '🇳🇱', danish: '🇩🇰', finnish: '🇫🇮', swedish: '🇸🇪',
+    norwegian: '🇳🇴', malay: '🇲🇾', latino: '💃🏻', Latino: '🇲🇽',
+    // Common abbreviations
+    ita: '🇮🇹', eng: '🇬🇧', spa: '🇪🇸', fre: '🇫🇷', ger: '🇩🇪', rus: '🇷🇺',
+    por: '🇵🇹', jpn: '🇯🇵', kor: '🇰🇷', chi: '🇨🇳', ara: '🇸🇦', hin: '🇮🇳'
+};
+
+function languageToEmoji(language) {
+    if (!language) return undefined;
+    return languageEmojiMap[language.toLowerCase()];
+}
+
+// ============================================
+// STRING MODIFIERS (from AIOStreams)
+// ============================================
+
+const stringModifiers = {
+    upper: (value) => String(value).toUpperCase(),
+    lower: (value) => String(value).toLowerCase(),
+    title: (value) => String(value).split(' ')
+        .map(word => word.toLowerCase())
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' '),
+    small: (value) => makeSmall(String(value)),
+    length: (value) => String(value).length.toString(),
+    reverse: (value) => String(value).split('').reverse().join(''),
+    base64: (value) => Buffer.from(String(value)).toString('base64'),
+    string: (value) => String(value),
+};
+
+// ============================================
+// ARRAY MODIFIERS (from AIOStreams)
+// ============================================
+
+const arrayModifiers = {
+    join: (value) => Array.isArray(value) ? value.join(', ') : value,
+    length: (value) => Array.isArray(value) ? value.length.toString() : '0',
+    first: (value) => Array.isArray(value) && value.length > 0 ? String(value[0]) : '',
+    last: (value) => Array.isArray(value) && value.length > 0 ? String(value[value.length - 1]) : '',
+    random: (value) => Array.isArray(value) && value.length > 0 ? String(value[Math.floor(Math.random() * value.length)]) : '',
+    sort: (value) => Array.isArray(value) ? [...value].sort() : value,
+    reverse: (value) => Array.isArray(value) ? [...value].reverse() : value,
+};
+
+// ============================================
+// NUMBER MODIFIERS (from AIOStreams)
+// ============================================
+
+const numberModifiers = {
+    comma: (value) => Number(value).toLocaleString(),
+    hex: (value) => Number(value).toString(16),
+    octal: (value) => Number(value).toString(8),
+    binary: (value) => Number(value).toString(2),
+    bytes: (value) => formatBytes(Number(value), 1000, false),
+    rbytes: (value) => formatBytes(Number(value), 1000, true),
+    bytes10: (value) => formatBytes(Number(value), 1000, false),
+    rbytes10: (value) => formatBytes(Number(value), 1000, true),
+    bytes2: (value) => formatBytes(Number(value), 1024, false),
+    rbytes2: (value) => formatBytes(Number(value), 1024, true),
+    string: (value) => String(value),
+    time: (value) => formatDuration(Number(value)),
+};
+
+// ============================================
+// CONDITIONAL MODIFIERS (from AIOStreams)
+// ============================================
+
+const conditionalModifiers = {
+    exact: {
+        istrue: (value) => value === true,
+        isfalse: (value) => value === false,
+        exists: (value) => {
+            if (value === undefined || value === null) return false;
+            if (typeof value === 'string') return /\S/.test(value);
+            if (Array.isArray(value)) return value.length > 0;
+            return true;
+        },
+    },
+    prefix: {
+        '$': (value, check) => String(value).toLowerCase().startsWith(check.toLowerCase()),
+        '^': (value, check) => String(value).toLowerCase().endsWith(check.toLowerCase()),
+        '~': (value, check) => String(value).toLowerCase().includes(check.toLowerCase()),
+        '=': (value, check) => String(value).toLowerCase() === check.toLowerCase(),
+        '>=': (value, check) => Number(value) >= Number(check),
+        '>': (value, check) => Number(value) > Number(check),
+        '<=': (value, check) => Number(value) <= Number(check),
+        '<': (value, check) => Number(value) < Number(check),
+    },
+};
+
+// ============================================
+// COMPARATORS (from AIOStreams)
+// ============================================
+
+const comparatorFuncs = {
+    and: (v1, v2) => v1 && v2,
+    or: (v1, v2) => v1 || v2,
+    xor: (v1, v2) => (v1 || v2) && !(v1 && v2),
+    neq: (v1, v2) => v1 !== v2,
+    equal: (v1, v2) => v1 === v2,
+    left: (v1, _) => v1,
+    right: (_, v2) => v2,
+};
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function getNestedValue(data, path) {
+    if (!path) return undefined;
+    const [namespace, property] = path.split('.');
+    if (!namespace || !property) return undefined;
+    const section = data[namespace];
+    if (!section || typeof section !== 'object') return undefined;
+    return section[property];
+}
+
+function applySingleModifier(value, mod, originalMod) {
+    if (value === undefined || value === null) return undefined;
+
+    const modLower = mod.toLowerCase();
+
+    // Check conditional modifiers first
+    const isExact = Object.keys(conditionalModifiers.exact).includes(modLower);
+    const prefixMatch = Object.keys(conditionalModifiers.prefix)
+        .sort((a, b) => b.length - a.length)
+        .find(key => modLower.startsWith(key));
+
+    if (isExact) {
+        if (!conditionalModifiers.exact.exists(value)) return false;
+        return conditionalModifiers.exact[modLower](value);
+    }
+
+    if (prefixMatch) {
+        if (!conditionalModifiers.exact.exists(value)) return false;
+        const checkValue = mod.substring(prefixMatch.length);
+        const stringValue = String(value).toLowerCase();
+        let stringCheck = checkValue.toLowerCase();
+        if (!/\s/.test(stringValue)) stringCheck = stringCheck.replace(/\s/g, '');
+
+        // Numeric comparison for >, <, >=, <=, =
+        if (['<', '<=', '>', '>=', '='].includes(prefixMatch)) {
+            const numValue = Number(String(value).replace(/,\s/g, ''));
+            const numCheck = Number(stringCheck.replace(/,\s/g, ''));
+            if (!isNaN(numValue) && !isNaN(numCheck)) {
+                return conditionalModifiers.prefix[prefixMatch](numValue, numCheck);
+            }
         }
+        return conditionalModifiers.prefix[prefixMatch](stringValue, stringCheck);
+    }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+    // String modifiers
+    if (typeof value === 'string') {
+        if (modLower in stringModifiers) return stringModifiers[modLower](value);
 
-        body {
-            font-family: 'Inter', -apple-system, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            min-height: 100vh;
-            padding: 1.5rem;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        header {
-            text-align: center;
-            margin-bottom: 1.5rem;
-        }
-
-        header h1 {
-            font-size: 1.5rem;
-            background: linear-gradient(135deg, var(--accent), #ec4899);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .main-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-        }
-
-        @media (max-width: 900px) {
-            .main-grid {
-                grid-template-columns: 1fr;
+        // replace('find', 'replace')
+        if (modLower.startsWith('replace(') && modLower.endsWith(')')) {
+            const content = originalMod.substring(8, originalMod.length - 1);
+            const quoteChar = content.charAt(0);
+            const parts = content.split(new RegExp(`${quoteChar}\\s*,\\s*${quoteChar}`));
+            if (parts.length === 2) {
+                const find = parts[0].substring(1);
+                const replace = parts[1].substring(0, parts[1].length - 1);
+                return value.split(find).join(replace);
             }
         }
 
-        .panel {
-            background: var(--bg-secondary);
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            overflow: hidden;
-        }
-
-        .panel-header {
-            padding: 0.75rem 1rem;
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-weight: 600;
-        }
-
-        .panel-content {
-            padding: 1rem;
-        }
-
-        .preset-selector {
-            margin-bottom: 1rem;
-        }
-
-        .preset-selector label {
-            display: block;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            margin-bottom: 0.4rem;
-        }
-
-        .preset-selector select {
-            width: 100%;
-            padding: 0.6rem;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text-primary);
-            font-size: 0.9rem;
-        }
-
-        .template-field {
-            margin-bottom: 1rem;
-        }
-
-        .template-field label {
-            display: block;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            margin-bottom: 0.4rem;
-        }
-
-        .template-field textarea {
-            width: 100%;
-            padding: 0.75rem;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text-primary);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-            resize: vertical;
-            min-height: 80px;
-        }
-
-        .template-field textarea:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-
-        .preview-container {
-            background: var(--bg-tertiary);
-            border-radius: 6px;
-            padding: 0.75rem;
-            margin-bottom: 1rem;
-        }
-
-        .preview-label {
-            color: var(--text-muted);
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            margin-bottom: 0.4rem;
-        }
-
-        .stremio-card {
-            background: linear-gradient(180deg, #1a1a2e 0%, #16162a 100%);
-            border-radius: 6px;
-            padding: 0.75rem;
-            border: 1px solid rgba(139, 92, 246, 0.2);
-        }
-
-        .stremio-name {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: #fff;
-            margin-bottom: 0.4rem;
-        }
-
-        .stremio-description {
-            font-size: 0.75rem;
-            color: rgba(255, 255, 255, 0.7);
-            line-height: 1.4;
-            white-space: pre-line;
-        }
-
-        .button-row {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1rem;
-        }
-
-        .btn {
-            flex: 1;
-            padding: 0.75rem 1rem;
-            border: none;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--accent), #ec4899);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
-        }
-
-        .btn-secondary {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-        }
-
-        .variables-ref {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.4rem;
-        }
-
-        .var-item {
-            background: var(--bg-tertiary);
-            padding: 0.3rem 0.5rem;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 0.65rem;
-            color: var(--accent);
-            cursor: pointer;
-        }
-
-        .var-item:hover {
-            background: var(--accent);
-            color: var(--bg-primary);
-        }
-
-        .section-title {
-            color: var(--text-muted);
-            font-size: 0.7rem;
-            margin: 0.75rem 0 0.4rem;
-            text-transform: uppercase;
-        }
-
-        .current-selection {
-            background: rgba(34, 197, 94, 0.1);
-            border: 1px solid var(--success);
-            border-radius: 6px;
-            padding: 0.5rem 0.75rem;
-            margin-bottom: 1rem;
-            font-size: 0.8rem;
-            color: var(--success);
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <header>
-            <h1>🎨 ICV Custom Formatter</h1>
-        </header>
-
-        <div id="currentSelection" class="current-selection" style="display: none;">
-            ✓ Preset attuale: <span id="currentPresetName">-</span>
-        </div>
-
-        <!-- Preset Selector -->
-        <div class="preset-selector"
-            style="margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 200px;">
-                <label
-                    style="display: block; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 0.4rem;">Preset</label>
-                <select id="presetSelect"
-                    style="width: 100%; padding: 0.6rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.9rem;">
-                    <option value="default">Default</option>
-                    <option value="torrentio">Torrentio Style</option>
-                    <option value="minimal">Minimal</option>
-                    <option value="verbose">Verbose</option>
-                    <option value="italiano">Italiano</option>
-                    <option value="fra">FRA Style</option>
-                    <option value="dav">DAV Style</option>
-                    <option value="and">AND Style</option>
-                    <option value="lad">LAD Style</option>
-                    <option value="pri">PRI Style</option>
-                    <option value="custom">✏️ Personalizzato</option>
-                </select>
-            </div>
-            <div class="button-row" style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
-                <button id="saveBtn"
-                    style="padding: 0.6rem 1.2rem; background: var(--accent); border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: 600;">💾
-                    Salva</button>
-                <button id="cancelBtn"
-                    style="padding: 0.6rem 1.2rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: pointer;">Annulla</button>
-            </div>
-        </div>
-
-        <div class="main-grid">
-            <!-- Left: Editor -->
-            <div class="panel">
-                <div class="panel-header">📝 Template Editor</div>
-                <div class="panel-content">
-                    <div class="template-field">
-                        <label>Template Nome (Editabile per test)</label>
-                        <textarea id="nameTemplate" rows="2"></textarea>
-                    </div>
-
-                    <div class="template-field">
-                        <label>Template Descrizione (Editabile per test)</label>
-                        <textarea id="descriptionTemplate" rows="5"></textarea>
-                    </div>
-
-                    <div class="preview-container">
-                        <div class="preview-label">Anteprima Live</div>
-                        <div class="stremio-card">
-                            <div class="stremio-name" id="previewName">-</div>
-                            <div class="stremio-description" id="previewDescription">-</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Right: Variables -->
-            <div class="panel">
-                <div class="panel-header">📚 Variabili</div>
-                <div class="panel-content">
-                    <div class="section-title">Stream</div>
-                    <div class="variables-ref">
-                        <div class="var-item" onclick="insertVar('{stream.title}')">{stream.title}</div>
-                        <div class="var-item" onclick="insertVar('{stream.filename}')">{stream.filename}</div>
-                        <div class="var-item" onclick="insertVar('{stream.size::bytes}')">{stream.size::bytes}</div>
-                        <div class="var-item" onclick="insertVar('{stream.packSize::bytes}')">{stream.packSize::bytes}
-                        </div>
-                        <div class="var-item" onclick="insertVar('{stream.quality}')">{stream.quality}</div>
-                        <div class="var-item" onclick="insertVar('{stream.codec}')">{stream.codec}</div>
-                        <div class="var-item" onclick="insertVar('{stream.seeders}')">{stream.seeders}</div>
-                        <div class="var-item" onclick="insertVar('{stream.languages::join(\' | \')}')">
-                            {stream.languages}</div>
-                        <div class="var-item" onclick="insertVar('{stream.languageEmojis::join(\' \')}')">
-                            {stream.languageEmojis}</div>
-                        <div class="var-item" onclick="insertVar('{stream.releaseGroup}')">{stream.releaseGroup}</div>
-                        <div class="var-item" onclick="insertVar('{stream.visualTags::join(\' \')}')">
-                            {stream.visualTags}</div>
-                        <div class="var-item" onclick="insertVar('{stream.audioTags::join(\' \')}')">{stream.audioTags}
-                        </div>
-                        <div class="var-item" onclick="insertVar('{stream.season}')">{stream.season}</div>
-                        <div class="var-item" onclick="insertVar('{stream.episode}')">{stream.episode}</div>
-                    </div>
-
-                    <div class="section-title">Service</div>
-                    <div class="variables-ref">
-                        <div class="var-item" onclick="insertVar('{service.shortName}')">{service.shortName}</div>
-                        <div class="var-item" onclick="insertVar('{service.name}')">{service.name}</div>
-                        <div class="var-item" onclick="insertVar('{service.cached}')">
-                            {service.cached}</div>
-                    </div>
-
-                    <div class="section-title">Addon</div>
-                    <div class="variables-ref">
-                        <div class="var-item" onclick="insertVar('{addon.name}')">{addon.name}</div>
-                    </div>
-
-                    <div class="section-title">Sintassi</div>
-                    <div style="font-size: 0.7rem; color: var(--text-secondary); line-height: 1.6;">
-                        <code>::bytes</code> → Formatta bytes<br>
-                        <code>::upper/lower</code> → Maiuscolo/minuscolo<br>
-                        <code>::join(' ')</code> → Unisci array<br>
-                        <code>::exists["se"||"no"]</code> → Condizione<br>
-                        <code>::istrue["⚡"||"⏳"]</code> → Boolean<br>
-                        <code>::=1080p["FHD"||""]</code> → Comparazione
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // Mock data per preview - Complete AIOStreams fields
-        const mockData = {
-            stream: {
-                // Basic info
-                title: "Il Trono Di Spade",
-                filename: "Il.Trono.Di.Spade.S01E03.1080p.BluRay.HEVC.DTS-HD.MA.ITA.ENG-BlackBit.mkv",
-                folderName: "Il.Trono.Di.Spade.S01.Complete.1080p.BluRay",
-                size: 1624273183,
-                folderSize: 15064597791,
-                packSize: 15064597791,
-                library: false,
-
-                // Quality info (AIOStreams fields)
-                quality: "BluRay",
-                resolution: "1080p",
-                encode: "HEVC",
-                codec: "HEVC",
-
-                // Languages
-                languages: ["Italian", "English"],
-                uLanguages: ["Italian"],
-                languageEmojis: ["🇮🇹", "🇬🇧"],
-                uLanguageEmojis: ["🇮🇹"],
-                languageCodes: ["IT", "EN"],
-                uLanguageCodes: ["IT"],
-                smallLanguageCodes: ["ɪᴛ", "ᴇɴ"],
-                uSmallLanguageCodes: ["ɪᴛ"],
-                wedontknowwhatakilometeris: ["🇮🇹", "🇺🇸🦅"],
-                uWedontknowwhatakilometeris: ["🇮🇹"],
-
-                // Tags
-                visualTags: ["HDR", "10bit"],
-                audioTags: ["DTS-HD MA", "5.1"],
-                audioChannels: ["5.1"],
-                releaseGroup: "BlackBit",
-
-                // Episode info
-                year: "2011",
-                seasons: [1],
-                season: 1,
-                formattedSeasons: "S01",
-                episodes: [3],
-                episode: 3,
-                formattedEpisodes: "E03",
-                seasonEpisode: ["S01", "E03"],
-                seasonPack: true,
-
-                // Metadata
-                regexMatched: null,
-                edition: null,
-                remastered: false,
-                repack: false,
-                uncensored: false,
-                unrated: false,
-                upscaled: false,
-                network: null,
-                container: "mkv",
-                extension: "mkv",
-
-                // Torrent info
-                seeders: 26,
-                private: false,
-                age: "2y",
-                ageHours: 17520,
-                duration: 3540,
-                infoHash: "abc123def456",
-
-                // Stream type
-                type: "Debrid",
-                message: null,
-                proxied: false,
-                seadex: false,
-                seadexBest: false,
-
-                // ICV specific
-                source: "BluRay",
-                audio: "DTS-HD MA",
-                cached: true,
-                isPack: true,
-                indexer: "Knaben"
-            },
-            config: {
-                addonName: "IlCorsaroViola"
-            },
-            service: {
-                id: "realdebrid",
-                name: "Real-Debrid",
-                shortName: "RD",
-                cached: true
-            },
-            addon: {
-                name: "IlCorsaroViola",
-                version: "3.0.0",
-                presetId: "pri",
-                manifestUrl: null
-            },
-            tools: {
-                newLine: "\n",
-                removeLine: ""
-            }
-        };
-
-        // Preset templates
-        const PRESETS = {
-            default: {
-                name: `{service.shortName::exists["[{service.shortName}] "||""]}📺 {stream.title}`,
-                description: `{stream.quality} | 💾 {stream.size::bytes} | 👤 {stream.seeders} seeders`
-            },
-            torrentio: {
-                name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["+]"||"]"]} ICV {stream.quality}`,
-                description: `{stream.filename}\n💾 {stream.size::bytes} {stream.packSize::>0["/ 📦 {stream.packSize::bytes}"||""]} 👤 {stream.seeders}\n{stream.languageEmojis::join(' ')}`
-            },
-            minimal: {
-                name: `{stream.quality} {stream.codec}`,
-                description: `{stream.size::bytes} • {stream.seeders} seeds`
-            },
-            verbose: {
-                name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
-                description: `📁 {stream.filename}\n💾 Ep: {stream.size::bytes}{stream.packSize::>0[" / Pack: {stream.packSize::bytes}"||""]}\n👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}\n🌍 {stream.languages::join(' | ')}`
-            },
-            italiano: {
-                name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
-                description: `📺 {stream.title}\n📁 {stream.filename}\n💾 {stream.size::bytes}{stream.isPack::istrue[" (Pack: {stream.packSize::bytes})"||""]}\n🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}\n🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
-            },
-            fra: {
-                name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K"||""]}{stream.quality::exists[""||"UNK"]}`,
-                description: `📄 ❯ {stream.filename}\n{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}\n✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}\n{stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}\n{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{service.cached::isfalse[" / 👥 ❯ {stream.seeders}"||""]}`
-            },
-            dav: {
-                name: `{stream.resolution::exists["{stream.resolution::replace('2160p', '🎥4K UHD')::replace('1440p','🎬 QHD')::replace('1080p','📀 FHD')::replace('720p','💿 HD')::replace('576p','💩 Low Quality')::replace('480p','💩 Low Quality')::replace('360p','💩 Low Quality')::replace('240p','💩 Low Quality')::replace('144p','💩 Low Quality')}"]||"❓ Unknown"]}`,
-                description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}
-"]||""}{stream.quality::exists["🎥 {stream.quality} "]||""}  {stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "]||""}{stream.encode::exists["🎞️ {stream.encode}"]||""}
-{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "]||""}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"]||""}
-{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}
-"]||""}{stream.size::>0["📦 {stream.size::bytes} "]||""}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "]||""}{stream.duration::>0["⏱️ {stream.duration::time} "]||""}{stream.seeders::>0["👥 {stream.seeders} "]||""}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "]||""}{stream.age::exists["📅 {stream.age}"]||""}
-{service.cached::istrue["⚡"]||""}{service.cached::isfalse["⏳"]||""}{service.shortName::exists["{service.shortName} "]||""}{stream.type::=Usenet["📰 Usenet "]||""}{stream.type::=p2p["⚠️ P2P "]||""}{stream.type::=http["💻 Web Link "]||""}{stream.type::=youtube["▶️ Youtube "]||""}{stream.type::=live["📺 Live "]|""}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"]||""}
-{stream.folderName::exists["📂 {stream.folderName}
-"]||""}{stream.filename::exists["📄 {stream.filename}"]||""}`
-            },
-            and: {
-                name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
-                description: `{stream.quality} {service.cached::istrue["/⚡"||"/⏳"]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}\nSpecifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
-            },
-            lad: {
-                name: `{stream.resolution::=2160p["🖥️ 4K"||""]}{stream.resolution::=1080p["🖥️ 1080p"||""]}{stream.resolution::=720p["🖥️ 720p"||""]}{stream.resolution::exists::isfalse["🖥️ Unknown"||""]}`,
-                description: `{stream.title::exists["🎟️ {stream.title}"||""]}\n📜 S{stream.season}E{stream.episode}\n{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.codec::exists["🎞️ {stream.codec} "||""]}{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}\n{stream.size::>0["📦 {stream.size::bytes}"||""]}\n🔗 {addon.name}\n{stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
-            },
-            pri: {
-                name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}\n{stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]}\n[{addon.name}]`,
-                description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}\n{stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}\n{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}\n{stream.size::>0["📁 {stream.size::bytes}"||""]}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"||""]}{stream.duration::>0[" | ⏱️ {stream.duration::time}"||""]}\n📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
-            },
-            custom: { name: '', description: '' }
-        };
-
-        // Parser functions (same as formatter.cjs)
-        function formatBytes(bytes, base = 1000, round = false) {
-            if (!bytes || bytes === 0) return '0 B';
-            const sizes = base === 1024 ? ['B', 'KiB', 'MiB', 'GiB', 'TiB'] : ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(base));
-            const val = bytes / Math.pow(base, i);
-            return (round ? Math.round(val) : val.toFixed(2)) + ' ' + sizes[i];
-        }
-
-        function formatDuration(seconds) {
-            if (!seconds || seconds <= 0) return '0:00';
-            seconds = Math.floor(seconds);
-            const h = Math.floor(seconds / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = seconds % 60;
-            if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-            return `${m}:${s.toString().padStart(2, '0')}`;
-        }
-
-        // Small caps mapping (from AIOStreams) - Uses mathematical monospace digits
-        const SMALL_CAPS_MAP = {
-            A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ',
-            J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', Q: 'ǫ', R: 'ʀ',
-            S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', X: '𝘅', Y: 'ʏ', Z: 'ᴢ',
-            '0': '𝟢', '1': '𝟣', '2': '𝟤', '3': '𝟥', '4': '𝟦',
-            '5': '𝟧', '6': '𝟨', '7': '𝟩', '8': '𝟪', '9': '𝟫'
-        };
-        const makeSmall = (str) => String(str).split('').map(c => SMALL_CAPS_MAP[c.toUpperCase()] || c).join('');
-
-        // String modifiers
-        const stringModifiers = {
-            upper: v => String(v).toUpperCase(),
-            lower: v => String(v).toLowerCase(),
-            title: v => String(v).split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' '),
-            small: v => makeSmall(v),
-            length: v => String(v).length.toString(),
-            reverse: v => String(v).split('').reverse().join(''),
-            string: v => String(v),
-        };
-
-        // Array modifiers
-        const arrayModifiers = {
-            join: v => Array.isArray(v) ? v.join(', ') : v,
-            length: v => Array.isArray(v) ? v.length.toString() : '0',
-            first: v => Array.isArray(v) && v.length > 0 ? String(v[0]) : '',
-            last: v => Array.isArray(v) && v.length > 0 ? String(v[v.length - 1]) : '',
-            reverse: v => Array.isArray(v) ? [...v].reverse() : v,
-        };
-
-        // Number modifiers
-        const numberModifiers = {
-            bytes: v => formatBytes(Number(v), 1000, false),
-            rbytes: v => formatBytes(Number(v), 1000, true),
-            bytes2: v => formatBytes(Number(v), 1024, false),
-            time: v => formatDuration(Number(v)),
-            hex: v => Number(v).toString(16),
-            string: v => String(v),
-        };
-
-        // Conditional modifiers
-        const conditionalModifiers = {
-            exact: {
-                istrue: v => v === true,
-                isfalse: v => v === false,
-                exists: v => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0),
-            },
-            prefix: {
-                '$': (v, c) => String(v).toLowerCase().startsWith(c.toLowerCase()),
-                '^': (v, c) => String(v).toLowerCase().endsWith(c.toLowerCase()),
-                '~': (v, c) => String(v).toLowerCase().includes(c.toLowerCase()),
-                '=': (v, c) => String(v).toLowerCase() === c.toLowerCase(),
-                '>=': (v, c) => Number(v) >= Number(c),
-                '>': (v, c) => Number(v) > Number(c),
-                '<=': (v, c) => Number(v) <= Number(c),
-                '<': (v, c) => Number(v) < Number(c),
-            },
-        };
-
-        // Comparator functions
-        const comparatorFuncs = {
-            and: (v1, v2) => v1 && v2,
-            or: (v1, v2) => v1 || v2,
-            xor: (v1, v2) => (v1 || v2) && !(v1 && v2),
-        };
-
-        function getNestedValue(data, path) {
-            if (!path) return undefined;
-            const [ns, prop] = path.split('.');
-            if (!ns || !prop) return undefined;
-            const section = data[ns];
-            if (!section || typeof section !== 'object') return undefined;
-            return section[prop];
-        }
-
-        function applySingleModifier(value, mod, originalMod) {
-            if (value === undefined || value === null) return undefined;
-            const modLower = mod.toLowerCase();
-
-            // Conditional modifiers
-            const isExact = Object.keys(conditionalModifiers.exact).includes(modLower);
-            const prefixMatch = Object.keys(conditionalModifiers.prefix).sort((a, b) => b.length - a.length).find(k => modLower.startsWith(k));
-
-            if (isExact) {
-                if (!conditionalModifiers.exact.exists(value)) return false;
-                return conditionalModifiers.exact[modLower](value);
-            }
-
-            if (prefixMatch) {
-                if (!conditionalModifiers.exact.exists(value)) return false;
-                const checkValue = mod.substring(prefixMatch.length);
-                const stringValue = String(value).toLowerCase();
-                let stringCheck = checkValue.toLowerCase().replace(/\s/g, '');
-                if (['<', '<=', '>', '>=', '='].includes(prefixMatch)) {
-                    const numValue = Number(String(value).replace(/,/g, ''));
-                    const numCheck = Number(stringCheck.replace(/,/g, ''));
-                    if (!isNaN(numValue) && !isNaN(numCheck)) {
-                        return conditionalModifiers.prefix[prefixMatch](numValue, numCheck);
-                    }
-                }
-                return conditionalModifiers.prefix[prefixMatch](stringValue, stringCheck);
-            }
-
-            // String modifiers
-            if (typeof value === 'string') {
-                if (modLower in stringModifiers) return stringModifiers[modLower](value);
-                // replace('find', 'replace')
-                if (modLower.startsWith('replace(') && modLower.endsWith(')')) {
-                    const content = originalMod.substring(8, originalMod.length - 1);
-                    const q = content.charAt(0);
-                    const parts = content.split(new RegExp(`${q}\\s*,\\s*${q}`));
-                    if (parts.length === 2) {
-                        const find = parts[0].substring(1);
-                        const repl = parts[1].substring(0, parts[1].length - 1);
-                        return value.split(find).join(repl);
-                    }
-                }
-                // truncate(N)
-                if (modLower.startsWith('truncate(') && modLower.endsWith(')')) {
-                    const n = parseInt(originalMod.substring(9, originalMod.length - 1));
-                    if (!isNaN(n) && n >= 0) return value.length > n ? value.slice(0, n) + '…' : value;
-                }
-            }
-
-            // Array modifiers
-            if (Array.isArray(value)) {
-                if (modLower in arrayModifiers) return arrayModifiers[modLower](value);
-                if (modLower.startsWith('join(') && modLower.endsWith(')')) {
-                    const sep = originalMod.substring(6, originalMod.length - 2);
-                    return value.join(sep);
-                }
-            }
-
-            // Number modifiers
-            if (typeof value === 'number') {
-                if (modLower in numberModifiers) return numberModifiers[modLower](value);
-            }
-
-            return undefined;
-        }
-
-        function parseTemplate(template, data, maxDepth = 15) {
-            if (!template || maxDepth <= 0) return template || '';
-            template = template.replace(/\{tools\.newLine\}/g, '\n');
-            let result = template, lastResult = null, iterations = 0;
-
-            while (result !== lastResult && iterations < maxDepth) {
-                lastResult = result; iterations++;
-                const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)([^[\]{}]*?)(?:\["([^"]*)"\|\|"([^"]*)"\])?\}/g;
-                let match;
-                const replacements = [];
-                while ((match = regex.exec(result)) !== null) {
-                    const fullMatch = match[0], varPath = match[1], modStr = match[2] || '', trueVal = match[3], falseVal = match[4];
-                    const replacement = resolveVariable(varPath, modStr, trueVal, falseVal, data, maxDepth - 1);
-                    replacements.push({ fullMatch, replacement, index: match.index });
-                }
-                for (let i = replacements.length - 1; i >= 0; i--) {
-                    const { fullMatch, replacement, index } = replacements[i];
-                    result = result.slice(0, index) + replacement + result.slice(index + fullMatch.length);
-                }
-            }
-            return result.split('\n').filter(l => l.trim() !== '' && !l.includes('{tools.removeLine}')).join('\n').replace(/\n\s*\n\s*\n/g, '\n\n').trim();
-        }
-
-        function resolveVariable(varPath, modStr, trueVal, falseVal, data, maxDepth) {
-            const comparatorRegex = /::(and|or|xor)::/gi;
-            const segments = modStr.split(comparatorRegex).filter(s => s);
-            const varExprs = [], comparators = [];
-
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i].toLowerCase();
-                if (Object.keys(comparatorFuncs).includes(seg)) comparators.push(seg);
-                else varExprs.push(segments[i]);
-            }
-            if (varExprs.length === 0) varExprs.push('');
-
-            const resolvedValues = varExprs.map((expr, idx) => {
-                let curPath = varPath, mods = expr;
-                if (idx > 0 && expr.match(/^[a-zA-Z_]+\.[a-zA-Z_]+/)) {
-                    const pm = expr.match(/^([a-zA-Z_]+\.[a-zA-Z_]+)(.*)/);
-                    if (pm) { curPath = pm[1]; mods = pm[2]; }
-                }
-                let value = getNestedValue(data, curPath);
-                const modList = mods.split('::').filter(m => m);
-                for (const mod of modList) {
-                    const newVal = applySingleModifier(value, mod, mod);
-                    if (newVal === undefined) { if (typeof value === 'boolean') return value; return undefined; }
-                    value = newVal;
-                }
+        // truncate(N)
+        if (modLower.startsWith('truncate(') && modLower.endsWith(')')) {
+            const n = parseInt(originalMod.substring(9, originalMod.length - 1));
+            if (!isNaN(n) && n >= 0) {
+                if (value.length > n) return value.slice(0, n).replace(/\s+$/, '') + '…';
                 return value;
-            });
-
-            let finalResult = resolvedValues[0];
-            for (let i = 0; i < comparators.length; i++) {
-                const cmp = comparators[i], nxt = resolvedValues[i + 1];
-                if (comparatorFuncs[cmp]) finalResult = comparatorFuncs[cmp](finalResult, nxt);
-            }
-
-            if (trueVal !== undefined) {
-                const output = Boolean(finalResult) ? trueVal : (falseVal || '');
-                return parseTemplate(output, data, maxDepth);
-            }
-            if (Array.isArray(finalResult)) return finalResult.join(', ');
-            return finalResult ?? '';
-        }
-
-        // UI Elements
-        const presetSelect = document.getElementById('presetSelect');
-        const nameTemplate = document.getElementById('nameTemplate');
-        const descriptionTemplate = document.getElementById('descriptionTemplate');
-        const previewName = document.getElementById('previewName');
-        const previewDescription = document.getElementById('previewDescription');
-        const currentSelection = document.getElementById('currentSelection');
-        const currentPresetName = document.getElementById('currentPresetName');
-
-        let selectedPreset = 'default';
-
-        function updatePreview() {
-            try {
-                previewName.textContent = parseTemplate(nameTemplate.value, mockData) || '(vuoto)';
-                previewDescription.textContent = parseTemplate(descriptionTemplate.value, mockData) || '(vuoto)';
-            } catch (e) {
-                previewName.textContent = 'Errore: ' + e.message;
             }
         }
+    }
 
-        function loadPreset(presetId) {
-            if (presetId === 'custom') {
-                // ✅ FIX: Update selectedPreset even for 'custom'
-                selectedPreset = 'custom';
-                return;
-            }
-            const preset = PRESETS[presetId];
-            if (preset) {
-                nameTemplate.value = preset.name;
-                descriptionTemplate.value = preset.description;
-                selectedPreset = presetId;
-                updatePreview();
-            }
+    // Array modifiers
+    if (Array.isArray(value)) {
+        if (modLower in arrayModifiers) return arrayModifiers[modLower](value);
+
+        // join('separator')
+        if (modLower.startsWith('join(') && modLower.endsWith(')')) {
+            const separator = originalMod.substring(6, originalMod.length - 2);
+            return value.join(separator);
+        }
+    }
+
+    // Number modifiers
+    if (typeof value === 'number') {
+        if (modLower in numberModifiers) return numberModifiers[modLower](value);
+    }
+
+    return undefined;
+}
+
+// ============================================
+// MAIN PARSER (AIOStreams-compatible)
+// ============================================
+
+function parseTemplate(template, data, maxDepth = 10) {
+    if (!template || maxDepth <= 0) return template || '';
+
+    // Handle {tools.*}
+    template = template.replace(/\{tools\.newLine\}/g, '\n');
+
+    let result = template;
+    let lastResult = null;
+    let iterations = 0;
+
+    while (result !== lastResult && iterations < maxDepth) {
+        lastResult = result;
+        iterations++;
+
+        // Match: {var.prop::mod1::mod2...["true"||"false"]}
+        const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)([^[\]{}]*?)(?:\["([^"]*)"\|\|"([^"]*)"\])?\}/g;
+
+        let match;
+        const replacements = [];
+
+        while ((match = regex.exec(result)) !== null) {
+            const fullMatch = match[0];
+            const varPath = match[1];
+            const modifierString = match[2] || '';
+            const trueValue = match[3];
+            const falseValue = match[4];
+
+            const replacement = resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth - 1);
+            replacements.push({ fullMatch, replacement, index: match.index });
         }
 
-        function insertVar(variable) {
-            const active = document.activeElement;
-            if (active === nameTemplate || active === descriptionTemplate) {
-                const start = active.selectionStart;
-                active.value = active.value.substring(0, start) + variable + active.value.substring(active.selectionEnd);
-                active.selectionStart = active.selectionEnd = start + variable.length;
-                active.focus();
-            } else {
-                descriptionTemplate.value += variable;
-            }
-            presetSelect.value = 'custom';
-            selectedPreset = 'custom';
-            updatePreview();
+        // Apply replacements in reverse order
+        for (let i = replacements.length - 1; i >= 0; i--) {
+            const { fullMatch, replacement, index } = replacements[i];
+            result = result.slice(0, index) + replacement + result.slice(index + fullMatch.length);
         }
+    }
 
-        // Event listeners
-        presetSelect.addEventListener('change', e => loadPreset(e.target.value));
-        nameTemplate.addEventListener('input', () => { presetSelect.value = 'custom'; selectedPreset = 'custom'; updatePreview(); });
-        descriptionTemplate.addEventListener('input', () => { presetSelect.value = 'custom'; selectedPreset = 'custom'; updatePreview(); });
+    // Final cleanup
+    result = result.split('\n')
+        .filter(line => line.trim() !== '' && !line.includes('{tools.removeLine}'))
+        .join('\n')
+        .replace(/\n\s*\n\s*\n/g, '\n\n')
+        .trim();
 
-        // Save button - uses localStorage for cross-origin compatibility
-        document.getElementById('saveBtn').addEventListener('click', () => {
-            const config = {
-                preset: selectedPreset,
-                customName: selectedPreset === 'custom' ? nameTemplate.value : null,
-                customDesc: selectedPreset === 'custom' ? descriptionTemplate.value : null
-            };
+    return result;
+}
 
-            // Save to localStorage (works cross-origin within same domain)
-            localStorage.setItem('formatter_config', JSON.stringify(config));
-            localStorage.setItem('formatter_config_timestamp', Date.now().toString());
+function resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth) {
+    // Split modifiers, handling comparators (::and::, ::or::, etc.)
+    const comparatorRegex = /::(and|or|xor|neq|equal|left|right)::/gi;
+    const segments = modifierString.split(comparatorRegex).filter(s => s);
 
-            // Also try postMessage as backup
-            if (window.opener) {
-                try {
-                    window.opener.postMessage({ type: 'formatter-config', config }, '*');
-                } catch (e) {
-                    console.warn('postMessage failed:', e);
-                }
-            }
+    // Build list of variable+modifiers and comparators
+    const variableExpressions = [];
+    const comparators = [];
 
-            alert('✅ Formatter salvato! Torna alla pagina principale per vedere le modifiche.');
-            window.close();
-        });
+    for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i].toLowerCase();
+        if (Object.keys(comparatorFuncs).includes(seg)) {
+            comparators.push(seg);
+        } else {
+            variableExpressions.push(segments[i]);
+        }
+    }
 
-        // Cancel button
-        document.getElementById('cancelBtn').addEventListener('click', () => {
-            if (window.opener) window.close();
-        });
+    // If no expressions, use the main variable path
+    if (variableExpressions.length === 0) {
+        variableExpressions.push('');
+    }
 
-        // Load initial config from URL or opener
-        function init() {
-            // Check if config passed in URL
-            const urlParams = new URLSearchParams(window.location.search);
-            const preset = urlParams.get('preset') || 'default';
-            const customName = decodeURIComponent(urlParams.get('name') || '');
-            const customDesc = decodeURIComponent(urlParams.get('desc') || '');
+    // Resolve each variable expression
+    const resolvedValues = variableExpressions.map((expr, idx) => {
+        let currentVarPath = varPath;
+        let mods = expr;
 
-            // If we have a custom config, load it
-            if (preset === 'custom' && (customName || customDesc)) {
-                presetSelect.value = 'custom';
-                nameTemplate.value = customName;
-                descriptionTemplate.value = customDesc;
-                selectedPreset = 'custom';
-                currentSelection.style.display = 'block';
-                currentPresetName.textContent = 'Custom (salvato)';
-                updatePreview();
-            } else if (preset && PRESETS[preset]) {
-                presetSelect.value = preset;
-                loadPreset(preset);
-                currentSelection.style.display = 'block';
-                currentPresetName.textContent = preset.charAt(0).toUpperCase() + preset.slice(1);
-            } else {
-                loadPreset('default');
+        // Check if expression starts with a new variable path
+        if (idx > 0 && expr.match(/^[a-zA-Z_]+\.[a-zA-Z_]+/)) {
+            const pathMatch = expr.match(/^([a-zA-Z_]+\.[a-zA-Z_]+)(.*)/);
+            if (pathMatch) {
+                currentVarPath = pathMatch[1];
+                mods = pathMatch[2];
             }
         }
 
-        init();
-    </script>
-</body>
+        let value = getNestedValue(data, currentVarPath);
 
-</html>
+        // Apply modifiers
+        const modList = mods.split('::').filter(m => m);
+        for (const mod of modList) {
+            const newValue = applySingleModifier(value, mod, mod);
+            if (newValue === undefined) {
+                // If modifier failed but we need a boolean, treat as error
+                if (typeof value === 'boolean') return value;
+                return undefined;
+            }
+            value = newValue;
+        }
+
+        return value;
+    });
+
+    // Apply comparators between resolved values
+    let finalResult = resolvedValues[0];
+    for (let i = 0; i < comparators.length; i++) {
+        const comparator = comparators[i];
+        const nextValue = resolvedValues[i + 1];
+
+        if (comparatorFuncs[comparator]) {
+            finalResult = comparatorFuncs[comparator](finalResult, nextValue);
+        }
+    }
+
+    // Handle check ["true"||"false"]
+    if (trueValue !== undefined) {
+        const boolResult = Boolean(finalResult);
+        const output = boolResult ? trueValue : (falseValue || '');
+        return parseTemplate(output, data, maxDepth);
+    }
+
+    // Return value as string
+    if (Array.isArray(finalResult)) return finalResult.join(', ');
+    return finalResult ?? '';
+}
+
+// ============================================
+// PRESET TEMPLATES
+// ============================================
+
+const PRESET_TEMPLATES = {
+    default: {
+        name: `{service.shortName::exists["[{service.shortName}] "||""]}📺 {stream.title}`,
+        description: `{stream.quality} | 💾 {stream.size::bytes} | 👤 {stream.seeders} seeders`
+    },
+    torrentio: {
+        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["+]"||"]"]} ICV {stream.quality}`,
+        description: `{stream.filename}
+💾 {stream.size::bytes} {stream.packSize::>0["/ 📦 {stream.packSize::bytes}"||""]} 👤 {stream.seeders}
+{stream.languageEmojis::join(' ')}`
+    },
+    minimal: {
+        name: `{stream.quality} {stream.codec}`,
+        description: `{stream.size::bytes} • {stream.seeders} seeds`
+    },
+    verbose: {
+        name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
+        description: `📁 {stream.filename}
+💾 Ep: {stream.size::bytes}{stream.packSize::>0[" / Pack: {stream.packSize::bytes}"||""]}
+👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}
+🌍 {stream.languages::join(' | ')}`
+    },
+    italiano: {
+        name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
+        description: `📺 {stream.title}
+📁 {stream.filename}
+💾 {stream.size::bytes}{stream.isPack::istrue[" (Pack: {stream.packSize::bytes})"||""]}
+🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}
+🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
+    },
+    fra: {
+        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.resolution::exists["{stream.resolution::replace('2160p','UHD')::replace('4k','UHD')::replace('2160','UHD')::replace('1080p','FHD')::replace('1080','FHD')::replace('720p','HD')::replace('720','HD')}"||"UNK"]}`,
+        description: `{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
+✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}{stream.indexer::exists[" • {stream.indexer}"||""]}
+{stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}
+{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{stream.seeders::>0[" 👥 ❯ {stream.seeders}"||""]}
+{stream.audioTags::exists["🔉 ❯ {stream.audioTags::join(' • ')}"||""]}
+{stream.folderName::exists["📂 ❯ {stream.folderName}"||""]}
+{stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
+    },
+    dav: {
+        name: `{stream.resolution::exists["{stream.resolution::replace('2160p', '🎥4K UHD')::replace('1440p','🎬 QHD')::replace('1080p','📀 FHD')::replace('720p','💿 HD')::replace('576p','💩 Low Quality')::replace('480p','💩 Low Quality')::replace('360p','💩 Low Quality')::replace('240p','💩 Low Quality')::replace('144p','💩 Low Quality')}"||"❓ Unknown"]}`,
+        description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}
+"||""]}{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}
+{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}
+{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}
+{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}
+{service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]}{stream.type::=p2p["⚠️ P2P "||""]}{stream.type::=http["💻 Web Link "||""]}{stream.type::=youtube["▶️ Youtube "||""]}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}
+{stream.folderName::exists["📂 {stream.folderName}"||""]}
+{stream.filename::exists["📄 {stream.filename}"||""]}`
+    },
+    and: {
+        name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
+        description: `{stream.quality} {service.cached::istrue["/⚡"||"/⏳"]}
+─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}
+Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}
+─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
+    },
+    lad: {
+        name: `{stream.resolution::=2160p["🖥️ 4K"||""]}{stream.resolution::=1080p["🖥️ 1080p"||""]}{stream.resolution::=720p["🖥️ 720p"||""]}{stream.resolution::exists::isfalse["🖥️ Unknown"||""]}`,
+        description: `{stream.title::exists["🎟️ {stream.title}"||""]}
+📜 S{stream.season}E{stream.episode}
+{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.codec::exists["🎞️ {stream.codec} "||""]}{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}
+{stream.size::>0["📦 {stream.size::bytes}"||""]}
+🔗 {addon.name}
+{stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
+    },
+    pri: {
+        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}
+{stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]}
+[{addon.name}]`,
+        description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}
+{stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.quality::~DVDRip["💿 ᴅᴠᴅʀɪᴘ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}
+{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}
+{stream.size::>0["📁 {stream.size::bytes}"||""]}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"||""]}{stream.duration::>0[" | ⏱️ {stream.duration::time}"||""]}
+📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
+    }
+};
+
+// ============================================
+// EXPORTS
+// ============================================
+
+module.exports = {
+    parseTemplate,
+    formatBytes,
+    formatDuration,
+    formatHours,
+    makeSmall,
+    languageToEmoji,
+    languageEmojiMap,
+    SMALL_CAPS_MAP,
+    PRESET_TEMPLATES,
+    // Export for testing/advanced use
+    stringModifiers,
+    arrayModifiers,
+    numberModifiers,
+    conditionalModifiers,
+    comparatorFuncs,
+};

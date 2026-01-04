@@ -6665,9 +6665,14 @@ async function handleStream(type, id, config, workerOrigin) {
                         // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
                         const title = r.title || r.websiteTitle || '';
                         const langInfo = getLanguageInfo(title);
-                        const isItalian = langInfo.isItalian;  // ✅ Solo ITA, NO Multi/Dual
+                        const isItalian = langInfo.isItalian;
 
-                        if (!isItalian) {
+                        // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
+                        const isTrustedProvider = r.source === 'CorsaroNero' ||
+                            (r.source && r.source.includes('CorsaroNero')) ||
+                            (r.externalAddon && r.externalAddon.toLowerCase().includes('torrentio'));
+
+                        if (!isItalian && !isTrustedProvider) {
                             console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
                             return false;
                         }

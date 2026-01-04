@@ -678,6 +678,10 @@
                         <input type="checkbox" id="use_rarbg" checked>
                         <span>🏴 RARBG (Proxy)</span>
                     </label>
+                    <label style="background: rgba(0, 128, 0, 0.15); border-color: rgba(0, 200, 83, 0.4);">
+                        <input type="checkbox" id="full_ita">
+                        <span>🇮🇹 FULL ITA (Solo risultati con "ITA" nel nome)</span>
+                    </label>
                     <label>
                         <input type="checkbox" id="use_max_res_limit">
                         <span>✂️ Limita Risultati per Risoluzione</span>
@@ -835,6 +839,7 @@
         const useMediaFusionCheckbox = document.getElementById("use_mediafusion");
         const useCometCheckbox = document.getElementById("use_comet");
         const useRarbgCheckbox = document.getElementById("use_rarbg");
+        const fullItaCheckbox = document.getElementById("full_ita");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
 
@@ -937,6 +942,7 @@
             config.use_mediafusion = useMediaFusionCheckbox.checked;
             config.use_comet = useCometCheckbox.checked;
             config.use_rarbg = useRarbgCheckbox.checked;
+            config.full_ita = fullItaCheckbox.checked;
 
             // Max Resolution Limit (only if checkbox is checked)
             if (useMaxResLimitCheckbox.checked) {
@@ -1138,6 +1144,10 @@
                     const el = document.getElementById('use_rarbg');
                     if (el) el.checked = cfg.use_rarbg;
                 }
+                if (cfg.full_ita !== undefined) {
+                    const el = document.getElementById('full_ita');
+                    if (el) el.checked = cfg.full_ita;
+                }
 
                 // Max Resolution Limit
                 if (cfg.max_res_limit) {
@@ -1237,6 +1247,7 @@
         useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
         useCometCheckbox.addEventListener('change', updateInstallLink);
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
+        fullItaCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
 

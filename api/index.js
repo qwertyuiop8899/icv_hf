@@ -338,8 +338,20 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
                 folderName: isPack ? actualFolderName : '',
                 title: displayTitle,
                 // ✅ Use numeric bytes, not formatted strings like "10.5 GB"
-                size: Number(result.size || result.file_size || result.sizeInBytes || result.matchedFileSize || 0),
-                folderSize: Number(result.packSize || result.size || result.sizeInBytes || 0),
+                size: (function () {
+                    // Try numeric fields first
+                    const numericSize = result.sizeInBytes || result.mainFileSize || result.matchedFileSize || result.file_size;
+                    if (typeof numericSize === 'number' && numericSize > 0) return numericSize;
+
+                    // Try to parse string fields
+                    const stringSize = result.size || result.file_size;
+                    if (stringSize) {
+                        if (typeof stringSize === 'string') return parseSize(stringSize);
+                        if (typeof stringSize === 'number') return stringSize;
+                    }
+                    return 0;
+                })(),
+                folderSize: Number(result.packSize || result.mainFileSize || result.sizeInBytes || 0),
                 library: false,
 
                 // Quality info

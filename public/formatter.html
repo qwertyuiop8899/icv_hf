@@ -498,7 +498,7 @@
 {stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "]||""}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"]||""}
 {stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}
 "]||""}{stream.size::>0["📦 {stream.size::bytes} "]||""}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "]||""}{stream.duration::>0["⏱️ {stream.duration::time} "]||""}{stream.seeders::>0["👥 {stream.seeders} "]||""}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "]||""}{stream.age::exists["📅 {stream.age}"]||""}
-{service.cached::istrue["⚡"]||""}{service.cached::isfalse["⏳"]||""}{service.shortName::exists["{service.shortName} "]||""}{stream.type::=Usenet["📰 Usenet "]||""}{stream.type::=p2p["⚠️ P2P "]||""}{stream.type::=http["💻 Web Link "]||""}{stream.type::=youtube["▶️ Youtube "]||""}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"]||""}
+{service.cached::istrue["⚡"]||""}{service.cached::isfalse["⏳"]||""}{service.shortName::exists["{service.shortName} "]||""}{stream.type::=Usenet["📰 Usenet "]||""}{stream.type::=p2p["⚠️ P2P "]||""}{stream.type::=http["💻 Web Link "]||""}{stream.type::=youtube["▶️ Youtube "]||""}{stream.type::=live["📺 Live "]|""}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"]||""}
 {stream.folderName::exists["📂 {stream.folderName}
 "]||""}{stream.filename::exists["📄 {stream.filename}"]||""}`
             },

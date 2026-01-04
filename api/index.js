@@ -6643,10 +6643,24 @@ async function handleStream(type, id, config, workerOrigin) {
         // --- FINE NUOVA LOGICA ---
 
         // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
+        // ✅ STRICT ITALIAN FILTER: Only save Italian/Multi torrents to DB
         if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
             try {
                 const torrentsToSave = results
-                    .filter(r => r.infoHash) // Only save if we have infoHash
+                    .filter(r => {
+                        if (!r.infoHash) return false;
+
+                        // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
+                        const title = r.title || r.websiteTitle || '';
+                        const langInfo = getLanguageInfo(title);
+                        const isItalian = langInfo.isItalian || langInfo.isMulti;
+
+                        if (!isItalian) {
+                            console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
+                            return false;
+                        }
+                        return true;
+                    })
                     .map(r => ({
                         info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
                         title: r.title || r.websiteTitle || 'Unknown',
@@ -6663,8 +6677,10 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (torrentsToSave.length > 0) {
                     // 🚀 Fire-and-forget: Save to DB in background without blocking response
                     dbHelper.batchInsertTorrents(torrentsToSave)
-                        .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} torrents from all sources to DB (background)`))
+                        .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
                         .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
+                } else {
+                    console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
                 }
             } catch (dbSaveError) {
                 console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);

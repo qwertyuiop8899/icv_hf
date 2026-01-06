@@ -5605,6 +5605,12 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         }
 
+        // 💾 DB-Only Mode: Skip ALL live searches (but keep enrichment for background DB growth)
+        if (config.db_only) {
+            skipLiveSearch = true;
+            console.log(`💾 [DB Only] Mode enabled - skipping all live searches`);
+        }
+
         if (skipLiveSearch) {
             console.log(`✅ [3-Tier] Found ${dbResults.length} results from DB/FTS. Skipping Corsaro live search.`);
         } else {
@@ -5998,8 +6004,8 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         });
 
-        // 3️⃣ TASK: External Addons
-        if (enabledExternalAddons.length > 0) {
+        // 3️⃣ TASK: External Addons (skip in db_only mode)
+        if (enabledExternalAddons.length > 0 && !config.db_only) {
             parallelSearchTasks.push(async () => {
                 console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
 
@@ -6024,8 +6030,8 @@ async function handleStream(type, id, config, workerOrigin) {
             });
         }
 
-        // 4️⃣ TASK: RARBG
-        if (config.use_rarbg !== false) {
+        // 4️⃣ TASK: RARBG (skip in db_only mode)
+        if (config.use_rarbg !== false && !config.db_only) {
             parallelSearchTasks.push(async () => {
                 // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
                 const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;

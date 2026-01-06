@@ -6727,7 +6727,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // ✅ Apply exact matching filters
         let filteredResults = results;
 
-        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio which are already ITA-focused)
+        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
         if (config.full_ita) {
             const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
             const beforeCount = filteredResults.length;
@@ -6735,8 +6735,13 @@ async function handleStream(type, id, config, workerOrigin) {
             filteredResults = filteredResults.filter(result => {
                 const provider = (result.source || result.externalAddon || '').toLowerCase();
 
-                // Exempt providers: CorsaroNero and Torrentio
-                const isExempt = exemptProviders.some(exempt => provider.includes(exempt));
+                // Extract MAIN provider only (before parentheses) to avoid false positives
+                // e.g., "comet (torrentio)" → "comet" (NOT exempt)
+                // e.g., "torrentio" → "torrentio" (exempt)
+                const mainProvider = provider.split('(')[0].trim();
+
+                // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
+                const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
                 if (isExempt) return true;
 
                 // For all other providers, check for strict ITA in title

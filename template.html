@@ -678,6 +678,10 @@
                         <input type="checkbox" id="use_rarbg" checked>
                         <span>🏴 RARBG (Proxy)</span>
                     </label>
+                    <label style="background: rgba(0, 100, 200, 0.15); border-color: rgba(100, 150, 255, 0.4);">
+                        <input type="checkbox" id="db_only">
+                        <span>💾 Ricerca Solo DB (Ultra-veloce, no live search)</span>
+                    </label>
                     <label style="background: rgba(0, 128, 0, 0.15); border-color: rgba(0, 200, 83, 0.4);">
                         <input type="checkbox" id="full_ita">
                         <span>🇮🇹 FULL ITA (Solo risultati con "ITA" nel nome)</span>
@@ -840,6 +844,7 @@
         const useCometCheckbox = document.getElementById("use_comet");
         const useRarbgCheckbox = document.getElementById("use_rarbg");
         const fullItaCheckbox = document.getElementById("full_ita");
+        const dbOnlyCheckbox = document.getElementById("db_only");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
 
@@ -943,6 +948,7 @@
             config.use_comet = useCometCheckbox.checked;
             config.use_rarbg = useRarbgCheckbox.checked;
             config.full_ita = fullItaCheckbox.checked;
+            config.db_only = dbOnlyCheckbox.checked;
 
             // Max Resolution Limit (only if checkbox is checked)
             if (useMaxResLimitCheckbox.checked) {
@@ -1147,6 +1153,10 @@
                 if (cfg.full_ita !== undefined) {
                     const el = document.getElementById('full_ita');
                     if (el) el.checked = cfg.full_ita;
+                }
+                if (cfg.db_only !== undefined) {
+                    const el = document.getElementById('db_only');
+                    if (el) el.checked = cfg.db_only;
                 }
 
                 // Max Resolution Limit

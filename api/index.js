@@ -5247,19 +5247,26 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // ✅ BUILD SELECTED PROVIDERS LIST from user config
         // Maps config keys to DB provider ILIKE patterns (shortest common substring)
-        const selectedProviders = [];
-        if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
-        if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
-        if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
-        if (config.use_uindex !== false) selectedProviders.push('uindex');
-        if (config.use_rarbg === true) selectedProviders.push('rarbg');
-        // Always include rd_cache (personal torrents) and pack-handler
-        selectedProviders.push('rd_cache', 'pack-handler');
-        // External addons: Check individual toggles
-        if (config.use_external_addons !== false) {
-            if (config.use_torrentio !== false) selectedProviders.push('torrentio');
-            if (config.use_mediafusion !== false) selectedProviders.push('mediafusion');
-            if (config.use_comet !== false) selectedProviders.push('comet');
+        let selectedProviders = [];
+
+        // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
+        if (config.db_only) {
+            selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'torrentio', 'mediafusion', 'comet'];
+            console.log(`💾 [DB Only] Querying ALL providers in database`);
+        } else {
+            if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
+            if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
+            if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
+            if (config.use_uindex !== false) selectedProviders.push('uindex');
+            if (config.use_rarbg === true) selectedProviders.push('rarbg');
+            // Always include rd_cache (personal torrents) and pack-handler
+            selectedProviders.push('rd_cache', 'pack-handler');
+            // External addons: Check individual toggles
+            if (config.use_external_addons !== false) {
+                if (config.use_torrentio !== false) selectedProviders.push('torrentio');
+                if (config.use_mediafusion !== false) selectedProviders.push('mediafusion');
+                if (config.use_comet !== false) selectedProviders.push('comet');
+            }
         }
         console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
 
@@ -8611,9 +8618,11 @@ export default async function handler(req, res) {
                     // Feature flags
                     const hasFullIta = config.full_ita === true;
                     const hasSkipIntro = config.introskip_enabled === true;
+                    const hasDbOnly = config.db_only === true;
 
-                    // Build feature suffix: 🇮🇹 for FULL ITA, ⏩ for Skip Intro
+                    // Build feature suffix: ⚡ for DB Only, 🇮🇹 for FULL ITA, ⏩ for Skip Intro
                     let featureSuffix = '';
+                    if (hasDbOnly) featureSuffix += '⚡';
                     if (hasFullIta) featureSuffix += '🇮🇹';
                     if (hasSkipIntro) featureSuffix += '⏩';
 

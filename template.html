@@ -991,9 +991,9 @@
             if (config.use_comet) searchSites.push("Comet");
             if (config.use_rarbg) searchSites.push("RARBG");
 
-            if (searchSites.length === 0) {
-                // No search sites selected - show error
-                statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca";
+            if (searchSites.length === 0 && !config.db_only) {
+                // No search sites selected and not in DB Only mode - show error
+                statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o abilita 'Ricerca Solo DB')";
                 statusEl.style.color = '#FF6B6B';
                 linkContainer.classList.remove('show');
                 installButton.disabled = true;
@@ -1015,7 +1015,26 @@
             installButton.disabled = false;
             copyButton.disabled = false;
 
-            // Status message
+            // Status message with emoji indicators
+            // Debrid icons (with + separator)
+            let debridEmojis = [];
+            if (config.use_rd) debridEmojis.push('👑');
+            if (config.use_torbox) debridEmojis.push('📦');
+
+            // Feature icons (no separator)
+            let featureEmojis = '';
+            if (config.db_only) featureEmojis += '⚡';
+            if (config.full_ita) featureEmojis += '🇮🇹';
+            if (config.introskip_enabled) featureEmojis += '⏩';
+
+            // Build status emoji string
+            let statusEmojis = '';
+            if (debridEmojis.length > 0) {
+                statusEmojis = debridEmojis.join('+') + featureEmojis;
+            } else {
+                statusEmojis = '🔗' + featureEmojis; // P2P + features
+            }
+
             let services = [];
             if (config.use_rd) services.push("Real-Debrid");
             if (config.use_torbox) services.push("Torbox");
@@ -1023,9 +1042,10 @@
             if (config.mediaflow_url) services.push("MediaFlow");
             if (config.jackett_url) services.push("Jackettio");
 
+            const dbOnlyText = config.db_only ? ' [DB Only]' : '';
             const serviceText = services.length > 0 ? ` (${services.join(', ')})` : ' (Solo P2P)';
-            const searchText = ` | Siti: ${searchSites.join(', ')}`;
-            statusEl.textContent = `✓ Configurazione pronta${serviceText}${searchText}`;
+            const searchText = searchSites.length > 0 ? ` | Siti: ${searchSites.join(', ')}` : '';
+            statusEl.textContent = `✓ ${statusEmojis} Configurazione pronta${dbOnlyText}${serviceText}${searchText}`;
             statusEl.style.color = '#4EC9B0';
         }
 

@@ -636,8 +636,8 @@ function getLanguageInfo(title, italianMovieTitle = null, source = null, parsedI
         hasIta = isItalian(title, italianMovieTitle);
     }
 
-    // Force Italian for CorsaroNero
-    if (source && (source === 'CorsaroNero' || source.includes('CorsaroNero'))) {
+    // Force Italian for CorsaroNero (matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.)
+    if (source && /corsaro/i.test(source)) {
         hasIta = true;
     }
 
@@ -6686,9 +6686,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         const isItalian = langInfo.isItalian;
 
                         // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
-                        const isTrustedProvider = r.source === 'CorsaroNero' ||
-                            (r.source && r.source.includes('CorsaroNero')) ||
-                            (r.externalAddon && r.externalAddon.toLowerCase().includes('torrentio'));
+                        // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
+                        const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
+                            (r.externalAddon && /torrentio/i.test(r.externalAddon));
 
                         if (!isItalian && !isTrustedProvider) {
                             console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);

@@ -6252,21 +6252,26 @@ async function handleStream(type, id, config, workerOrigin) {
 
             // Convert filtered DB results to scraper format
             for (const dbResult of filteredDbResults) {
-                // 🔥 FILTER: Respect user configuration even for DB results
+                // 🔥 FILTER: Respect user configuration for DB results
+                // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
                 const providerName = dbResult.provider || 'Database';
 
-                if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                    console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                    continue;
+                if (!config.db_only) {
+                    // Normal mode: respect individual provider toggles
+                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'UIndex' && config.use_uindex === false) {
+                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'Knaben' && config.use_knaben === false) {
+                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
                 }
-                if (providerName === 'UIndex' && config.use_uindex === false) {
-                    console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                    continue;
-                }
-                if (providerName === 'Knaben' && config.use_knaben === false) {
-                    console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                    continue;
-                }
+                // In db_only mode: show ALL providers without filtering
 
                 // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
                 const torrentTitle = dbResult.torrent_title || dbResult.title;

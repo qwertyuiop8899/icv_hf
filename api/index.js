@@ -6687,8 +6687,10 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
                         // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
+                        // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
+                        const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
                         const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
-                            (r.externalAddon && /torrentio/i.test(r.externalAddon));
+                            (mainAddon && /^torrentio$/i.test(mainAddon));
 
                         if (!isItalian && !isTrustedProvider) {
                             console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);

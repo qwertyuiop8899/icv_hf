@@ -72,8 +72,9 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     const params = [imdbId, JSON.stringify([imdbId])];
     let paramIndex = 3;
 
+    // ✅ FIX: Include 'unknown' type to catch RD cache torrents that don't have type set
     if (type) {
-      query += ` AND type = $${paramIndex}`;
+      query += ` AND (type = $${paramIndex} OR type = 'unknown')`;
       params.push(type);
       paramIndex++;
     }
@@ -281,7 +282,7 @@ async function insertTorrent(torrent) {
  * @param {Array} cacheResults - Array of {hash, cached} objects
  * @returns {Promise<number>} Number of updated records
  */
-async function updateRdCacheStatus(cacheResults) {
+async function updateRdCacheStatus(cacheResults, mediaType = null) {
   if (!pool) throw new Error('Database not initialized');
   if (!cacheResults || cacheResults.length === 0) return 0;
 
@@ -300,13 +301,14 @@ async function updateRdCacheStatus(cacheResults) {
           info_hash, provider, title, type, upload_date, 
           cached_rd, last_cached_check, file_title, size
         )
-        VALUES ($1, 'rd_cache', $2, 'unknown', NOW(), $3, NOW(), $4, $5)
+        VALUES ($1, 'rd_cache', $2, $6, NOW(), $3, NOW(), $4, $5)
         ON CONFLICT (info_hash) DO UPDATE SET
           cached_rd = EXCLUDED.cached_rd,
           last_cached_check = NOW(),
           file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title),
           size = COALESCE(EXCLUDED.size, torrents.size),
-          title = CASE WHEN torrents.provider = 'rd_cache' AND EXCLUDED.file_title IS NOT NULL THEN EXCLUDED.file_title ELSE torrents.title END
+          title = CASE WHEN torrents.provider = 'rd_cache' AND EXCLUDED.file_title IS NOT NULL THEN EXCLUDED.file_title ELSE torrents.title END,
+          type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
       // Use file_title as fallback title, or generate one from hash
@@ -321,7 +323,8 @@ async function updateRdCacheStatus(cacheResults) {
         fallbackTitle,                       // $2 title  
         cachedValue,                         // $3 cached_rd (forced to true if undefined)
         result.file_title || null,           // $4 file_title
-        result.size || null                  // $5 size
+        result.size || null,                 // $5 size
+        mediaType || 'unknown'               // $6 type
       ];
 
       const res = await pool.query(upsertQuery, params);

@@ -6765,6 +6765,25 @@ async function handleStream(type, id, config, workerOrigin) {
                     dbHelper.batchInsertTorrents(torrentsToSave)
                         .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
                         .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
+
+                    // ✅ PACK FILES: Save file-specific info for movie packs (external addons with fileIdx)
+                    if (type === 'movie' && mediaDetails.imdbId) {
+                        const packFilesToSave = results
+                            .filter(r => r.infoHash && r.fileIdx !== undefined && r.externalAddon)
+                            .map(r => ({
+                                pack_hash: r.infoHash.toLowerCase(),
+                                imdb_id: mediaDetails.imdbId,
+                                file_index: r.fileIdx,
+                                file_path: r.filename || r.file_title || r.title,
+                                file_size: r.mainFileSize || r.sizeInBytes || 0
+                            }));
+
+                        if (packFilesToSave.length > 0) {
+                            dbHelper.insertPackFiles(packFilesToSave)
+                                .then(inserted => console.log(`📦 [DB] Saved ${inserted} pack file mappings for movie packs`))
+                                .catch(err => console.warn(`⚠️ [DB] Pack files save failed: ${err.message}`));
+                        }
+                    }
                 } else {
                     console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
                 }

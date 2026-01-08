@@ -6962,6 +6962,19 @@ async function handleStream(type, id, config, workerOrigin) {
                 );
                 if (mainTitleMatch) return true;
 
+                // ✅ Check file_title if available (for packs where main title is generic)
+                if (result.file_title) {
+                    const fileTitleMatch = isExactMovieMatch(
+                        result.file_title,
+                        mediaDetails.title,
+                        mediaDetails.year
+                    );
+                    if (fileTitleMatch) {
+                        console.log(`🎬 [Pack] Exact match on file_title: ${result.file_title}`);
+                        return true;
+                    }
+                }
+
                 // Try matching with Italian title
                 if (italianTitle && italianTitle !== mediaDetails.title) {
                     const italianMatch = isExactMovieMatch(

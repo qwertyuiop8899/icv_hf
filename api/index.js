@@ -6050,7 +6050,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (externalResults.length > 0) {
                         console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
-                        rawResultsByProvider.ExternalAddons.push(...externalResults);
+                        // ✅ Fix: Map external addon filename to file_title to preserve specific file selection
+                        const mappedResults = externalResults.map(r => ({
+                            ...r,
+                            file_title: r.filename || r.title
+                        }));
+                        rawResultsByProvider.ExternalAddons.push(...mappedResults);
                     } else {
                         console.log(`⚠️ [External Addons] No results received`);
                     }

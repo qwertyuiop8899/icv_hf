@@ -244,11 +244,17 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
 
         // CRITICAL: Sort files by path BEFORE assigning index!
         // Torbox API may return files in random order, but torrent file list is typically alphabetical
+        console.log(`🔍 [PACK-DEBUG] Raw files from Torbox SLOW PATH (count=${torrent.files.length}):`);
+        torrent.files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
+
         const sortedFiles = [...torrent.files].sort((a, b) => {
             const pathA = (a.name || '').toLowerCase();
             const pathB = (b.name || '').toLowerCase();
             return pathA.localeCompare(pathB);
         });
+
+        console.log(`🔍 [PACK-DEBUG] Sorted files SLOW PATH (count=${sortedFiles.length}):`);
+        sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
         const files = sortedFiles.map((f, idx) => ({
             id: idx,  // Index AFTER sorting - matches torrent file order

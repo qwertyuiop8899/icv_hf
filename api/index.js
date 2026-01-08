@@ -7726,7 +7726,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Size display with pack/episode format
                     let sizeLine;
                     const packSize = result.packSize || 0;
-                    const episodeSize = result.file_size || 0;
+                    // ✅ FIX: Include mainFileSize for Torrentio results (same as RD)
+                    const episodeSize = Number(result.mainFileSize) || Number(result.file_size) || 0;
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
                         // ✅ AIOStreams: File size first, pack size second with different emoji
                         if (config.aiostreams_mode) {
@@ -7912,7 +7913,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Size display with pack/episode format
                     let sizeLine;
                     const packSize = result.packSize || 0;
-                    const episodeSize = result.file_size || 0;
+                    // ✅ FIX: Include mainFileSize for Torrentio results
+                    const episodeSize = Number(result.mainFileSize) || Number(result.file_size) || 0;
                     if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
                         // ✅ AIOStreams: File size first, pack size second with different emoji
                         if (config.aiostreams_mode) {
@@ -8055,7 +8057,8 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // Size display with pack/episode format
                     let sizeLine;
-                    const episodeSize = result.file_size || 0;
+                    // ✅ FIX: Include mainFileSize for Torrentio results
+                    const episodeSize = Number(result.mainFileSize) || Number(result.file_size) || 0;
                     const packSize = result.packSize || (episodeSize > 0 && isPack ? (result.sizeInBytes || 0) : 0);
 
                     // Debug: log sizes for P2P

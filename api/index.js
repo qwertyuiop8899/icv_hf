@@ -6964,6 +6964,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // ✅ Check file_title if available (for packs where main title is generic)
                 if (result.file_title) {
+                    console.log(`🔍 [Filter Debug] Checking file_title: "${result.file_title}" against "${mediaDetails.title}"`);
                     const fileTitleMatch = isExactMovieMatch(
                         result.file_title,
                         mediaDetails.title,
@@ -6972,7 +6973,11 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (fileTitleMatch) {
                         console.log(`🎬 [Pack] Exact match on file_title: ${result.file_title}`);
                         return true;
+                    } else {
+                        console.log(`❌ [Filter Debug] file_title match failed`);
                     }
+                } else {
+                    console.log(`⚠️ [Filter Debug] No file_title for: ${torrentTitle.substring(0, 30)}...`);
                 }
 
                 // Try matching with Italian title

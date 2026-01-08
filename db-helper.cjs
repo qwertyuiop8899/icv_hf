@@ -480,6 +480,7 @@ async function batchInsertTorrents(torrents) {
     for (const torrent of torrents) {
       try {
         const query = `
+INSERT INTO torrents (
             info_hash, provider, title, size, type, upload_date, 
             seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index, file_title
           )

@@ -6711,6 +6711,13 @@ async function handleStream(type, id, config, workerOrigin) {
                         bestResults.set(hash, existing);
                         if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added mainFileSize from skipped: ${result.mainFileSize}`);
                     }
+                    // ✅ FIX: Copy fileIdx from new if existing doesn't have it
+                    if (existing.fileIdx === undefined && result.fileIdx !== undefined) {
+                        existing.fileIdx = result.fileIdx;
+                        existing.filename = existing.filename || result.filename;
+                        bestResults.set(hash, existing);
+                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added fileIdx from skipped: ${result.fileIdx}`);
+                    }
                 }
             }
         }
@@ -6768,14 +6775,15 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // ✅ PACK FILES: Save file-specific info for movie packs (external addons with fileIdx)
                     if (type === 'movie' && mediaDetails.imdbId) {
+                        // ✅ Save pack file info for ANY result with fileIdx (not just external addons)
                         const packFilesToSave = results
-                            .filter(r => r.infoHash && r.fileIdx !== undefined && r.externalAddon)
+                            .filter(r => r.infoHash && r.fileIdx !== undefined && r.mainFileSize)
                             .map(r => ({
                                 pack_hash: r.infoHash.toLowerCase(),
                                 imdb_id: mediaDetails.imdbId,
                                 file_index: r.fileIdx,
                                 file_path: r.filename || r.file_title || r.title,
-                                file_size: r.mainFileSize || r.sizeInBytes || 0
+                                file_size: r.mainFileSize || 0
                             }));
 
                         if (packFilesToSave.length > 0) {

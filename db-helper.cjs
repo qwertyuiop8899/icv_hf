@@ -507,6 +507,23 @@ INSERT INTO torrents (
               WHEN EXCLUDED.imdb_id IS NOT NULL 
                    AND EXCLUDED.imdb_id != COALESCE(torrents.imdb_id, '')
                    AND NOT (COALESCE(torrents.all_imdb_ids, '[]'::jsonb) @> to_jsonb(EXCLUDED.imdb_id::text))
+                   -- 🛡️ PROTECTION: Only accumulate IDs for movies (packs) or Explicit Series Collections
+                   -- Prevents spin-offs (like House of Ashur) from being linked to parent series
+                   AND (
+                     torrents.type = 'movie' 
+                     OR (
+                       torrents.type = 'series' 
+                       AND (
+                         torrents.title ILIKE '%collection%' 
+                         OR torrents.title ILIKE '%complete%' 
+                         OR torrents.title ILIKE '%pack%' 
+                         OR torrents.title ILIKE '%anthology%'
+                         OR torrents.title ILIKE '%tutta la serie%'
+                         OR torrents.title ILIKE '%stagion%' -- Matches Stagione/Stagioni (seasons packs)
+                         OR torrents.title ILIKE '%season%' -- Matches Season/Seasons packs
+                       )
+                     )
+                   )
               THEN COALESCE(torrents.all_imdb_ids, '[]'::jsonb) || to_jsonb(EXCLUDED.imdb_id::text)
               ELSE COALESCE(torrents.all_imdb_ids, '[]'::jsonb)
             END
@@ -568,6 +585,18 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, episodeInfo 
     if (episodeInfo && episodeInfo.imdbId && episodeInfo.season && episodeInfo.episode) {
       console.log(`💾 [DB] Saving episode file: ${episodeInfo.imdbId} S${episodeInfo.season}E${episodeInfo.episode}`);
 
+      // ✅ FIX: Ensure we use the main torrent's IMDb ID if available, 
+      // to prevent search context contamination (e.g. House of Ashur showing up in Spartacus search)
+      // This fetch is moved up so it applies to both UPDATE and INSERT operations
+      const torrentCheck = await pool.query('SELECT imdb_id FROM torrents WHERE info_hash = $1', [infoHash.toLowerCase()]);
+      let finalImdbId = episodeInfo.imdbId;
+      if (torrentCheck.rows.length > 0 && torrentCheck.rows[0].imdb_id) {
+        finalImdbId = torrentCheck.rows[0].imdb_id;
+        if (finalImdbId !== episodeInfo.imdbId) {
+          console.log(`🛡️ [DB] Using parent torrent IMDbID ${finalImdbId} instead of context ID ${episodeInfo.imdbId} for file ${fileName}`);
+        }
+      }
+
       // Check if file already exists
       const checkQuery = `
         SELECT file_index FROM files 
@@ -578,27 +607,31 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, episodeInfo 
       `;
       const checkRes = await pool.query(checkQuery, [
         infoHash.toLowerCase(),
-        episodeInfo.imdbId,
+        finalImdbId, // Use the correct ID for checking existence too? No, checks usually use the *target* ID.
+        // But if we are correcting it, maybe we should check based on hash+fileIndex?
+        // Actually logic below uses hash+fileIndex only for conflict check. 
+        // This specific checkQuery checks if THIS episode already has THIS file associated.
         episodeInfo.season,
         episodeInfo.episode
       ]);
 
       if (checkRes.rowCount > 0) {
-        // Record already exists for this episode - just update the title if needed
+        // Record already exists for this episode - just update the title/index if needed
+        // And importantly verify/update the IMDb ID if it matches our 'finalImdbId' (safe).
         const updateQuery = `
           UPDATE files
           SET file_index = $1,
-              title = $2
-          WHERE info_hash = $3 
-            AND imdb_id = $4 
+              title = $2,
+              imdb_id = $3
+          WHERE info_hash = $4 
             AND imdb_season = $5 
             AND imdb_episode = $6
         `;
         const res = await pool.query(updateQuery, [
           fileIndex,
           fileName,
+          finalImdbId,
           infoHash.toLowerCase(),
-          episodeInfo.imdbId,
           episodeInfo.season,
           episodeInfo.episode
         ]);
@@ -632,7 +665,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, episodeInfo 
           infoHash.toLowerCase(),
           fileIndex,
           fileName,
-          episodeInfo.imdbId,
+          finalImdbId,
           episodeInfo.season,
           episodeInfo.episode
         ]);

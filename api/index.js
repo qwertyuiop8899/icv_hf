@@ -935,6 +935,7 @@ async function fetchCorsaroNeroSingle(searchQuery, type = 'movie') {
                         pubDate: new Date().toISOString(), // Not available, using current time
                         categories: [outputCategory]
                     };
+
                 }
 
                 console.log(`🏴‍☠️   - Failed to find magnet for: "${torrentTitle}"`);
@@ -4895,7 +4896,7 @@ function isExactMovieMatch(torrentTitle, movieTitle, year) {
         const percentageMatch = matchingWords.length / movieWords.length;
         hasEnoughMovieWords = percentageMatch >= 0.7;
         if (!hasEnoughMovieWords) {
-            console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
+            // console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
         }
     }
 
@@ -5836,7 +5837,7 @@ async function handleStream(type, id, config, workerOrigin) {
         const parallelSearchTasks = [];
 
         // 1️⃣ TASK: UIndex
-        if (useUIndex) {
+        if (useUIndex && !config.db_only) {
             parallelSearchTasks.push(async () => {
                 const uindexQueries = [];
                 const seasonStr = String(season).padStart(2, '0');
@@ -5943,7 +5944,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
-                if (useKnaben) {
+                if (useKnaben && !config.db_only) {
                     // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
                     // Build metadata object for Knaben API
                     const knabenMetadata = {
@@ -5970,7 +5971,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 // TorrentGalaxy
-                if (useTorrentGalaxy) {
+                if (useTorrentGalaxy && !config.db_only) {
                     const tgxMetadata = {
                         primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
                         title: originalTitle || mediaDetails.title,
@@ -5989,7 +5990,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 // Jackettio
-                if (jackettioInstance) {
+                if (jackettioInstance && !config.db_only) {
                     searchPromises.push({
                         name: 'Jackettio',
                         promise: fetchJackettioData(query, searchType, jackettioInstance)
@@ -7346,7 +7347,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (type === 'movie') {
                         // FIX: Only use cached file_title if we don't already have a valid one (e.g. from Torrentio behaviorHints)
                         // This prevents specialized pack files (like "Basil l'investigatopo") being overwritten by generic cache title ("Oceania")
-                        if (!result.file_title && rdCacheData?.file_title) {
+                        if (!result.file_title && rdCacheData?.file_title && result.fileIndex === undefined) {
                             result.file_title = rdCacheData.file_title;
                             console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
                         } else if (result.file_title) {

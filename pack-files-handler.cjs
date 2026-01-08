@@ -181,12 +181,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                 const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
                 if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
                     const files = cacheData[hashKey].files.map((f, idx) => ({
-                        id: f.id ?? f.file_id ?? idx,  // Use actual file ID from Torbox, fallback to index
+                        id: idx,  // FIXED: Use array index, NOT Torbox's internal f.id - Stremio expects array position
                         path: f.name || f.path || `file_${idx}`,
                         bytes: f.size || 0,
                         selected: 1
                     }));
-                    console.log(`📊 [PACK-HANDLER] Torbox cache file IDs: ${files.map(f => f.id).join(', ')}`);
+                    console.log(`📊 [PACK-HANDLER] Torbox cache file indices: ${files.map(f => f.id).join(', ')}`);
                     console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path)`);
                     return { torrentId: 'cached', files };
                 }
@@ -228,12 +228,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
         }
 
         const files = torrent.files.map((f, idx) => ({
-            id: f.id ?? idx,  // Use actual file ID from Torbox API, fallback to index
+            id: idx,  // FIXED: Use array index, NOT Torbox's internal f.id - Stremio expects array position
             path: f.name,
             bytes: f.size,
             selected: 1
         }));
-        console.log(`📊 [PACK-HANDLER] Torbox slow path file IDs: ${files.map(f => f.id).join(', ')}`);
+        console.log(`📊 [PACK-HANDLER] Torbox slow path file indices: ${files.map(f => f.id).join(', ')}`);
 
         console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
         await axios.get(`${baseUrl}/torrents/controltorrent`, {

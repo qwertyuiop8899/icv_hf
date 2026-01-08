@@ -494,6 +494,9 @@ function extractQuality(title) {
         /\b(bluray|blu-ray|bdremux)\b/i,
         /\b(remux)\b/i,
         /\b(hdrip)\b/i,
+        /\b(dvdrip|dvd-rip)\b/i,
+        /\b(dvd)\b/i,
+        /\b(divx)\b/i,
         /\b(cam|ts|tc)\b/i
     ];
 

@@ -6964,18 +6964,31 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // ✅ Check file_title if available (for packs where main title is generic)
                 if (result.file_title) {
-                    console.log(`🔍 [Filter Debug] Checking file_title: "${result.file_title}" against "${mediaDetails.title}"`);
-                    const fileTitleMatch = isExactMovieMatch(
-                        result.file_title,
-                        mediaDetails.title,
-                        mediaDetails.year
-                    );
-                    if (fileTitleMatch) {
-                        console.log(`🎬 [Pack] Exact match on file_title: ${result.file_title}`);
+                    console.log(`🔍 [Filter Debug] Checking file_title: "${result.file_title}"`);
+
+                    // 1. Check English/Main Title
+                    if (isExactMovieMatch(result.file_title, mediaDetails.title, mediaDetails.year)) {
+                        console.log(`🎬 [Pack] Exact match on file_title (Main): ${result.file_title}`);
                         return true;
-                    } else {
-                        console.log(`❌ [Filter Debug] file_title match failed`);
                     }
+
+                    // 2. Check Italian Title
+                    if (italianTitle && italianTitle !== mediaDetails.title) {
+                        if (isExactMovieMatch(result.file_title, italianTitle, mediaDetails.year)) {
+                            console.log(`🎬 [Pack] Exact match on file_title (Italian): ${result.file_title}`);
+                            return true;
+                        }
+                    }
+
+                    // 3. Check Original Title
+                    if (movieDetails && movieDetails.original_title && movieDetails.original_title !== mediaDetails.title) {
+                        if (isExactMovieMatch(result.file_title, movieDetails.original_title, mediaDetails.year)) {
+                            console.log(`🎬 [Pack] Exact match on file_title (Original): ${result.file_title}`);
+                            return true;
+                        }
+                    }
+
+                    console.log(`❌ [Filter Debug] file_title match failed`);
                 } else {
                     console.log(`⚠️ [Filter Debug] No file_title for: ${torrentTitle.substring(0, 30)}...`);
                 }

@@ -86,7 +86,7 @@ async function searchByImdbId(imdbId, type = null, providers = null, options = {
     let query = `
       SELECT ${selectColumns}
       FROM torrents 
-      WHERE (imdb_id = $1 OR all_imdb_ids @> $2)
+      WHERE (imdb_id = $1 OR all_imdb_ids @> $2::jsonb)
       ${typeCondition}
       ${providerCondition}
     `;

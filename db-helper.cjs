@@ -480,11 +480,10 @@ async function batchInsertTorrents(torrents) {
     for (const torrent of torrents) {
       try {
         const query = `
-          INSERT INTO torrents (
             info_hash, provider, title, size, type, upload_date, 
-            seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index
+            seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index, file_title
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           ON CONFLICT (info_hash) DO UPDATE SET
             imdb_id = COALESCE(torrents.imdb_id, EXCLUDED.imdb_id),
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
@@ -500,7 +499,8 @@ async function batchInsertTorrents(torrents) {
               THEN GREATEST(EXCLUDED.last_cached_check, COALESCE(torrents.last_cached_check, EXCLUDED.last_cached_check))
               ELSE torrents.last_cached_check
             END,
-            file_index = COALESCE(EXCLUDED.file_index, torrents.file_index)
+            file_index = COALESCE(EXCLUDED.file_index, torrents.file_index),
+            file_title = COALESCE(EXCLUDED.file_title, torrents.file_title)
         `;
 
         const values = [
@@ -515,7 +515,8 @@ async function batchInsertTorrents(torrents) {
           torrent.tmdb_id,
           torrent.cached_rd,
           torrent.last_cached_check,
-          torrent.file_index
+          torrent.file_index,
+          torrent.file_title || null // $13
         ];
 
         const res = await pool.query(query, values);

@@ -6956,6 +6956,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     return true;
                 }
 
+                // 🎯 TRUST DB PACKS (all_imdb_ids contains the requested ID)
+                if (result.all_imdb_ids && Array.isArray(result.all_imdb_ids) && result.all_imdb_ids.includes(mediaDetails.imdbId)) {
+                    console.log(`🎬 [Filter] Trusting DB pack match for: ${torrentTitle.substring(0, 40)}... (all_imdb_ids contains ID)`);
+                    return true;
+                }
+
                 // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
                 // Packs are identified by having a fileIndex (from pack_files table)
                 if (result.fileIndex !== null && result.fileIndex !== undefined) {
@@ -7445,7 +7451,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
 
                     // Define sizes for display logic
-                    const episodeSize = Number(result.file_size) || 0;
+                    // ✅ FIX: Include mainFileSize for Torrentio results that provide video_size
+                    const episodeSize = Number(result.mainFileSize) || Number(result.file_size) || 0;
                     const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
 
                     if (type === 'movie') {

@@ -6899,11 +6899,26 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (!isPack) {
                         nonPacks.push(result);
                     } else if (hasFileIndex) {
-                        verifiedPacks.push(result);
+                        // ✅ VERIFY that the fileIndex is for the REQUESTED episode, not a different one!
+                        // This fixes the bug where "Parte 2" (EP5-8) shows up for EP1 search
+                        const fileTitle = result.file_title || '';
+                        const episodePattern = new RegExp(
+                            `(?:s0*${seasonNum}e0*${episodeNum}|${seasonNum}x0*${episodeNum}|\\b(?:e|ep|episode|episodio)[\\s._-]*0*${episodeNum}\\b)`,
+                            'i'
+                        );
+
+                        if (episodePattern.test(fileTitle)) {
+                            verifiedPacks.push(result);
+                        } else {
+                            // fileIndex is for a different episode - need to re-verify
+                            console.log(`⚠️ [PACK VERIFY] "${result.title.substring(0, 40)}..." has fileIndex but for wrong episode (file: ${fileTitle.substring(0, 30)}...)`);
+                            unverifiedPacks.push(result);
+                        }
                     } else {
                         unverifiedPacks.push(result);
                     }
                 }
+
 
                 // Sort by size (largest first)
                 unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));

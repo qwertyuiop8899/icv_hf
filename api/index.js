@@ -6879,8 +6879,8 @@ async function handleStream(type, id, config, workerOrigin) {
 
             console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
 
-            // ✅ PACK FILES VERIFICATION for scraped results
-            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+            // ✅ PACK FILES VERIFICATION - runs for ALL users (P2P and Debrid)
+            if (filteredResults.length > 0) {
                 const seasonNum = parseInt(season);
                 const episodeNum = parseInt(episode);
                 const seriesImdbId = mediaDetails.imdbId;

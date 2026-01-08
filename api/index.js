@@ -6695,6 +6695,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         result.mainFileSize = existing.mainFileSize;
                         if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved mainFileSize: ${existing.mainFileSize}`);
                     }
+                    // ✅ FIX: Preserve fileIdx if new doesn't have it but existing does
+                    if (result.fileIdx === undefined && existing.fileIdx !== undefined) {
+                        result.fileIdx = existing.fileIdx;
+                        result.filename = result.filename || existing.filename;
+                        if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved fileIdx: ${existing.fileIdx}`);
+                    }
                     bestResults.set(hash, result);
                 } else {
                     if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);

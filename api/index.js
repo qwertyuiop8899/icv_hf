@@ -532,8 +532,14 @@ function extractInfoHash(magnet) {
 }
 
 // ✅ Enhanced Size Parsing
+// ✅ Enhanced Size Parsing
 function parseSize(sizeStr) {
     if (!sizeStr || sizeStr === '-' || sizeStr.toLowerCase() === 'unknown') return 0;
+
+    // ✅ FIX: Handle unitless numeric strings (raw bytes from DB)
+    if (/^\d+$/.test(sizeStr)) {
+        return parseInt(sizeStr, 10);
+    }
 
     const match = sizeStr.match(/([\d.,]+)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)/i);
     if (!match) return 0;

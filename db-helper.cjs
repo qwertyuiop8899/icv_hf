@@ -501,7 +501,15 @@ INSERT INTO torrents (
               ELSE torrents.last_cached_check
             END,
             file_index = COALESCE(EXCLUDED.file_index, torrents.file_index),
-            file_title = COALESCE(EXCLUDED.file_title, torrents.file_title)
+            file_title = COALESCE(EXCLUDED.file_title, torrents.file_title),
+            -- ✅ FIX: Accumulate IMDb IDs for pack torrents
+            all_imdb_ids = CASE
+              WHEN EXCLUDED.imdb_id IS NOT NULL 
+                   AND EXCLUDED.imdb_id != COALESCE(torrents.imdb_id, '')
+                   AND NOT (COALESCE(torrents.all_imdb_ids, '[]'::jsonb) @> to_jsonb(EXCLUDED.imdb_id::text))
+              THEN COALESCE(torrents.all_imdb_ids, '[]'::jsonb) || to_jsonb(EXCLUDED.imdb_id::text)
+              ELSE COALESCE(torrents.all_imdb_ids, '[]'::jsonb)
+            END
         `;
 
         const values = [

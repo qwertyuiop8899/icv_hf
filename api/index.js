@@ -15,6 +15,7 @@ const { completeIds } = require('../lib/id-converter.cjs');
 const rdCacheChecker = require('../rd-cache-checker.cjs');
 const { searchRARBG } = require('../rarbg.cjs');
 const aioFormatter = require('../aiostreams-formatter.cjs');
+const packHandler = require('../pack-files-handler.cjs');
 
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
@@ -6886,6 +6887,22 @@ async function handleStream(type, id, config, workerOrigin) {
                     ].filter(Boolean).join('\n');
 
                     // 🔥 P2P Pack Support: Add fileIdx for pack torrents
+                    // 🛠️ ALWAYS re-verify fileIdx for series packs using strict filter logic
+                    // This fixes off-by-one errors caused by 'sample' files being counted in old DB entries
+                    if (type === 'series' && season && episode) {
+                        try {
+                            const resolvedFile = await packHandler.resolveSeriesPackFile(result.infoHash, season, episode);
+                            if (resolvedFile) {
+                                if (result.fileIndex !== resolvedFile.file_index) {
+                                    console.log(`🧹 [P2P FIX] Corrected fileIdx from ${result.fileIndex} to ${resolvedFile.file_index} for ${result.infoHash.substring(0, 8)}`);
+                                }
+                                result.fileIndex = resolvedFile.file_index;
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [P2P FIX] Failed to resolve pack file: ${err.message}`);
+                        }
+                    }
+
                     const p2pStream = {
                         name: streamName,
                         title: streamTitle,
@@ -6901,28 +6918,6 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (result.fileIndex !== null && result.fileIndex !== undefined) {
                         p2pStream.fileIdx = result.fileIndex;
                         console.log(`🔥 [P2P Pack] Added fileIdx=${result.fileIndex} for ${result.title.substring(0, 50)}...`);
-                    }
-
-                    // 🛠️ DEBUG FIX: Force re-verify Stranger Things P2P Index
-                    if (result.infoHash && result.infoHash.toLowerCase() === '74a22624388e63b156524316d996191636c25345') {
-                        console.log(`🧹 [DEBUG] Stranger Things detected in P2P loop. Forcing fresh index resolution...`);
-                        try {
-                            // Dynamic require to be safe
-                            const packHandler = require('../pack-files-handler.cjs');
-                            if (season && episode) {
-                                console.log(`🧹 [DEBUG] Resolving S${season}E${episode} for hash ${result.infoHash}...`);
-                                const resolvedFile = await packHandler.resolveSeriesPackFile(result.infoHash, season, episode);
-
-                                if (resolvedFile) {
-                                    console.log(`🧹 [DEBUG] OVERRIDE: Old fileIdx=${p2pStream.fileIdx} -> New fileIdx=${resolvedFile.file_index}`);
-                                    p2pStream.fileIdx = resolvedFile.file_index;
-                                } else {
-                                    console.warn(`🧹 [DEBUG] Resolution returned null! Keeping old index.`);
-                                }
-                            }
-                        } catch (e) {
-                            console.error(`🧹 [DEBUG] Error resolving pack file: ${e.message}`);
-                        }
                     }
 
                     streams.push(p2pStream);

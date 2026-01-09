@@ -4366,26 +4366,8 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null,
 }
 
 // ✅ IMPROVED Matching functions - Supporta SEASON PACKS come Torrentio
-function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null, skipTitleCheck = false, requiredYear = null) {
+function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null, skipTitleCheck = false) {
     if (!torrentTitle || !showTitleOrTitles) return false;
-
-    // ✅ YEAR CHECK: strict filtering if year is present in torrent title
-    if (requiredYear) {
-        const titleYearMatch = torrentTitle.match(/\b((?:19|20)\d{2})\b/);
-        if (titleYearMatch) {
-            const torrentYear = parseInt(titleYearMatch[1]);
-            const diff = Math.abs(torrentYear - parseInt(requiredYear));
-
-            // If torrent has year and it differs by more than 1 year, REJECT
-            // (Strict for series to avoid "Spartacus" vs "Spartacus: Gods of the Arena")
-            if (diff > 1) {
-                console.log(`❌ [YEAR FILTER] Rejected "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
-                return false;
-            } else {
-                console.log(`✅ [YEAR FILTER] Passed "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
-            }
-        }
-    }
 
     // DEBUG: Log rejected single episodes
     if (torrentTitle.includes('155da22a') || torrentTitle.includes('3d700a66') ||
@@ -6216,68 +6198,23 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
-                // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
-                const needsExternalVerification = [];
+                // Verify unverified packs (max 20, with 100ms delay)
+                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
+                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
+
                 const newlyVerified = [];
                 const excluded = [];
 
-                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                // This ensures "Part 2" packs are excluded if we already know their content
-                console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
-
-                for (const dbResult of unverifiedPacks) {
-                    try {
-                        // Check if we have files for this pack in DB
-                        // We use the same helper that resolveSeriesPackFile uses
-                        const cachedFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
-
-                        if (cachedFiles && cachedFiles.length > 0) {
-                            // ✅ CACHE HIT: Verify immediately (zero cost)
-                            // We call resolveSeriesPackFile which will use the cache we just found
-                            const fileInfo = await packFilesHandler.resolveSeriesPackFile(
-                                dbResult.info_hash.toLowerCase(),
-                                config,
-                                seriesImdbId,
-                                seasonNum,
-                                episodeNum,
-                                dbHelper
-                            );
-
-                            if (fileInfo) {
-                                console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
-                                dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
-                                dbResult.file_index = fileInfo.fileIndex;
-                                dbResult.file_title = fileInfo.fileName;
-                                dbResult.file_size = fileInfo.fileSize;
-                                newlyVerified.push(dbResult);
-                            } else {
-                                console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
-                                excluded.push(dbResult);
-                            }
-                        } else {
-                            // ❌ CACHE MISS: Needs external verification
-                            needsExternalVerification.push(dbResult);
-                        }
-                    } catch (err) {
-                        console.warn(`⚠️ [PACK VERIFY] Cache check error: ${err.message}`);
-                        needsExternalVerification.push(dbResult); // Fallback to external
-                    }
-                }
-
-                // 2️⃣ SLOW PATH: External Verification (LIMITED)
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
-                const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
-
-                console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const dbResult = toVerifyExternal[i];
+                for (let i = 0; i < toVerify.length; i++) {
+                    const dbResult = toVerify[i];
                     const torrentTitle = dbResult.torrent_title || dbResult.title;
 
-                    // Delay for external calls
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                    // Add delay between calls (except first)
+                    if (i > 0) {
+                        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                    }
 
-                    console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
+                    console.log(`📦 [PACK VERIFY] (${i + 1}/${toVerify.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
 
                     try {
                         const fileInfo = await packFilesHandler.resolveSeriesPackFile(
@@ -6290,7 +6227,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                            console.log(`✅ [PACK VERIFY] Found E${episodeNum}: ${fileInfo.fileName} (${(fileInfo.fileSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+                            // Use totalPackSize from fileInfo if available, otherwise use torrent_size
                             dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                             dbResult.file_index = fileInfo.fileIndex;
                             dbResult.file_title = fileInfo.fileName;
@@ -6301,88 +6239,82 @@ async function handleStream(type, id, config, workerOrigin) {
                             excluded.push(dbResult);
                         }
                     } catch (err) {
-                        console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - keeping pack`);
-                        // Adding to verified to be safe on error? No, safer to exclude if we can't verify.
-                        // But original logic kept it. Let's keep it to avoid false negatives on network error.
-                        newlyVerified.push(dbResult);
+                        console.warn(`⚠️ [PACK VERIFY] Error: ${err.message} - keeping pack`);
+                        newlyVerified.push(dbResult); // Keep on error
                     }
                 }
 
-                // 3️⃣ STRICT FILTERING: Exclude skipped packs!
-                if (skippedSize > 0) {
-                    console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
-                }
+                console.log(`📦 [PACK VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped (limit)`);
 
-                // Combine results: nonPacks + verifiedPacks + newlyVerified
-                // SKIPPED ARE EXCLUDED
-                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
-
-                // Convert filtered DB results to scraper format
-                for (const dbResult of filteredDbResults) {
-                    // 🔥 FILTER: Respect user configuration for DB results
-                    // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
-                    const providerName = dbResult.provider || 'Database';
-
-                    if (!config.db_only) {
-                        // Normal mode: respect individual provider toggles
-                        if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                            console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
-                        if (providerName === 'UIndex' && config.use_uindex === false) {
-                            console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
-                        if (providerName === 'Knaben' && config.use_knaben === false) {
-                            console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
-                    }
-                    // In db_only mode: show ALL providers without filtering
-
-                    // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
-                    const torrentTitle = dbResult.torrent_title || dbResult.title;
-                    const torrentSize = dbResult.torrent_size || dbResult.size;
-                    // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
-                    const displaySize = dbResult.file_size || torrentSize;
-                    // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
-                    // This ensures we only show the actual filename for the SPECIFIC episode
-                    const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
-
-                    // Build magnet link
-                    const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
-
-                    // DEBUG: Log what we're adding
-                    console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
-
-                    // Add to raw results with high priority
-                    allRawResults.push({
-                        title: torrentTitle,
-                        infoHash: dbResult.info_hash.toUpperCase(),
-                        magnetLink: magnetLink,
-                        seeders: dbResult.seeders || 0,
-                        leechers: 0,
-                        size: displaySize ? formatBytes(displaySize) : 'Unknown',
-                        sizeInBytes: displaySize || 0,
-                        // ✅ Pack size for pack/episode display
-                        packSize: dbResult.packSize || torrentSize || 0,
-                        file_size: dbResult.file_size || 0,
-                        quality: extractQuality(torrentTitle),
-                        filename: fileName || torrentTitle,
-                        source: `💾 ${dbResult.provider || 'Database'}`,
-                        fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
-                        file_title: fileName || undefined // Real filename from DB (only for specific episode)
-                    });
-
-                    // DEBUG: Log file info from DB
-                    if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
-                        console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
-                    }
-                }
-
-                console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
+                // Combine all results: non-packs + verified + newly verified + skipped
+                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
             }
-        } // ✅ Close filteredDbResults loop
+
+            // Convert filtered DB results to scraper format
+            for (const dbResult of filteredDbResults) {
+                // 🔥 FILTER: Respect user configuration for DB results
+                // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
+                const providerName = dbResult.provider || 'Database';
+
+                if (!config.db_only) {
+                    // Normal mode: respect individual provider toggles
+                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'UIndex' && config.use_uindex === false) {
+                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'Knaben' && config.use_knaben === false) {
+                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                }
+                // In db_only mode: show ALL providers without filtering
+
+                // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
+                const torrentTitle = dbResult.torrent_title || dbResult.title;
+                const torrentSize = dbResult.torrent_size || dbResult.size;
+                // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
+                const displaySize = dbResult.file_size || torrentSize;
+                // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
+                // This ensures we only show the actual filename for the SPECIFIC episode
+                const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
+
+                // Build magnet link
+                const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
+
+                // DEBUG: Log what we're adding
+                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
+
+                // Add to raw results with high priority
+                allRawResults.push({
+                    title: torrentTitle,
+                    infoHash: dbResult.info_hash.toUpperCase(),
+                    magnetLink: magnetLink,
+                    seeders: dbResult.seeders || 0,
+                    leechers: 0,
+                    size: displaySize ? formatBytes(displaySize) : 'Unknown',
+                    sizeInBytes: displaySize || 0,
+                    // ✅ Pack size for pack/episode display
+                    packSize: dbResult.packSize || torrentSize || 0,
+                    file_size: dbResult.file_size || 0,
+                    quality: extractQuality(torrentTitle),
+                    filename: fileName || torrentTitle,
+                    source: `💾 ${dbResult.provider || 'Database'}`,
+                    fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
+                    file_title: fileName || undefined // Real filename from DB (only for specific episode)
+                });
+
+                // DEBUG: Log file info from DB
+                if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
+                    console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
+                }
+            }
+
+            console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
+        }
 
         // 🎯 Helper: Calculate similarity between two strings (0-1)
         // Uses multiple strategies: Levenshtein, word overlap, containment
@@ -6851,9 +6783,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     parseInt(season),
                     parseInt(episode), // Season episode (e.g., 1 for S03E01)
                     !!kitsuId,
-                    mediaDetails.absoluteEpisode, // Absolute episode (e.g., 38)
-                    false, // skipTitleCheck default
-                    mediaDetails.year // ✅ Pass requiredYear
+                    mediaDetails.absoluteEpisode // Absolute episode (e.g., 38)
                 );
 
                 if (!match) {
@@ -6898,73 +6828,46 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
-                // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
-                const needsExternalVerification = [];
+                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
+                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
 
-                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                const newlyVerified = [];
+                const excluded = [];
 
-                for (const result of unverifiedPacks) {
+                for (let i = 0; i < toVerify.length; i++) {
+                    const result = toVerify[i];
                     const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
 
                     if (!infoHash) {
-                        newlyVerified.push(result); // Cannot verify without hash
+                        newlyVerified.push(result);
                         continue;
                     }
 
-                    try {
-                        // Check if we have files for this pack in DB
-                        const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                    if (i > 0) {
+                        // 🧠 SMART DELAY: Don't wait if we have cached file info in DB!
+                        // This removes the 200ms delay for cached content
+                        if (DEBUG_MODE) console.log(`🕵️ [SCRAPE VERIFY] Checking DB cache for hash: ${infoHash.substring(0, 8)}...`);
 
-                        if (cachedFiles && cachedFiles.length > 0) {
-                            // ✅ CACHE HIT: Verify immediately
-                            const fileInfo = await packFilesHandler.resolveSeriesPackFile(
-                                infoHash,
-                                config,
-                                seriesImdbId,
-                                seasonNum,
-                                episodeNum,
-                                dbHelper
-                            );
-
-                            if (fileInfo) {
-                                console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
-                                result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
-                                result.file_size = fileInfo.fileSize;
-                                result.fileIndex = fileInfo.fileIndex;
-                                result.file_title = fileInfo.fileName;
-                                result.sizeInBytes = fileInfo.fileSize;
-                                result.size = formatBytes(fileInfo.fileSize);
-                                newlyVerified.push(result);
-                            } else {
-                                console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
-                                excluded.push(result);
+                        let isCached = false;
+                        try {
+                            // Quick check if files exist in DB cache for this hash
+                            const currentFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                            if (currentFiles && currentFiles.length > 0) {
+                                isCached = true;
+                                if (DEBUG_MODE) console.log(`⚡ [SCRAPE VERIFY] Cache HIT for ${infoHash.substring(0, 8)} - Skipping delay!`);
                             }
-                        } else {
-                            // ❌ CACHE MISS
-                            needsExternalVerification.push(result);
+                        } catch (e) {
+                            if (DEBUG_MODE) console.warn(`⚠️ [SCRAPE VERIFY] DB check failed, using safe delay: ${e.message}`);
                         }
-                    } catch (err) {
-                        console.warn(`⚠️ [SCRAPE VERIFY] Cache check error: ${err.message}`);
-                        needsExternalVerification.push(result);
+
+                        if (!isCached) {
+                            await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                        }
                     }
-                }
 
-                // 2️⃣ SLOW PATH: External Verification (LIMITED)
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
-                const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
+                    console.log(`📦 [SCRAPE VERIFY] (${i + 1}/${toVerify.length}) Checking "${result.title.substring(0, 50)}..."`);
 
-                console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const result = toVerifyExternal[i];
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
-                    // (infoHash checked above, but good to be safe if Logic moved)
-
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-
-                    console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
-
+                    // ✅ Save original pack size BEFORE any modification
                     const originalPackSize = result.sizeInBytes || 0;
 
                     try {
@@ -6978,7 +6881,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                            console.log(`✅ [SCRAPE VERIFY] Found E${episodeNum}: ${fileInfo.fileName}`);
+                            // Use totalPackSize from fileInfo if available, otherwise use original sizeInBytes
                             result.packSize = fileInfo.totalPackSize || originalPackSize;
                             result.file_size = fileInfo.fileSize;
                             result.fileIndex = fileInfo.fileIndex;
@@ -6996,15 +6900,8 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
                 }
 
-                // 3️⃣ STRICT FILTERING: Exclude skipped packs!
-                if (skippedSize > 0) {
-                    console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
-                }
-
-                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
-
-                // Combine results SKIPPED ARE EXCLUDED
-                filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
+                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped`);
+                filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
             }
 
             // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
@@ -7061,148 +6958,6 @@ async function handleStream(type, id, config, workerOrigin) {
             if (filteredResults.length === 0 && originalCount > 0) {
                 console.log('⚠️ Exact filtering removed all results, using broader match');
                 filteredResults = results.slice(0, Math.min(15, results.length));
-            }
-
-            // ✅ MOVIE PACK VERIFICATION
-            // Trigger: Only if Debrid key is present
-            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
-                const MAX_MOVIE_VERIFY = 5;
-                const DELAY_MS = 200;
-
-                // Separate known/verified from unverified
-                const verifiedMovies = [];
-                const unverifiedMovies = [];
-
-                for (const res of filteredResults) {
-                    // If it already has fileIndex, it's a known pack file from DB
-                    if (res.fileIndex !== undefined && res.fileIndex !== null) {
-                        verifiedMovies.push(res);
-                    } else {
-                        unverifiedMovies.push(res);
-                    }
-                }
-
-                unverifiedMovies.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
-
-                const newlyVerified = [];
-                const excluded = [];
-                const needsExternalVerification = [];
-
-                console.log(`🎬 [MOVIE VERIFY] Checking DB cache for ${unverifiedMovies.length} potential packs...`);
-
-                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified movies
-                for (const result of unverifiedMovies) {
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
-                    if (!infoHash) {
-                        newlyVerified.push(result);
-                        continue;
-                    }
-
-                    // Only check cache if size seems like a pack (> 4GB typically, but let's check all large ones)
-                    // Actually, check all. Cache is fast.
-                    try {
-                        const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
-                        if (cachedFiles && cachedFiles.length > 0) {
-                            // CACHE HIT: It's a pack (or we have files logged)
-                            const fileInfo = await packFilesHandler.resolveMoviePackFile(
-                                infoHash,
-                                config,
-                                mediaDetails.imdbId,
-                                mediaDetails.title, // Use MAIN title for fuzzy match
-                                mediaDetails.year,
-                                dbHelper
-                            );
-
-                            if (fileInfo) {
-                                console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
-                                result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
-                                result.file_size = fileInfo.fileSize;
-                                result.fileIndex = fileInfo.fileIndex;
-                                result.file_title = fileInfo.fileName;
-                                result.sizeInBytes = fileInfo.fileSize;
-                                result.size = formatBytes(fileInfo.fileSize);
-                                newlyVerified.push(result);
-                            } else {
-                                // If it's a pack but movie not found -> EXCLUDE
-                                // BUT BE CAREFUL: strict exclusion only if > 1 file.
-                                // resolveMoviePackFile returns null only if Not Found or Error.
-                                // If it was a single file mismatch, it might return null too? 
-                                // Actually resolveMoviePackFile returns valid object for single file if verified.
-                                console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
-                                excluded.push(result);
-                            }
-                        } else {
-                            // CACHE MISS: Add to external queue
-                            needsExternalVerification.push(result);
-                        }
-                    } catch (e) {
-                        needsExternalVerification.push(result);
-                    }
-                }
-
-                // 2️⃣ SLOW PATH: External Verification
-                // Only verify if likely a pack (e.g. name contains keywords OR size is huge)
-                // OR just verify top X results to be safe?
-                // Let's verify top X.
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_MOVIE_VERIFY);
-                const skipped = needsExternalVerification.slice(MAX_MOVIE_VERIFY);
-
-                console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const result = toVerifyExternal[i];
-                    const infoHash = result.infoHash?.toLowerCase();
-
-                    // Heuristic: If size < 3GB and no "pack" keywords, assume it's a single movie and valid.
-                    // Skip expensive API call for obvious single files.
-                    const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
-
-                    if (!isLikelyPack) {
-                        newlyVerified.push(result); // Assume valid single movie
-                        continue;
-                    }
-
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-                    console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
-
-                    try {
-                        const fileInfo = await packFilesHandler.resolveMoviePackFile(
-                            infoHash,
-                            config,
-                            mediaDetails.imdbId,
-                            mediaDetails.title,
-                            mediaDetails.year,
-                            dbHelper
-                        );
-
-                        if (fileInfo) {
-                            console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
-                            result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
-                            result.file_size = fileInfo.fileSize;
-                            result.fileIndex = fileInfo.fileIndex;
-                            result.file_title = fileInfo.fileName;
-                            result.sizeInBytes = fileInfo.fileSize;
-                            result.size = formatBytes(fileInfo.fileSize);
-                            newlyVerified.push(result);
-                        } else {
-                            // If resolve returns null, it means it's a pack but movie NOT found.
-                            // OR fetch failed.
-                            console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
-                            excluded.push(result);
-                        }
-                    } catch (err) {
-                        console.warn(`⚠️ [MOVIE VERIFY] Error, keeping: ${err.message}`);
-                        newlyVerified.push(result);
-                    }
-                }
-
-                // Combined
-                // Note: We do NOT exclude skipped movies (unlike series packs) because 
-                // for movies, "unverified" usually just means "we didn't check inside", 
-                // but likely it IS the movie itself (single file).
-                // We only exclude if we POSITIVELY identified it as a pack missing the file.
-                filteredResults = [...verifiedMovies, ...newlyVerified, ...skipped];
-                console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results`);
             }
         }
 

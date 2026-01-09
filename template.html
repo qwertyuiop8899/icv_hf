@@ -599,6 +599,8 @@
                         <ul>
                             <li><strong>Debrid:</strong> Real-Debrid e/o Torbox per streaming istantaneo</li>
                             <li><strong>MediaFlow Proxy:</strong> Condividi Real-Debrid in sicurezza (opzionale)</li>
+                            <li><strong>IntroSkip:</strong> Salta automaticamente le intro (opzionale)</li>
+                            <li><strong>Formatter:</strong> Rinomina i file per una visualizzazione pulita</li>
                             <li><strong>P2P Fallback:</strong> Senza debrid usa streaming P2P diretto</li>
                         </ul>
                     </div>
@@ -725,6 +727,22 @@
                 <input id="jackett_password" placeholder="Jackett Password (opzionale)" type="password">
             </div>
 
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">⚡ Funzioni Avanzate</div>
+                </div>
+                <div class="search-sites">
+                    <label>
+                        <input type="checkbox" id="use_introskip">
+                        <span>⏩ IntroSkip (Salta intro serie TV)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_formatter">
+                        <span>✨ Formatter (Nomi file puliti)</span>
+                    </label>
+                </div>
+            </div>
+
             <div class="action-section full-width">
                 <div
                     style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
@@ -772,6 +790,8 @@
         const maxResLimitSelect = document.getElementById("max_res_limit");
         const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
         const useDbOnlyCheckbox = document.getElementById("use_db_only");
+        const useFormatterCheckbox = document.getElementById("use_formatter");
+        const useIntroSkipCheckbox = document.getElementById("use_introskip");
 
         // Buttons
         const installButton = document.getElementById("install_button");
@@ -902,6 +922,10 @@
             if (useDbOnlyCheckbox.checked) {
                 config.db_only = true;
             }
+
+            // Formatter & IntroSkip
+            if (useFormatterCheckbox.checked) config.use_formatter = true;
+            if (useIntroSkipCheckbox.checked) config.use_introskip = true;
 
             // Check if at least one search site is selected
             let searchSites = [];
@@ -1101,6 +1125,16 @@
                     }
                 }
 
+                // Formatter & IntroSkip
+                if (cfg.use_formatter !== undefined) {
+                    const el = document.getElementById('use_formatter');
+                    if (el) el.checked = cfg.use_formatter;
+                }
+                if (cfg.use_introskip !== undefined) {
+                    const el = document.getElementById('use_introskip');
+                    if (el) el.checked = cfg.use_introskip;
+                }
+
                 console.log('✅ Configuration preloaded successfully');
 
                 // Trigger updateInstallLink to refresh the UI
@@ -1130,9 +1164,13 @@
         useCometCheckbox.addEventListener('change', updateInstallLink);
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
+        useFormatterCheckbox.addEventListener('change', updateInstallLink);
+        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
         aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
         useDbOnlyCheckbox.addEventListener('change', updateInstallLink);
+        useFormatterCheckbox.addEventListener('change', updateInstallLink);
+        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
 
         // Initial call to enable buttons
         updateInstallLink();

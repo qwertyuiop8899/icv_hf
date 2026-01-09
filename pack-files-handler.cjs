@@ -180,23 +180,31 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             if (cacheData && typeof cacheData === 'object') {
                 const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
                 if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
-                    // CRITICAL: Sort files by path BEFORE assigning index!
-                    // Torbox API returns files in random order, but torrent file list is typically alphabetical
-                    // Stremio P2P uses torrent's original order, so we must sort to match
+                    // CRITICAL: Filter VIDEO files only, then sort by path BEFORE assigning index!
+                    // Stremio/MediaFusion skip non-video files (.nfo, .txt, .jpg, samples)
+                    const VIDEO_EXTENSIONS = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg'];
+
                     console.log(`🔍 [PACK-DEBUG] Raw files from Torbox CACHE (count=${cacheData[hashKey].files.length}):`);
                     cacheData[hashKey].files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
-                    const sortedFiles = [...cacheData[hashKey].files].sort((a, b) => {
+                    // Filter only video files
+                    const videoFiles = cacheData[hashKey].files.filter(f => {
+                        const ext = ((f.name || f.path || '').toLowerCase().match(/\.\w+$/)?.[0]);
+                        return ext && VIDEO_EXTENSIONS.includes(ext);
+                    });
+
+                    // Sort video files alphabetically by path
+                    const sortedFiles = [...videoFiles].sort((a, b) => {
                         const pathA = (a.name || a.path || '').toLowerCase();
                         const pathB = (b.name || b.path || '').toLowerCase();
                         return pathA.localeCompare(pathB);
                     });
 
-                    console.log(`🔍 [PACK-DEBUG] Sorted files (count=${sortedFiles.length}):`);
+                    console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VIDEO files, sorted:`);
                     sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
                     const files = sortedFiles.map((f, idx) => ({
-                        id: idx,  // Index AFTER sorting - matches torrent file order
+                        id: idx,  // Index AFTER filtering+sorting - matches Stremio/MediaFusion
                         path: f.name || f.path || `file_${idx}`,
                         bytes: f.size || 0,
                         selected: 1
@@ -242,22 +250,31 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             throw new Error('No files in Torbox torrent info');
         }
 
-        // CRITICAL: Sort files by path BEFORE assigning index!
-        // Torbox API may return files in random order, but torrent file list is typically alphabetical
+        // CRITICAL: Filter VIDEO files only, then sort by path BEFORE assigning index!
+        // Stremio/MediaFusion skip non-video files (.nfo, .txt, .jpg, samples)
+        const VIDEO_EXTENSIONS = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg'];
+
         console.log(`🔍 [PACK-DEBUG] Raw files from Torbox SLOW PATH (count=${torrent.files.length}):`);
         torrent.files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
-        const sortedFiles = [...torrent.files].sort((a, b) => {
+        // Filter only video files
+        const videoFiles = torrent.files.filter(f => {
+            const ext = (f.name || '').toLowerCase().match(/\.\w+$/)?.[0];
+            return ext && VIDEO_EXTENSIONS.includes(ext);
+        });
+
+        // Sort video files alphabetically by path
+        const sortedFiles = [...videoFiles].sort((a, b) => {
             const pathA = (a.name || '').toLowerCase();
             const pathB = (b.name || '').toLowerCase();
             return pathA.localeCompare(pathB);
         });
 
-        console.log(`🔍 [PACK-DEBUG] Sorted files SLOW PATH (count=${sortedFiles.length}):`);
+        console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VIDEO files, sorted:`);
         sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
         const files = sortedFiles.map((f, idx) => ({
-            id: idx,  // Index AFTER sorting - matches torrent file order
+            id: idx,  // Index AFTER filtering+sorting - matches Stremio/MediaFusion
             path: f.name,
             bytes: f.size,
             selected: 1

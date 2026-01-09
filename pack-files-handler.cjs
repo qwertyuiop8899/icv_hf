@@ -15,9 +15,9 @@ const axios = require('axios');
 
 // 🔥 VERSION CHECK - Verify HF is using updated code
 console.log('═══════════════════════════════════════════════════');
-console.log('📦 PACK-FILES-HANDLER v2.0 - VIDEO FILTER ENABLED');
-console.log('🎯 Filter: Only .mkv .mp4 .avi etc (NO .nfo .txt .jpg)');
-console.log('📅 Build: 2026-01-09T12:35 - OFF-BY-ONE FIX');
+console.log('📦 PACK-FILES-HANDLER v2.1 - STRICT SAMPLE FILTER');
+console.log('🎯 Filter: No "sample" in name, Min Size 10MB');
+console.log('📅 Build: 2026-01-09T13:05 - OFF-BY-ONE FIX APPLIED');
 console.log('═══════════════════════════════════════════════════');
 
 // Video file extensions
@@ -194,10 +194,24 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                     console.log(`🔍 [PACK-DEBUG] Raw files from Torbox CACHE (count=${cacheData[hashKey].files.length}):`);
                     cacheData[hashKey].files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
-                    // Filter only video files
+                    // Filter only video files AND exclude samples/small files
+                    const MIN_SIZE_BYTES = 10 * 1024 * 1024; // 10MB min size for video files
+
                     const videoFiles = cacheData[hashKey].files.filter(f => {
-                        const ext = ((f.name || f.path || '').toLowerCase().match(/\.\w+$/)?.[0]);
-                        return ext && VIDEO_EXTENSIONS.includes(ext);
+                        const name = (f.name || f.path || '').toLowerCase();
+                        const ext = name.match(/\.\w+$/)?.[0];
+                        const size = f.size || 0;
+
+                        // Check extension
+                        if (!ext || !VIDEO_EXTENSIONS.includes(ext)) return false;
+
+                        // Exclude samples explicitly
+                        if (name.includes('sample')) return false;
+
+                        // Exclude tiny files (often fake samples or intros)
+                        if (size < MIN_SIZE_BYTES) return false;
+
+                        return true;
                     });
 
                     // Sort video files alphabetically by path
@@ -207,7 +221,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                         return pathA.localeCompare(pathB);
                     });
 
-                    console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VIDEO files, sorted:`);
+                    console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VALID VIDEO files (no samples), sorted:`);
                     sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
                     const files = sortedFiles.map((f, idx) => ({
@@ -264,10 +278,24 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
         console.log(`🔍 [PACK-DEBUG] Raw files from Torbox SLOW PATH (count=${torrent.files.length}):`);
         torrent.files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
-        // Filter only video files
+        // Filter only video files AND exclude samples/small files
+        const MIN_SIZE_BYTES = 10 * 1024 * 1024; // 10MB min size for video files
+
         const videoFiles = torrent.files.filter(f => {
-            const ext = (f.name || '').toLowerCase().match(/\.\w+$/)?.[0];
-            return ext && VIDEO_EXTENSIONS.includes(ext);
+            const name = (f.name || '').toLowerCase();
+            const ext = name.match(/\.\w+$/)?.[0];
+            const size = f.size || 0;
+
+            // Check extension
+            if (!ext || !VIDEO_EXTENSIONS.includes(ext)) return false;
+
+            // Exclude samples explicitly
+            if (name.includes('sample')) return false;
+
+            // Exclude tiny files (often fake samples or intros)
+            if (size < MIN_SIZE_BYTES) return false;
+
+            return true;
         });
 
         // Sort video files alphabetically by path
@@ -277,7 +305,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             return pathA.localeCompare(pathB);
         });
 
-        console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VIDEO files, sorted:`);
+        console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VALID VIDEO files (no samples), sorted:`);
         sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
 
         const files = sortedFiles.map((f, idx) => ({

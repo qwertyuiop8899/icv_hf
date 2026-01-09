@@ -6344,17 +6344,53 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
                 const torrentTitle = dbResult.torrent_title || dbResult.title;
                 const torrentSize = dbResult.torrent_size || dbResult.size;
+
+                // 🔧 FIX [P2P Packs]: If file_index is missing (Pack Result), try to resolve it from DB files
+                let resolvedFileIndex = null;
+                let resolvedFileTitle = null;
+                let resolvedFileSize = null;
+
+                if ((dbResult.file_index === null || dbResult.file_index === undefined) && dbResult.provider === 'Database') {
+                    // Only try to resolve if we have season/episode info (series)
+                    if (season && episode) {
+                        try {
+                            // Fetch all files for this pack from DB
+                            const packFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
+                            // Use show title for matching
+                            const showTitle = mediaDetails.name || mediaDetails.title || '';
+
+                            for (const file of packFiles) {
+                                // Check if this file matches requested episode
+                                if (isExactEpisodeMatch(file.path, showTitle, season, episode, mediaDetails.isAnime || false, null, true)) {
+                                    resolvedFileIndex = file.id;
+                                    resolvedFileTitle = file.path;
+                                    resolvedFileSize = file.bytes;
+                                    console.log(`🔧 [DB Fix] Resolved fileIndex=${resolvedFileIndex} for ${torrentTitle.substring(0, 30)}... (File: ${resolvedFileTitle})`);
+                                    break;
+                                }
+                            }
+                        } catch (err) {
+                            console.error(`❌ [DB Fix] Error resolving file index: ${err.message}`);
+                        }
+                    }
+                }
+
+                // Determine final values (prefer resolved over existing)
+                const finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
+                const finalFileTitle = resolvedFileTitle || (dbResult.torrent_title ? dbResult.file_title : undefined);
+                const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
+
                 // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
-                const displaySize = dbResult.file_size || torrentSize;
-                // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
-                // This ensures we only show the actual filename for the SPECIFIC episode
-                const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
+                const displaySize = finalFileSize;
+
+                // Only use file_title if we resolved it OR it came from searchEpisodeFiles
+                const fileName = finalFileTitle || undefined;
 
                 // Build magnet link
                 const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
 
                 // DEBUG: Log what we're adding
-                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
+                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${finalFileSize ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
 
                 // Add to raw results with high priority
                 allRawResults.push({
@@ -6367,17 +6403,17 @@ async function handleStream(type, id, config, workerOrigin) {
                     sizeInBytes: displaySize || 0,
                     // ✅ Pack size for pack/episode display
                     packSize: dbResult.packSize || torrentSize || 0,
-                    file_size: dbResult.file_size || 0,
+                    file_size: finalFileSize || 0,
                     quality: extractQuality(torrentTitle),
                     filename: fileName || torrentTitle,
                     source: `💾 ${dbResult.provider || 'Database'}`,
-                    fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
-                    file_title: fileName || undefined // Real filename from DB (only for specific episode)
+                    fileIndex: finalFileIndex, // For series episodes and pack movies
+                    file_title: fileName // Real filename from DB (only for specific episode)
                 });
 
                 // DEBUG: Log file info from DB
-                if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
-                    console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
+                if (finalFileIndex !== undefined && finalFileIndex !== null) {
+                    console.log(`   📁 Has file: fileIndex=${finalFileIndex}, file_title=${fileName}`);
                 }
             }
 

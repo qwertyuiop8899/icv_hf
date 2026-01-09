@@ -8114,7 +8114,20 @@ export default async function handler(req, res) {
                                         // Iterate through ALL files in the pack
                                         for (const file of torrent.files) {
                                             // Only process video files
-                                            if (!file.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i)) {
+                                            if (!file.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i)) {
+                                                continue;
+                                            }
+
+                                            // 🔥 STRICT FILTER: Exclude sample files and small files (<10MB)
+                                            // This matches logic in pack-files-handler.cjs to ensure consistent indexing
+                                            const lowerName = file.path.toLowerCase();
+                                            if (lowerName.includes('sample')) {
+                                                console.log(`⚠️ [DB] Skipping sample file: ${file.path}`);
+                                                continue;
+                                            }
+
+                                            if (file.bytes < 10 * 1024 * 1024) { // < 10MB
+                                                console.log(`⚠️ [DB] Skipping small file (${(file.bytes / 1024 / 1024).toFixed(2)}MB): ${file.path}`);
                                                 continue;
                                             }
 

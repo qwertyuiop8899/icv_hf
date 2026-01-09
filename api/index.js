@@ -6357,10 +6357,26 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Only try to resolve if we have season/episode info (series)
                     if (season && episode) {
                         try {
-                            // Fetch all files for this pack from DB
-                            const packFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
-                            // Use show title for matching
                             const showTitle = mediaDetails.name || mediaDetails.title || '';
+                            let packFiles = [];
+                            let source = '';
+
+                            // 1. Try Authoritative Pack Files (from Scraper/Indexers)
+                            const rawPackFiles = await dbHelper.getPackFiles(dbResult.info_hash);
+                            if (rawPackFiles && rawPackFiles.length > 0) {
+                                packFiles = rawPackFiles.map(pf => ({
+                                    id: pf.file_index,
+                                    path: pf.file_path,
+                                    bytes: parseInt(pf.file_size)
+                                }));
+                                source = 'pack_files';
+                            }
+
+                            // 2. Fallback to Learned Files (from User Playback - potentially poisoned)
+                            if (packFiles.length === 0) {
+                                packFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
+                                source = 'files';
+                            }
 
                             for (const file of packFiles) {
                                 // Check if this file matches requested episode
@@ -6368,7 +6384,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                     resolvedFileIndex = file.id;
                                     resolvedFileTitle = file.path;
                                     resolvedFileSize = file.bytes;
-                                    console.log(`🔧 [DB Fix] Resolved fileIndex=${resolvedFileIndex} for ${torrentTitle.substring(0, 30)}... (File: ${resolvedFileTitle})`);
+                                    console.log(`🔧 [DB Fix] Resolved fileIndex=${resolvedFileIndex} from ${source} for ${torrentTitle.substring(0, 30)}... (File: ${resolvedFileTitle})`);
                                     break;
                                 }
                             }

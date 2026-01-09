@@ -6204,7 +6204,26 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (!isPack) {
                         nonPacks.push(dbResult);
                     } else if (hasFileIndex) {
-                        verifiedPacks.push(dbResult);
+                        // 🚨 SANITY CHECK: Verify that the "Verified" file matches the episode
+                        // This fixes "Poisoned" DB entries (e.g. Index 1 maps to E1, but file is actually E6)
+                        let isClean = false;
+                        if (dbResult.file_title) {
+                            const parsed = packFilesHandler.parseSeasonEpisode(dbResult.file_title, seasonNum);
+                            // Accept if it matches the episode or is a generic generic match (null parsed but verified) - wait, stricter:
+                            // If parsed is null, it might be a weird filename.
+                            // If parsed.episode === episodeNum, it's correct.
+                            if (parsed && parsed.episode === episodeNum) {
+                                isClean = true;
+                            }
+                        }
+
+                        // Special Case: If file_title is undefined (DB corruption/partial save), force re-verify
+                        if (dbResult.file_title && isClean) {
+                            verifiedPacks.push(dbResult);
+                        } else {
+                            console.warn(`⚠️ [PACK SANITY] Found suspicious 'verified' pack: "${torrentTitle}" (File: ${dbResult.file_title}). Forcing re-verification.`);
+                            unverifiedPacks.push(dbResult);
+                        }
                     } else {
                         unverifiedPacks.push(dbResult);
                     }

@@ -6350,62 +6350,13 @@ async function handleStream(type, id, config, workerOrigin) {
                 let resolvedFileTitle = null;
                 let resolvedFileSize = null;
 
-                // Check if existing DB file match is valid (Sanity Check)
-                const isDbFileValid = dbResult.torrent_title && dbResult.file_title && isExactEpisodeMatch(dbResult.file_title, mediaDetails.name || '', season, episode, mediaDetails.isAnime || false, null, true);
-
-                if (season && episode && (!dbResult.torrent_title || !isDbFileValid)) {
-                    // Only try to resolve if we have season/episode info (series)
-                    if (season && episode) {
-                        try {
-                            const showTitle = mediaDetails.name || mediaDetails.title || '';
-                            let packFiles = [];
-                            let source = '';
-
-                            // 1. Try Authoritative Pack Files (from Scraper/Indexers)
-                            const rawPackFiles = await dbHelper.getPackFiles(dbResult.info_hash);
-                            if (rawPackFiles && rawPackFiles.length > 0) {
-                                packFiles = rawPackFiles.map(pf => ({
-                                    id: pf.file_index,
-                                    path: pf.file_path,
-                                    bytes: parseInt(pf.file_size)
-                                }));
-                                source = 'pack_files';
-                            }
-
-                            // 2. Fallback to Learned Files (from User Playback - potentially poisoned)
-                            if (packFiles.length === 0) {
-                                packFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
-                                source = 'files';
-                            }
-
-                            for (const file of packFiles) {
-                                // Check if this file matches requested episode
-                                if (isExactEpisodeMatch(file.path, showTitle, season, episode, mediaDetails.isAnime || false, null, true)) {
-                                    resolvedFileIndex = file.id;
-                                    resolvedFileTitle = file.path;
-                                    resolvedFileSize = file.bytes;
-                                    console.log(`🔧 [DB Fix] Resolved fileIndex=${resolvedFileIndex} from ${source} for ${torrentTitle.substring(0, 30)}... (File: ${resolvedFileTitle})`);
-                                    break;
-                                }
-                            }
-                        } catch (err) {
-                            console.error(`❌ [DB Fix] Error resolving file index: ${err.message}`);
-                        }
-                    }
+                if ((dbResult.file_index === null || dbResult.file_index === undefined) && dbResult.provider === 'Database') {
+                    // Previously implemented fix logic was here, now reverted.
                 }
 
-                // Determine final values (prefer resolved over existing)
-                let finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
+                // Determine final values
+                const finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
                 const finalFileTitle = resolvedFileTitle || (dbResult.torrent_title ? dbResult.file_title : undefined);
-
-                // 🚨 POISON PURGE for Stranger Things S05 Pack (74a2)
-                // Known issue: DB learned Index 0 = S5E1, but Index 0 is Ep 4.
-                // If we resolved to 0, it's wrong. Wipe the DB learning for this hash to force re-learning.
-                if (dbResult.info_hash === '74a22624c3f2925b8bae27f1140fe69b96d98e68' && finalFileIndex === 0 && season === 5 && episode === 1) {
-                    console.warn(`🚨 [POISON DETECTED] Hash 74a2... resolved to Index 0 for S5E1 (Wrong). PURGING FILES info to force re-learn.`);
-                    await dbHelper.deleteFileInfo(dbResult.info_hash);
-                    finalFileIndex = undefined; // Force no index to let player decide/User select
-                }
                 const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
 
                 // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)

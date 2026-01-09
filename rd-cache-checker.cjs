@@ -133,6 +133,9 @@ async function checkSingleHash(infoHash, magnet, token) {
         // 5. ✅ NEW: Extract main video file name for deduplication
         let mainFileName = '';
         let mainFileSize = 0;
+        let torrentTitle = info.filename || ''; // Get torrent title
+        let torrentSize = info.bytes || 0;     // Get total torrent size
+
         if (info?.files && Array.isArray(info.files)) {
             // Video extensions to look for
             const videoExtensions = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
@@ -159,9 +162,10 @@ async function checkSingleHash(infoHash, magnet, token) {
         return {
             hash: infoHash,
             cached: isCached,
-            cached: isCached,
-            file_title: mainFileName || null, // ✅ Return main video filename
-            file_size: mainFileSize || null // ✅ Return main video file size
+            torrent_title: torrentTitle, // ✅ Return torrent title
+            size: torrentSize,           // ✅ Return total size
+            file_title: mainFileName || null,
+            file_size: mainFileSize || null
         };
 
     } catch (error) {
@@ -195,6 +199,8 @@ async function checkCacheSync(items, token, limit = 5) {
             cached: result.cached,
             file_title: result.file_title,
             file_size: result.file_size,
+            torrent_title: result.torrent_title, // ✅ Pass torrent title
+            size: result.size,                   // ✅ Pass total size
             fromLiveCheck: true
         };
 
@@ -240,6 +246,8 @@ async function enrichCacheBackground(items, token, dbHelper) {
                 const cacheUpdates = results.map(r => ({
                     hash: r.hash,
                     cached: r.cached,
+                    torrent_title: r.torrent_title || null, // ✅ Pass torrent title
+                    size: r.size || null,                   // ✅ Pass total size
                     file_title: r.file_title || null, // ✅ Include extracted filename
                     file_size: r.file_size || null // ✅ Provide file_size for DB update
                 }));

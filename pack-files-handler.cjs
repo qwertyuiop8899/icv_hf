@@ -467,19 +467,6 @@ function isSeasonPack(torrentTitle) {
     return packPatterns.some(pattern => pattern.test(torrentTitle));
 }
 
-module.exports = {
-    parseSeasonEpisode,
-    extractSeasonFromPackTitle,
-    isVideoFile,
-    isSeasonPack,
-    fetchFilesFromRealDebrid,
-    fetchFilesFromTorbox,
-    processSeriesPackFiles,
-    findEpisodeFile,
-    resolveSeriesPackFile,
-    resolveMoviePackFile
-};
-
 /**
  * Calculates similarity between two strings (0-1)
  * @param {string} str1 
@@ -662,5 +649,18 @@ function findMovieFile(files, targetTitle, targetYear) {
         }
     }
 
+
+
     return bestMatch;
 }
+
+}
+
+module.exports = {
+    resolveSeriesPackFile,
+    processSeriesPackFiles,
+    isSeasonPack,
+    isVideoFile,
+    parseSeasonEpisode,
+    resolveMoviePackFile
+};

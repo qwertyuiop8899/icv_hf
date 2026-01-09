@@ -4366,8 +4366,26 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null,
 }
 
 // ✅ IMPROVED Matching functions - Supporta SEASON PACKS come Torrentio
-function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null, skipTitleCheck = false) {
+function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episodeNum, isAnime = false, absoluteEpisodeNum = null, skipTitleCheck = false, requiredYear = null) {
     if (!torrentTitle || !showTitleOrTitles) return false;
+
+    // ✅ YEAR CHECK: strict filtering if year is present in torrent title
+    if (requiredYear) {
+        const titleYearMatch = torrentTitle.match(/\b((?:19|20)\d{2})\b/);
+        if (titleYearMatch) {
+            const torrentYear = parseInt(titleYearMatch[1]);
+            const diff = Math.abs(torrentYear - parseInt(requiredYear));
+
+            // If torrent has year and it differs by more than 1 year, REJECT
+            // (Strict for series to avoid "Spartacus" vs "Spartacus: Gods of the Arena")
+            if (diff > 1) {
+                console.log(`❌ [YEAR FILTER] Rejected "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
+                return false;
+            } else {
+                console.log(`✅ [YEAR FILTER] Passed "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
+            }
+        }
+    }
 
     // DEBUG: Log rejected single episodes
     if (torrentTitle.includes('155da22a') || torrentTitle.includes('3d700a66') ||
@@ -6198,23 +6216,66 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
-                // Verify unverified packs (max 20, with 100ms delay)
-                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
-                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
+                // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
+                const needsExternalVerification = [];
 
-                const newlyVerified = [];
-                const excluded = [];
+                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
+                // This ensures "Part 2" packs are excluded if we already know their content
+                console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
 
-                for (let i = 0; i < toVerify.length; i++) {
-                    const dbResult = toVerify[i];
+                for (const dbResult of unverifiedPacks) {
+                    try {
+                        // Check if we have files for this pack in DB
+                        // We use the same helper that resolveSeriesPackFile uses
+                        const cachedFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
+
+                        if (cachedFiles && cachedFiles.length > 0) {
+                            // ✅ CACHE HIT: Verify immediately (zero cost)
+                            // We call resolveSeriesPackFile which will use the cache we just found
+                            const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                                dbResult.info_hash.toLowerCase(),
+                                config,
+                                seriesImdbId,
+                                seasonNum,
+                                episodeNum,
+                                dbHelper
+                            );
+
+                            if (fileInfo) {
+                                console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
+                                dbResult.file_index = fileInfo.fileIndex;
+                                dbResult.file_title = fileInfo.fileName;
+                                dbResult.file_size = fileInfo.fileSize;
+                                newlyVerified.push(dbResult);
+                            } else {
+                                console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                excluded.push(dbResult);
+                            }
+                        } else {
+                            // ❌ CACHE MISS: Needs external verification
+                            needsExternalVerification.push(dbResult);
+                        }
+                    } catch (err) {
+                        console.warn(`⚠️ [PACK VERIFY] Cache check error: ${err.message}`);
+                        needsExternalVerification.push(dbResult); // Fallback to external
+                    }
+                }
+
+                // 2️⃣ SLOW PATH: External Verification (LIMITED)
+                const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
+                const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
+
+                console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+
+                for (let i = 0; i < toVerifyExternal.length; i++) {
+                    const dbResult = toVerifyExternal[i];
                     const torrentTitle = dbResult.torrent_title || dbResult.title;
 
-                    // Add delay between calls (except first)
-                    if (i > 0) {
-                        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-                    }
+                    // Delay for external calls
+                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
 
-                    console.log(`📦 [PACK VERIFY] (${i + 1}/${toVerify.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
+                    console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
 
                     try {
                         const fileInfo = await packFilesHandler.resolveSeriesPackFile(
@@ -6227,8 +6288,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [PACK VERIFY] Found E${episodeNum}: ${fileInfo.fileName} (${(fileInfo.fileSize / 1024 / 1024 / 1024).toFixed(2)} GB)`);
-                            // Use totalPackSize from fileInfo if available, otherwise use torrent_size
+                            console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                             dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                             dbResult.file_index = fileInfo.fileIndex;
                             dbResult.file_title = fileInfo.fileName;
@@ -6239,1380 +6299,1893 @@ async function handleStream(type, id, config, workerOrigin) {
                             excluded.push(dbResult);
                         }
                     } catch (err) {
-                        console.warn(`⚠️ [PACK VERIFY] Error: ${err.message} - keeping pack`);
-                        newlyVerified.push(dbResult); // Keep on error
+                        console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - keeping pack`);
+                        // Adding to verified to be safe on error? No, safer to exclude if we can't verify.
+                        // But original logic kept it. Let's keep it to avoid false negatives on network error.
+                        newlyVerified.push(dbResult);
                     }
                 }
 
-                console.log(`📦 [PACK VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped (limit)`);
-
-                // Combine all results: non-packs + verified + newly verified + skipped
-                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
-            }
-
-            // Convert filtered DB results to scraper format
-            for (const dbResult of filteredDbResults) {
-                // 🔥 FILTER: Respect user configuration for DB results
-                // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
-                const providerName = dbResult.provider || 'Database';
-
-                if (!config.db_only) {
-                    // Normal mode: respect individual provider toggles
-                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
-                    if (providerName === 'UIndex' && config.use_uindex === false) {
-                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
-                    if (providerName === 'Knaben' && config.use_knaben === false) {
-                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
+                // 3️⃣ STRICT FILTERING: Exclude skipped packs!
+                if (skippedSize > 0) {
+                    console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
                 }
-                // In db_only mode: show ALL providers without filtering
 
-                // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
-                const torrentTitle = dbResult.torrent_title || dbResult.title;
-                const torrentSize = dbResult.torrent_size || dbResult.size;
-                // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
-                const displaySize = dbResult.file_size || torrentSize;
-                // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
-                // This ensures we only show the actual filename for the SPECIFIC episode
-                const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
+                // Combine results: nonPacks + verifiedPacks + newlyVerified
+                // SKIPPED ARE EXCLUDED
+                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
 
-                // Build magnet link
-                const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
+                // Convert filtered DB results to scraper format
+                for (const dbResult of filteredDbResults) {
+                    // 🔥 FILTER: Respect user configuration for DB results
+                    // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
+                    const providerName = dbResult.provider || 'Database';
 
-                // DEBUG: Log what we're adding
-                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
-
-                // Add to raw results with high priority
-                allRawResults.push({
-                    title: torrentTitle,
-                    infoHash: dbResult.info_hash.toUpperCase(),
-                    magnetLink: magnetLink,
-                    seeders: dbResult.seeders || 0,
-                    leechers: 0,
-                    size: displaySize ? formatBytes(displaySize) : 'Unknown',
-                    sizeInBytes: displaySize || 0,
-                    // ✅ Pack size for pack/episode display
-                    packSize: dbResult.packSize || torrentSize || 0,
-                    file_size: dbResult.file_size || 0,
-                    quality: extractQuality(torrentTitle),
-                    filename: fileName || torrentTitle,
-                    source: `💾 ${dbResult.provider || 'Database'}`,
-                    fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
-                    file_title: fileName || undefined // Real filename from DB (only for specific episode)
-                });
-
-                // DEBUG: Log file info from DB
-                if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
-                    console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
-                }
-            }
-
-            console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
-        }
-
-        // 🎯 Helper: Calculate similarity between two strings (0-1)
-        // Uses multiple strategies: Levenshtein, word overlap, containment
-        const calculateSimilarity = (str1, str2) => {
-            if (!str1 || !str2) return 0;
-            if (str1 === str2) return 1;
-
-            const s1 = str1.toLowerCase();
-            const s2 = str2.toLowerCase();
-
-            // Strategy 1: If one contains the other, high similarity
-            if (s1.includes(s2) || s2.includes(s1)) {
-                const minLen = Math.min(s1.length, s2.length);
-                const maxLen = Math.max(s1.length, s2.length);
-                return Math.max(0.8, minLen / maxLen); // At least 80%
-            }
-
-            // Strategy 2: Word overlap (handles different word order)
-            // "Medical Division Dr House" vs "Dr House Medical Division" should match!
-            const words1 = s1.split(/\s+/).filter(w => w.length > 1); // Ignore single chars
-            const words2 = s2.split(/\s+/).filter(w => w.length > 1);
-
-            if (words1.length > 0 && words2.length > 0) {
-                let matchedWords = 0;
-                const usedIndices = new Set();
-
-                for (const w1 of words1) {
-                    for (let i = 0; i < words2.length; i++) {
-                        if (usedIndices.has(i)) continue;
-                        const w2 = words2[i];
-                        // Exact match or very similar (typo tolerance)
-                        if (w1 === w2 || (w1.length > 3 && w2.length > 3 && (w1.includes(w2) || w2.includes(w1)))) {
-                            matchedWords++;
-                            usedIndices.add(i);
-                            break;
+                    if (!config.db_only) {
+                        // Normal mode: respect individual provider toggles
+                        if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                            console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                            continue;
+                        }
+                        if (providerName === 'UIndex' && config.use_uindex === false) {
+                            console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                            continue;
+                        }
+                        if (providerName === 'Knaben' && config.use_knaben === false) {
+                            console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                            continue;
                         }
                     }
-                }
+                    // In db_only mode: show ALL providers without filtering
 
-                const maxWords = Math.max(words1.length, words2.length);
-                const wordOverlap = matchedWords / maxWords;
+                    // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
+                    const torrentTitle = dbResult.torrent_title || dbResult.title;
+                    const torrentSize = dbResult.torrent_size || dbResult.size;
+                    // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
+                    const displaySize = dbResult.file_size || torrentSize;
+                    // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
+                    // This ensures we only show the actual filename for the SPECIFIC episode
+                    const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
 
-                // If most words match, it's a good match even if order is different
-                if (wordOverlap >= 0.6) {
-                    return Math.max(0.75, wordOverlap); // At least 75% if 60%+ words match
-                }
-            }
+                    // Build magnet link
+                    const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
 
-            // Strategy 3: Levenshtein distance (fallback)
-            const matrix = [];
-            for (let i = 0; i <= s1.length; i++) {
-                matrix[i] = [i];
-            }
-            for (let j = 0; j <= s2.length; j++) {
-                matrix[0][j] = j;
-            }
-            for (let i = 1; i <= s1.length; i++) {
-                for (let j = 1; j <= s2.length; j++) {
-                    const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-                    matrix[i][j] = Math.min(
-                        matrix[i - 1][j] + 1,      // deletion
-                        matrix[i][j - 1] + 1,      // insertion
-                        matrix[i - 1][j - 1] + cost // substitution
-                    );
-                }
-            }
+                    // DEBUG: Log what we're adding
+                    console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
 
-            const distance = matrix[s1.length][s2.length];
-            const maxLen = Math.max(s1.length, s2.length);
-            return 1 - (distance / maxLen);
-        };
-
-        // 🎯 Helper function to check if a title matches the requested episode
-        // Returns true if: season pack complete, exact episode, or range that includes the episode
-        // Also validates that the series name matches the expected titles (75% fuzzy match)
-        const matchesRequestedEpisode = (title, requestedSeason, requestedEpisode, expectedTitles = []) => {
-            if (!title || !requestedSeason || !requestedEpisode) return true; // No filter for movies
-
-            const seasonNum = parseInt(requestedSeason);
-            const episodeNum = parseInt(requestedEpisode);
-            const titleLower = title.toLowerCase();
-
-            const SIMILARITY_THRESHOLD = 0.75; // 75% match required
-
-            // 🚨 NEW: Validate series name matches expected titles (fuzzy 75% match)
-            // This prevents "Chico and the Man S01E06 E Pluribus Used Car" from matching "Pluribus"
-            if (expectedTitles && expectedTitles.length > 0) {
-                // Extract the series name from the torrent title (everything before S01E06 or 1x06)
-                // Added: S01-08 (season range), Stagioni (plural), ep01-22
-                const seriesNameMatch = title.match(/^(.+?)(?:\s*[.-]?\s*)?(?:[Ss]\d+[Ee]\d+|[Ss]\d+[-–]\d+|\d+x\d+|[Ss]tagion[ei]|[Ss]eason|[Ee]p?\d+|\[COMPLETA\]|Complete)/i);
-
-                if (seriesNameMatch) {
-                    const torrentSeriesName = seriesNameMatch[1].trim().toLowerCase()
-                        .replace(/[.\-_]/g, ' ')  // Replace separators with spaces
-                        .replace(/\s+/g, ' ')      // Normalize spaces
-                        .replace(/\(\d{4}\)$/, '') // Remove year at end
-                        .trim();
-
-                    // Check if any expected title matches with 75% similarity
-                    let bestMatch = { title: '', similarity: 0 };
-
-                    const matchesExpectedTitle = expectedTitles.some(expectedTitle => {
-                        const cleanExpected = expectedTitle.toLowerCase()
-                            .replace(/[.\-_]/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-
-                        // Calculate similarity
-                        const similarity = calculateSimilarity(torrentSeriesName, cleanExpected);
-
-                        if (similarity > bestMatch.similarity) {
-                            bestMatch = { title: cleanExpected, similarity };
-                        }
-
-                        // Also check if one starts with the other (common case)
-                        // "Pluribus 2025" should match "Pluribus"
-                        if (torrentSeriesName.startsWith(cleanExpected) || cleanExpected.startsWith(torrentSeriesName)) {
-                            const minLen = Math.min(torrentSeriesName.length, cleanExpected.length);
-                            const maxLen = Math.max(torrentSeriesName.length, cleanExpected.length);
-                            const startSimilarity = minLen / maxLen;
-                            if (startSimilarity >= SIMILARITY_THRESHOLD) {
-                                bestMatch = { title: cleanExpected, similarity: Math.max(similarity, startSimilarity) };
-                                return true;
-                            }
-                        }
-
-                        return similarity >= SIMILARITY_THRESHOLD;
+                    // Add to raw results with high priority
+                    allRawResults.push({
+                        title: torrentTitle,
+                        infoHash: dbResult.info_hash.toUpperCase(),
+                        magnetLink: magnetLink,
+                        seeders: dbResult.seeders || 0,
+                        leechers: 0,
+                        size: displaySize ? formatBytes(displaySize) : 'Unknown',
+                        sizeInBytes: displaySize || 0,
+                        // ✅ Pack size for pack/episode display
+                        packSize: dbResult.packSize || torrentSize || 0,
+                        file_size: dbResult.file_size || 0,
+                        quality: extractQuality(torrentTitle),
+                        filename: fileName || torrentTitle,
+                        source: `💾 ${dbResult.provider || 'Database'}`,
+                        fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
+                        file_title: fileName || undefined // Real filename from DB (only for specific episode)
                     });
 
-                    if (!matchesExpectedTitle) {
-                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
-                        return false;
-                    } else {
-                        if (DEBUG_MODE) console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
+                    // DEBUG: Log file info from DB
+                    if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
+                        console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
                     }
                 }
+
+                console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
             }
 
-            // 1. Check if it's a COMPLETE SEASON PACK (no specific episodes)
-            // Patterns: "S01" alone, "Stagione 1", "Season 1", "[COMPLETA]", "Complete"
-            // IMPORTANT: S01.E01.E02 or S01.E01-02 are NOT season packs, they are episode packs!
+            // 🎯 Helper: Calculate similarity between two strings (0-1)
+            // Uses multiple strategies: Levenshtein, word overlap, containment
+            const calculateSimilarity = (str1, str2) => {
+                if (!str1 || !str2) return 0;
+                if (str1 === str2) return 1;
 
-            const isCompletePack = /\[COMPLETA\]|Complete\s*Series|Complete\s*Season|Serie\s*Completa|Stagione\s*Completa/i.test(title);
+                const s1 = str1.toLowerCase();
+                const s2 = str2.toLowerCase();
 
-            // Check for episode indicators that mean it's NOT a complete season
-            // S01E01, S01.E01, S01 E01, S01-E01, 1x01, etc.
-            const hasEpisodeIndicator = /[Ss]\d+[.\s-]*[Ee]\d+|[Ss]\d+[Ee]\d+|\d+x\d+/i.test(title);
-            // Episode range like E01-E10, E01-10
-            const hasEpisodeRange = /[Ee](p)?\.?\s*\d+\s*[-–]\s*(E(p)?\.?\s*)?\d+/i.test(title);
-            // Multi-episode list like .E01.E02 or .01.02 after season
-            const hasMultiEpisodeList = /[Ss]\d+[.\s][Ee]?\d+[.\s][Ee]?\d+/i.test(title);
+                // Strategy 1: If one contains the other, high similarity
+                if (s1.includes(s2) || s2.includes(s1)) {
+                    const minLen = Math.min(s1.length, s2.length);
+                    const maxLen = Math.max(s1.length, s2.length);
+                    return Math.max(0.8, minLen / maxLen); // At least 80%
+                }
 
-            // It's a season pack only if it has season number but NO episode indicators
-            const hasSeasonOnly = !hasEpisodeIndicator && !hasEpisodeRange && !hasMultiEpisodeList && (
-                // S01 or S1 pattern
-                new RegExp(`[Ss](0?${seasonNum})(?![0-9])`, 'i').test(title) ||
-                // "Stagione X" or "Season X" pattern
-                new RegExp(`(stagione|season)\\s*${seasonNum}(?![0-9])`, 'i').test(title)
-            );
+                // Strategy 2: Word overlap (handles different word order)
+                // "Medical Division Dr House" vs "Dr House Medical Division" should match!
+                const words1 = s1.split(/\s+/).filter(w => w.length > 1); // Ignore single chars
+                const words2 = s2.split(/\s+/).filter(w => w.length > 1);
 
-            if (isCompletePack || hasSeasonOnly) {
-                // Verify it's the right season
-                const seasonMatch = title.match(/[Ss](0?\d+)|[Ss]tagione?\s*(\d+)|[Ss]eason\s*(\d+)/i);
-                if (seasonMatch) {
-                    const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
-                    if (foundSeason === seasonNum) {
-                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
+                if (words1.length > 0 && words2.length > 0) {
+                    let matchedWords = 0;
+                    const usedIndices = new Set();
+
+                    for (const w1 of words1) {
+                        for (let i = 0; i < words2.length; i++) {
+                            if (usedIndices.has(i)) continue;
+                            const w2 = words2[i];
+                            // Exact match or very similar (typo tolerance)
+                            if (w1 === w2 || (w1.length > 3 && w2.length > 3 && (w1.includes(w2) || w2.includes(w1)))) {
+                                matchedWords++;
+                                usedIndices.add(i);
+                                break;
+                            }
+                        }
+                    }
+
+                    const maxWords = Math.max(words1.length, words2.length);
+                    const wordOverlap = matchedWords / maxWords;
+
+                    // If most words match, it's a good match even if order is different
+                    if (wordOverlap >= 0.6) {
+                        return Math.max(0.75, wordOverlap); // At least 75% if 60%+ words match
+                    }
+                }
+
+                // Strategy 3: Levenshtein distance (fallback)
+                const matrix = [];
+                for (let i = 0; i <= s1.length; i++) {
+                    matrix[i] = [i];
+                }
+                for (let j = 0; j <= s2.length; j++) {
+                    matrix[0][j] = j;
+                }
+                for (let i = 1; i <= s1.length; i++) {
+                    for (let j = 1; j <= s2.length; j++) {
+                        const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+                        matrix[i][j] = Math.min(
+                            matrix[i - 1][j] + 1,      // deletion
+                            matrix[i][j - 1] + 1,      // insertion
+                            matrix[i - 1][j - 1] + cost // substitution
+                        );
+                    }
+                }
+
+                const distance = matrix[s1.length][s2.length];
+                const maxLen = Math.max(s1.length, s2.length);
+                return 1 - (distance / maxLen);
+            };
+
+            // 🎯 Helper function to check if a title matches the requested episode
+            // Returns true if: season pack complete, exact episode, or range that includes the episode
+            // Also validates that the series name matches the expected titles (75% fuzzy match)
+            const matchesRequestedEpisode = (title, requestedSeason, requestedEpisode, expectedTitles = []) => {
+                if (!title || !requestedSeason || !requestedEpisode) return true; // No filter for movies
+
+                const seasonNum = parseInt(requestedSeason);
+                const episodeNum = parseInt(requestedEpisode);
+                const titleLower = title.toLowerCase();
+
+                const SIMILARITY_THRESHOLD = 0.75; // 75% match required
+
+                // 🚨 NEW: Validate series name matches expected titles (fuzzy 75% match)
+                // This prevents "Chico and the Man S01E06 E Pluribus Used Car" from matching "Pluribus"
+                if (expectedTitles && expectedTitles.length > 0) {
+                    // Extract the series name from the torrent title (everything before S01E06 or 1x06)
+                    // Added: S01-08 (season range), Stagioni (plural), ep01-22
+                    const seriesNameMatch = title.match(/^(.+?)(?:\s*[.-]?\s*)?(?:[Ss]\d+[Ee]\d+|[Ss]\d+[-–]\d+|\d+x\d+|[Ss]tagion[ei]|[Ss]eason|[Ee]p?\d+|\[COMPLETA\]|Complete)/i);
+
+                    if (seriesNameMatch) {
+                        const torrentSeriesName = seriesNameMatch[1].trim().toLowerCase()
+                            .replace(/[.\-_]/g, ' ')  // Replace separators with spaces
+                            .replace(/\s+/g, ' ')      // Normalize spaces
+                            .replace(/\(\d{4}\)$/, '') // Remove year at end
+                            .trim();
+
+                        // Check if any expected title matches with 75% similarity
+                        let bestMatch = { title: '', similarity: 0 };
+
+                        const matchesExpectedTitle = expectedTitles.some(expectedTitle => {
+                            const cleanExpected = expectedTitle.toLowerCase()
+                                .replace(/[.\-_]/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+
+                            // Calculate similarity
+                            const similarity = calculateSimilarity(torrentSeriesName, cleanExpected);
+
+                            if (similarity > bestMatch.similarity) {
+                                bestMatch = { title: cleanExpected, similarity };
+                            }
+
+                            // Also check if one starts with the other (common case)
+                            // "Pluribus 2025" should match "Pluribus"
+                            if (torrentSeriesName.startsWith(cleanExpected) || cleanExpected.startsWith(torrentSeriesName)) {
+                                const minLen = Math.min(torrentSeriesName.length, cleanExpected.length);
+                                const maxLen = Math.max(torrentSeriesName.length, cleanExpected.length);
+                                const startSimilarity = minLen / maxLen;
+                                if (startSimilarity >= SIMILARITY_THRESHOLD) {
+                                    bestMatch = { title: cleanExpected, similarity: Math.max(similarity, startSimilarity) };
+                                    return true;
+                                }
+                            }
+
+                            return similarity >= SIMILARITY_THRESHOLD;
+                        });
+
+                        if (!matchesExpectedTitle) {
+                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
+                            return false;
+                        } else {
+                            if (DEBUG_MODE) console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
+                        }
+                    }
+                }
+
+                // 1. Check if it's a COMPLETE SEASON PACK (no specific episodes)
+                // Patterns: "S01" alone, "Stagione 1", "Season 1", "[COMPLETA]", "Complete"
+                // IMPORTANT: S01.E01.E02 or S01.E01-02 are NOT season packs, they are episode packs!
+
+                const isCompletePack = /\[COMPLETA\]|Complete\s*Series|Complete\s*Season|Serie\s*Completa|Stagione\s*Completa/i.test(title);
+
+                // Check for episode indicators that mean it's NOT a complete season
+                // S01E01, S01.E01, S01 E01, S01-E01, 1x01, etc.
+                const hasEpisodeIndicator = /[Ss]\d+[.\s-]*[Ee]\d+|[Ss]\d+[Ee]\d+|\d+x\d+/i.test(title);
+                // Episode range like E01-E10, E01-10
+                const hasEpisodeRange = /[Ee](p)?\.?\s*\d+\s*[-–]\s*(E(p)?\.?\s*)?\d+/i.test(title);
+                // Multi-episode list like .E01.E02 or .01.02 after season
+                const hasMultiEpisodeList = /[Ss]\d+[.\s][Ee]?\d+[.\s][Ee]?\d+/i.test(title);
+
+                // It's a season pack only if it has season number but NO episode indicators
+                const hasSeasonOnly = !hasEpisodeIndicator && !hasEpisodeRange && !hasMultiEpisodeList && (
+                    // S01 or S1 pattern
+                    new RegExp(`[Ss](0?${seasonNum})(?![0-9])`, 'i').test(title) ||
+                    // "Stagione X" or "Season X" pattern
+                    new RegExp(`(stagione|season)\\s*${seasonNum}(?![0-9])`, 'i').test(title)
+                );
+
+                if (isCompletePack || hasSeasonOnly) {
+                    // Verify it's the right season
+                    const seasonMatch = title.match(/[Ss](0?\d+)|[Ss]tagione?\s*(\d+)|[Ss]eason\s*(\d+)/i);
+                    if (seasonMatch) {
+                        const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
+                        if (foundSeason === seasonNum) {
+                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
+                            return true;
+                        }
+                    }
+                    // Complete series pack
+                    if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
+                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
                         return true;
                     }
                 }
-                // Complete series pack
-                if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
-                    if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
+
+                // 2. Check for EXACT EPISODE match
+                const exactPatterns = [
+                    new RegExp(`[Ss](0?${seasonNum})[Ee](0?${episodeNum})(?![0-9])`, 'i'),  // S01E06
+                    new RegExp(`${seasonNum}x(0?${episodeNum})(?![0-9])`, 'i'),              // 1x06
+                    new RegExp(`[Ss](0?${seasonNum})\\s*[Ee](0?${episodeNum})(?![0-9])`, 'i'), // S01 E06
+                ];
+
+                if (exactPatterns.some(p => p.test(title))) {
+                    if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
                     return true;
                 }
-            }
 
-            // 2. Check for EXACT EPISODE match
-            const exactPatterns = [
-                new RegExp(`[Ss](0?${seasonNum})[Ee](0?${episodeNum})(?![0-9])`, 'i'),  // S01E06
-                new RegExp(`${seasonNum}x(0?${episodeNum})(?![0-9])`, 'i'),              // 1x06
-                new RegExp(`[Ss](0?${seasonNum})\\s*[Ee](0?${episodeNum})(?![0-9])`, 'i'), // S01 E06
-            ];
+                // 3. Check for EPISODE RANGE that includes the requested episode
+                // Patterns: S01E01-E10, S01E01-10, E01-E10, S01E01.E02.E03
+                const rangePatterns = [
+                    // S01E01-E10 or S01E01-10
+                    /[Ss](0?\d+)[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                    // E01-E10 or E01-10 (without season, assume current)
+                    /[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                    // 1x01-1x10 or 1x01-10
+                    /(\d+)x(0?\d+)[-–](\d+x)?(0?\d+)/i,
+                ];
 
-            if (exactPatterns.some(p => p.test(title))) {
-                if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
-                return true;
-            }
+                for (const pattern of rangePatterns) {
+                    const match = title.match(pattern);
+                    if (match) {
+                        let startEp, endEp, matchedSeason;
 
-            // 3. Check for EPISODE RANGE that includes the requested episode
-            // Patterns: S01E01-E10, S01E01-10, E01-E10, S01E01.E02.E03
-            const rangePatterns = [
-                // S01E01-E10 or S01E01-10
-                /[Ss](0?\d+)[Ee](0?\d+)[-–](E)?(0?\d+)/i,
-                // E01-E10 or E01-10 (without season, assume current)
-                /[Ee](0?\d+)[-–](E)?(0?\d+)/i,
-                // 1x01-1x10 or 1x01-10
-                /(\d+)x(0?\d+)[-–](\d+x)?(0?\d+)/i,
-            ];
+                        if (pattern.source.includes('[Ss]')) {
+                            // S01E01-E10 format
+                            matchedSeason = parseInt(match[1]);
+                            startEp = parseInt(match[2]);
+                            endEp = parseInt(match[4] || match[3]);
+                        } else if (pattern.source.includes('x')) {
+                            // 1x01-10 format
+                            matchedSeason = parseInt(match[1]);
+                            startEp = parseInt(match[2]);
+                            endEp = parseInt(match[4]);
+                        } else {
+                            // E01-E10 format (no season in pattern, check separately)
+                            const seasonCheck = title.match(/[Ss](0?\d+)/i);
+                            matchedSeason = seasonCheck ? parseInt(seasonCheck[1]) : seasonNum;
+                            startEp = parseInt(match[1]);
+                            endEp = parseInt(match[3] || match[2]);
+                        }
 
-            for (const pattern of rangePatterns) {
-                const match = title.match(pattern);
-                if (match) {
-                    let startEp, endEp, matchedSeason;
-
-                    if (pattern.source.includes('[Ss]')) {
-                        // S01E01-E10 format
-                        matchedSeason = parseInt(match[1]);
-                        startEp = parseInt(match[2]);
-                        endEp = parseInt(match[4] || match[3]);
-                    } else if (pattern.source.includes('x')) {
-                        // 1x01-10 format
-                        matchedSeason = parseInt(match[1]);
-                        startEp = parseInt(match[2]);
-                        endEp = parseInt(match[4]);
-                    } else {
-                        // E01-E10 format (no season in pattern, check separately)
-                        const seasonCheck = title.match(/[Ss](0?\d+)/i);
-                        matchedSeason = seasonCheck ? parseInt(seasonCheck[1]) : seasonNum;
-                        startEp = parseInt(match[1]);
-                        endEp = parseInt(match[3] || match[2]);
+                        if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
+                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return true;
+                        } else if (matchedSeason === seasonNum) {
+                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return false;
+                        }
                     }
+                }
 
-                    if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
-                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
-                        return true;
-                    } else if (matchedSeason === seasonNum) {
-                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                // 4. Check for MULTI-EPISODE list (S01E01.E02.E03 or S01 E01 E02 E03)
+                const multiEpMatch = title.match(/[Ss](0?\d+)[.\s]*([Ee]\d+[.\s]*)+/i);
+                if (multiEpMatch) {
+                    const matchedSeason = parseInt(multiEpMatch[1]);
+                    if (matchedSeason === seasonNum) {
+                        // Extract all episode numbers
+                        const episodes = title.match(/[Ee](0?\d+)/gi);
+                        if (episodes) {
+                            const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
+                            if (epNumbers.includes(episodeNum)) {
+                                if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                                return true;
+                            } else {
+                                if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // 5. If we found a specific episode that doesn't match, reject it
+                // Check S01E01 format
+                const singleEpMatch = title.match(/[Ss](0?\d+)[Ee](0?\d+)/i);
+                if (singleEpMatch) {
+                    const matchedSeason = parseInt(singleEpMatch[1]);
+                    const matchedEpisode = parseInt(singleEpMatch[2]);
+                    if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
                         return false;
                     }
                 }
-            }
 
-            // 4. Check for MULTI-EPISODE list (S01E01.E02.E03 or S01 E01 E02 E03)
-            const multiEpMatch = title.match(/[Ss](0?\d+)[.\s]*([Ee]\d+[.\s]*)+/i);
-            if (multiEpMatch) {
-                const matchedSeason = parseInt(multiEpMatch[1]);
-                if (matchedSeason === seasonNum) {
-                    // Extract all episode numbers
-                    const episodes = title.match(/[Ee](0?\d+)/gi);
-                    if (episodes) {
-                        const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
-                        if (epNumbers.includes(episodeNum)) {
-                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
-                            return true;
-                        } else {
-                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
-                            return false;
-                        }
-                    }
-                }
-            }
-
-            // 5. If we found a specific episode that doesn't match, reject it
-            // Check S01E01 format
-            const singleEpMatch = title.match(/[Ss](0?\d+)[Ee](0?\d+)/i);
-            if (singleEpMatch) {
-                const matchedSeason = parseInt(singleEpMatch[1]);
-                const matchedEpisode = parseInt(singleEpMatch[2]);
-                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
-                    return false;
-                }
-            }
-
-            // 5b. Check NxNN format (1x03, 2x15, etc.) - same as S01E03
-            const nxnMatch = title.match(/(\d+)x(0?\d+)(?![0-9\-])/i);
-            if (nxnMatch) {
-                const matchedSeason = parseInt(nxnMatch[1]);
-                const matchedEpisode = parseInt(nxnMatch[2]);
-                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
-                    return false;
-                }
-            }
-
-            // 6. Default: accept (might be a movie or unrecognized format)
-            return true;
-        };
-
-        // Smart Deduplication
-        const bestResults = new Map();
-        for (const result of allRawResults) {
-            if (!result.infoHash) continue;
-
-            // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
-            if (type === 'series' && season && episode) {
-                // Pass expected titles to also validate series name
-                const expectedTitles = mediaDetails.titles || [mediaDetails.title];
-                if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
-                    continue; // Skip this result
-                }
-            }
-
-            const hash = result.infoHash;
-            const newLangInfo = getLanguageInfo(result.title, italianTitle, result.source);
-
-            if (!bestResults.has(hash)) {
-                bestResults.set(hash, result);
-                if (DEBUG_MODE) console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
-            } else {
-                const existing = bestResults.get(hash);
-                if (DEBUG_MODE) console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
-                if (DEBUG_MODE) console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
-                if (DEBUG_MODE) console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
-                const existingLangInfo = getLanguageInfo(existing.title, italianTitle, existing.source);
-
-                let isNewBetter = false;
-                // An Italian version is always better than a non-Italian one.
-                if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
-                    isNewBetter = true;
-                } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
-                    // Helper to check source type (handles "💾 CorsaroNero" etc.)
-                    const isJackettio = (src) => src && (src === 'Jackettio' || src.includes('Jackettio'));
-                    const isCorsaro = (src) => src && (src === 'CorsaroNero' || src.includes('CorsaroNero'));
-
-                    // If language is the same, prefer Jackettio (private instance)
-                    if (isJackettio(result.source) && !isJackettio(existing.source)) {
-                        isNewBetter = true;
-                    } else if (isJackettio(existing.source) && !isJackettio(result.source)) {
-                        isNewBetter = false; // Keep Jackettio
-                    } else if (isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(existing.source)) {
-                        isNewBetter = true;
-                    } else if (result.source === existing.source || (!isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(result.source) && !isJackettio(existing.source))) {
-                        // If source is also the same, or neither is the preferred one, prefer more seeders
-                        if ((result.seeders || 0) > (existing.seeders || 0)) {
-                            isNewBetter = true;
-                        }
+                // 5b. Check NxNN format (1x03, 2x15, etc.) - same as S01E03
+                const nxnMatch = title.match(/(\d+)x(0?\d+)(?![0-9\-])/i);
+                if (nxnMatch) {
+                    const matchedSeason = parseInt(nxnMatch[1]);
+                    const matchedEpisode = parseInt(nxnMatch[2]);
+                    if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        return false;
                     }
                 }
 
-                if (isNewBetter) {
-                    if (DEBUG_MODE) console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
-                    // Preserve file_title from existing if new doesn't have it
-                    if (!result.file_title && existing.file_title) {
-                        result.file_title = existing.file_title;
-                        result.fileIndex = existing.fileIndex;
-                        if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
+                // 6. Default: accept (might be a movie or unrecognized format)
+                return true;
+            };
+
+            // Smart Deduplication
+            const bestResults = new Map();
+            for (const result of allRawResults) {
+                if (!result.infoHash) continue;
+
+                // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
+                if (type === 'series' && season && episode) {
+                    // Pass expected titles to also validate series name
+                    const expectedTitles = mediaDetails.titles || [mediaDetails.title];
+                    if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
+                        continue; // Skip this result
                     }
+                }
+
+                const hash = result.infoHash;
+                const newLangInfo = getLanguageInfo(result.title, italianTitle, result.source);
+
+                if (!bestResults.has(hash)) {
                     bestResults.set(hash, result);
+                    if (DEBUG_MODE) console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
                 } else {
-                    if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
-                    // Preserve file_title from new if existing doesn't have it
-                    if (!existing.file_title && result.file_title) {
-                        existing.file_title = result.file_title;
-                        existing.fileIndex = result.fileIndex;
-                        bestResults.set(hash, existing); // Update map with modified object
-                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
-                    }
-                }
-            }
-        }
+                    const existing = bestResults.get(hash);
+                    if (DEBUG_MODE) console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
+                    if (DEBUG_MODE) console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
+                    const existingLangInfo = getLanguageInfo(existing.title, italianTitle, existing.source);
 
-        let results = Array.from(bestResults.values());
-        console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
-        // --- FINE NUOVA LOGICA ---
+                    let isNewBetter = false;
+                    // An Italian version is always better than a non-Italian one.
+                    if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
+                        isNewBetter = true;
+                    } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
+                        // Helper to check source type (handles "💾 CorsaroNero" etc.)
+                        const isJackettio = (src) => src && (src === 'Jackettio' || src.includes('Jackettio'));
+                        const isCorsaro = (src) => src && (src === 'CorsaroNero' || src.includes('CorsaroNero'));
 
-        // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
-        // ✅ STRICT ITALIAN FILTER: Only save Italian/Multi torrents to DB
-        if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
-            try {
-                const torrentsToSave = results
-                    .filter(r => {
-                        if (!r.infoHash) return false;
-
-                        // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
-                        const title = r.title || r.websiteTitle || '';
-                        const langInfo = getLanguageInfo(title);
-                        const isItalian = langInfo.isItalian;
-
-                        // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
-                        // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
-                        // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
-                        const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
-                        const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
-                            (mainAddon && /^torrentio$/i.test(mainAddon));
-
-                        if (!isItalian && !isTrustedProvider) {
-                            console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
-                            return false;
+                        // If language is the same, prefer Jackettio (private instance)
+                        if (isJackettio(result.source) && !isJackettio(existing.source)) {
+                            isNewBetter = true;
+                        } else if (isJackettio(existing.source) && !isJackettio(result.source)) {
+                            isNewBetter = false; // Keep Jackettio
+                        } else if (isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(existing.source)) {
+                            isNewBetter = true;
+                        } else if (result.source === existing.source || (!isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(result.source) && !isJackettio(existing.source))) {
+                            // If source is also the same, or neither is the preferred one, prefer more seeders
+                            if ((result.seeders || 0) > (existing.seeders || 0)) {
+                                isNewBetter = true;
+                            }
                         }
-                        return true;
-                    })
-                    .map(r => ({
-                        info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
-                        title: r.title || r.websiteTitle || 'Unknown',
-                        provider: r.source || r.externalAddon || 'unknown',
-                        size: r.sizeInBytes || null,
-                        type: type,
-                        seeders: r.seeders || 0,
-                        imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
-                        tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
-                        upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
-                        cached_rd: r.cached || false // Save cached status if available
-                    }));
+                    }
 
-                if (torrentsToSave.length > 0) {
-                    // 🚀 Fire-and-forget: Save to DB in background without blocking response
-                    dbHelper.batchInsertTorrents(torrentsToSave)
-                        .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
-                        .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
-                } else {
-                    console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
-                }
-            } catch (dbSaveError) {
-                console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
-            }
-        }
-
-        if (!results || results.length === 0) {
-            console.log('❌ No results found from any source after all fallbacks');
-            return { streams: [] };
-        }
-
-        console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
-
-        // ✅ Apply exact matching filters
-        let filteredResults = results;
-
-        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
-        if (config.full_ita) {
-            const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
-            const beforeCount = filteredResults.length;
-
-            filteredResults = filteredResults.filter(result => {
-                const provider = (result.source || result.externalAddon || '').toLowerCase();
-
-                // Extract MAIN provider only (before parentheses) to avoid false positives
-                // e.g., "comet (torrentio)" → "comet" (NOT exempt)
-                // e.g., "torrentio" → "torrentio" (exempt)
-                const mainProvider = provider.split('(')[0].trim();
-
-                // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
-                const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
-                if (isExempt) return true;
-
-                // For all other providers, check for strict ITA in title
-                const title = (result.title || result.websiteTitle || '').toLowerCase();
-                const hasIta = /\bita\b|italian|italiano/i.test(title);
-
-                if (!hasIta) {
-                    console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${provider})`);
-                }
-
-                return hasIta;
-            });
-
-            console.log(`🇮🇹 [FULL ITA] Filtered ${beforeCount} → ${filteredResults.length} results (strict ITA mode)`);
-        }
-
-        if (type === 'series') {
-            const originalCount = filteredResults.length;
-            const displayEpisode = kitsuId && mediaDetails.absoluteEpisode
-                ? `absolute ${mediaDetails.absoluteEpisode} (S${season}E${episode})`
-                : `S${season}E${episode}`;
-            console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
-
-            filteredResults = filteredResults.filter(result => {
-                // For Kitsu anime, we need to check BOTH:
-                // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
-                // 2. Season/Episode format (S03E01) - fallback for season-based packs
-                // CRITICAL: episodeNum parameter = SEASON episode (not absolute!)
-                const match = isExactEpisodeMatch(
-                    result.title || result.websiteTitle,
-                    mediaDetails.titles || mediaDetails.title,
-                    parseInt(season),
-                    parseInt(episode), // Season episode (e.g., 1 for S03E01)
-                    !!kitsuId,
-                    mediaDetails.absoluteEpisode // Absolute episode (e.g., 38)
-                );
-
-                if (!match) {
-                    if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
-                } else {
-                    console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
-                }
-
-                return match;
-            });
-
-            console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
-
-            // ✅ PACK FILES VERIFICATION for scraped results
-            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
-                const seasonNum = parseInt(season);
-                const episodeNum = parseInt(episode);
-                const seriesImdbId = mediaDetails.imdbId;
-                const MAX_PACK_VERIFY = 6;
-                const DELAY_MS = 200; // Balance between rate limiting and speed
-
-                // Separate verified from unverified packs
-                const verifiedPacks = [];
-                const unverifiedPacks = [];
-                const nonPacks = [];
-
-                for (const result of filteredResults) {
-                    const hasFileIndex = result.fileIndex !== null && result.fileIndex !== undefined;
-                    const isPack = packFilesHandler.isSeasonPack(result.title);
-
-                    if (!isPack) {
-                        nonPacks.push(result);
-                    } else if (hasFileIndex) {
-                        verifiedPacks.push(result);
+                    if (isNewBetter) {
+                        if (DEBUG_MODE) console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
+                        // Preserve file_title from existing if new doesn't have it
+                        if (!result.file_title && existing.file_title) {
+                            result.file_title = existing.file_title;
+                            result.fileIndex = existing.fileIndex;
+                            if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
+                        }
+                        bestResults.set(hash, result);
                     } else {
-                        unverifiedPacks.push(result);
+                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
+                        // Preserve file_title from new if existing doesn't have it
+                        if (!existing.file_title && result.file_title) {
+                            existing.file_title = result.file_title;
+                            existing.fileIndex = result.fileIndex;
+                            bestResults.set(hash, existing); // Update map with modified object
+                            if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
+                        }
                     }
                 }
+            }
 
-                // Sort by size (largest first)
-                unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+            let results = Array.from(bestResults.values());
+            console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
+            // --- FINE NUOVA LOGICA ---
 
-                console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+            // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
+            // ✅ STRICT ITALIAN FILTER: Only save Italian/Multi torrents to DB
+            if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
+                try {
+                    const torrentsToSave = results
+                        .filter(r => {
+                            if (!r.infoHash) return false;
 
-                const toVerify = unverifiedPacks.slice(0, MAX_PACK_VERIFY);
-                const skipped = unverifiedPacks.slice(MAX_PACK_VERIFY);
+                            // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
+                            const title = r.title || r.websiteTitle || '';
+                            const langInfo = getLanguageInfo(title);
+                            const isItalian = langInfo.isItalian;
 
-                const newlyVerified = [];
-                const excluded = [];
+                            // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
+                            // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
+                            // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
+                            const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
+                            const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
+                                (mainAddon && /^torrentio$/i.test(mainAddon));
 
-                for (let i = 0; i < toVerify.length; i++) {
-                    const result = toVerify[i];
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                            if (!isItalian && !isTrustedProvider) {
+                                console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
+                                return false;
+                            }
+                            return true;
+                        })
+                        .map(r => ({
+                            info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
+                            title: r.title || r.websiteTitle || 'Unknown',
+                            provider: r.source || r.externalAddon || 'unknown',
+                            size: r.sizeInBytes || null,
+                            type: type,
+                            seeders: r.seeders || 0,
+                            imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
+                            tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
+                            upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
+                            cached_rd: r.cached || false // Save cached status if available
+                        }));
 
-                    if (!infoHash) {
-                        newlyVerified.push(result);
-                        continue;
+                    if (torrentsToSave.length > 0) {
+                        // 🚀 Fire-and-forget: Save to DB in background without blocking response
+                        dbHelper.batchInsertTorrents(torrentsToSave)
+                            .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
+                            .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
+                    } else {
+                        console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
+                    }
+                } catch (dbSaveError) {
+                    console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
+                }
+            }
+
+            if (!results || results.length === 0) {
+                console.log('❌ No results found from any source after all fallbacks');
+                return { streams: [] };
+            }
+
+            console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
+
+            // ✅ Apply exact matching filters
+            let filteredResults = results;
+
+            // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
+            if (config.full_ita) {
+                const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
+                const beforeCount = filteredResults.length;
+
+                filteredResults = filteredResults.filter(result => {
+                    const provider = (result.source || result.externalAddon || '').toLowerCase();
+
+                    // Extract MAIN provider only (before parentheses) to avoid false positives
+                    // e.g., "comet (torrentio)" → "comet" (NOT exempt)
+                    // e.g., "torrentio" → "torrentio" (exempt)
+                    const mainProvider = provider.split('(')[0].trim();
+
+                    // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
+                    const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
+                    if (isExempt) return true;
+
+                    // For all other providers, check for strict ITA in title
+                    const title = (result.title || result.websiteTitle || '').toLowerCase();
+                    const hasIta = /\bita\b|italian|italiano/i.test(title);
+
+                    if (!hasIta) {
+                        console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${provider})`);
                     }
 
-                    if (i > 0) {
-                        // 🧠 SMART DELAY: Don't wait if we have cached file info in DB!
-                        // This removes the 200ms delay for cached content
-                        if (DEBUG_MODE) console.log(`🕵️ [SCRAPE VERIFY] Checking DB cache for hash: ${infoHash.substring(0, 8)}...`);
+                    return hasIta;
+                });
 
-                        let isCached = false;
+                console.log(`🇮🇹 [FULL ITA] Filtered ${beforeCount} → ${filteredResults.length} results (strict ITA mode)`);
+            }
+
+            if (type === 'series') {
+                const originalCount = filteredResults.length;
+                const displayEpisode = kitsuId && mediaDetails.absoluteEpisode
+                    ? `absolute ${mediaDetails.absoluteEpisode} (S${season}E${episode})`
+                    : `S${season}E${episode}`;
+                console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
+
+                filteredResults = filteredResults.filter(result => {
+                    // For Kitsu anime, we need to check BOTH:
+                    // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
+                    // 2. Season/Episode format (S03E01) - fallback for season-based packs
+                    // CRITICAL: episodeNum parameter = SEASON episode (not absolute!)
+                    const match = isExactEpisodeMatch(
+                        result.title || result.websiteTitle,
+                        mediaDetails.titles || mediaDetails.title,
+                        parseInt(season),
+                        parseInt(episode), // Season episode (e.g., 1 for S03E01)
+                        !!kitsuId,
+                        mediaDetails.absoluteEpisode, // Absolute episode (e.g., 38)
+                        false, // skipTitleCheck default
+                        mediaDetails.year // ✅ Pass requiredYear
+                    );
+
+                    if (!match) {
+                        if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
+                    } else {
+                        console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
+                    }
+
+                    return match;
+                });
+
+                console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
+
+                // ✅ PACK FILES VERIFICATION for scraped results
+                if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+                    const seasonNum = parseInt(season);
+                    const episodeNum = parseInt(episode);
+                    const seriesImdbId = mediaDetails.imdbId;
+                    const MAX_PACK_VERIFY = 6;
+                    const DELAY_MS = 200; // Balance between rate limiting and speed
+
+                    // Separate verified from unverified packs
+                    const verifiedPacks = [];
+                    const unverifiedPacks = [];
+                    const nonPacks = [];
+
+                    for (const result of filteredResults) {
+                        const hasFileIndex = result.fileIndex !== null && result.fileIndex !== undefined;
+                        const isPack = packFilesHandler.isSeasonPack(result.title);
+
+                        if (!isPack) {
+                            nonPacks.push(result);
+                        } else if (hasFileIndex) {
+                            verifiedPacks.push(result);
+                        } else {
+                            unverifiedPacks.push(result);
+                        }
+                    }
+
+                    // Sort by size (largest first)
+                    unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+
+                    console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+
+                    // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
+                    const needsExternalVerification = [];
+
+                    // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
+                    console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+
+                    for (const result of unverifiedPacks) {
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+
+                        if (!infoHash) {
+                            newlyVerified.push(result); // Cannot verify without hash
+                            continue;
+                        }
+
                         try {
-                            // Quick check if files exist in DB cache for this hash
-                            const currentFiles = await dbHelper.getSeriesPackFiles(infoHash);
-                            if (currentFiles && currentFiles.length > 0) {
-                                isCached = true;
-                                if (DEBUG_MODE) console.log(`⚡ [SCRAPE VERIFY] Cache HIT for ${infoHash.substring(0, 8)} - Skipping delay!`);
+                            // Check if we have files for this pack in DB
+                            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+
+                            if (cachedFiles && cachedFiles.length > 0) {
+                                // ✅ CACHE HIT: Verify immediately
+                                const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                                    infoHash,
+                                    config,
+                                    seriesImdbId,
+                                    seasonNum,
+                                    episodeNum,
+                                    dbHelper
+                                );
+
+                                if (fileInfo) {
+                                    console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                    result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                    result.file_size = fileInfo.fileSize;
+                                    result.fileIndex = fileInfo.fileIndex;
+                                    result.file_title = fileInfo.fileName;
+                                    result.sizeInBytes = fileInfo.fileSize;
+                                    result.size = formatBytes(fileInfo.fileSize);
+                                    newlyVerified.push(result);
+                                } else {
+                                    console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                    excluded.push(result);
+                                }
+                            } else {
+                                // ❌ CACHE MISS
+                                needsExternalVerification.push(result);
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [SCRAPE VERIFY] Cache check error: ${err.message}`);
+                            needsExternalVerification.push(result);
+                        }
+                    }
+
+                    // 2️⃣ SLOW PATH: External Verification (LIMITED)
+                    const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
+                    const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
+
+                    console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+
+                    for (let i = 0; i < toVerifyExternal.length; i++) {
+                        const result = toVerifyExternal[i];
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                        // (infoHash checked above, but good to be safe if Logic moved)
+
+                        if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+
+                        console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+
+                        const originalPackSize = result.sizeInBytes || 0;
+
+                        try {
+                            const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                                infoHash,
+                                config,
+                                seriesImdbId,
+                                seasonNum,
+                                episodeNum,
+                                dbHelper
+                            );
+
+                            if (fileInfo) {
+                                console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                result.packSize = fileInfo.totalPackSize || originalPackSize;
+                                result.file_size = fileInfo.fileSize;
+                                result.fileIndex = fileInfo.fileIndex;
+                                result.file_title = fileInfo.fileName;
+                                result.sizeInBytes = fileInfo.fileSize;
+                                result.size = formatBytes(fileInfo.fileSize);
+                                newlyVerified.push(result);
+                            } else {
+                                console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                                excluded.push(result);
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [SCRAPE VERIFY] Error: ${err.message} - keeping pack`);
+                            newlyVerified.push(result);
+                        }
+                    }
+
+                    // 3️⃣ STRICT FILTERING: Exclude skipped packs!
+                    if (skippedSize > 0) {
+                        console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    }
+
+                    console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
+
+                    // Combine results SKIPPED ARE EXCLUDED
+                    filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
+                }
+
+                // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
+                if (filteredResults.length === 0 && originalCount > 0) {
+                    console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
+                }
+            } else if (type === 'movie') {
+                const originalCount = filteredResults.length;
+                let movieDetails = null;
+                if (mediaDetails.tmdbId) {
+                    movieDetails = await getTMDBDetails(mediaDetails.tmdbId, 'movie', tmdbKey);
+                }
+                filteredResults = filteredResults.filter(result => {
+                    const torrentTitle = result.title || result.websiteTitle;
+
+                    // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
+                    // Packs are identified by having a fileIndex (from pack_files table)
+                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                        console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
+                        return true; // Always keep packs, they're already filtered by IMDb ID in DB query
+                    }
+
+                    // Try matching with English title
+                    const mainTitleMatch = isExactMovieMatch(
+                        torrentTitle,
+                        mediaDetails.title,
+                        mediaDetails.year
+                    );
+                    if (mainTitleMatch) return true;
+
+                    // Try matching with Italian title
+                    if (italianTitle && italianTitle !== mediaDetails.title) {
+                        const italianMatch = isExactMovieMatch(
+                            torrentTitle,
+                            italianTitle,
+                            mediaDetails.year
+                        );
+                        if (italianMatch) return true;
+                    }
+
+                    // Try matching with original title
+                    if (movieDetails && movieDetails.original_title && movieDetails.original_title !== mediaDetails.title) {
+                        return isExactMovieMatch(
+                            torrentTitle,
+                            movieDetails.original_title,
+                            mediaDetails.year
+                        );
+                    }
+                    return false;
+                });
+                console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
+
+                // If exact matching removed too many results, be more lenient
+                if (filteredResults.length === 0 && originalCount > 0) {
+                    console.log('⚠️ Exact filtering removed all results, using broader match');
+                    filteredResults = results.slice(0, Math.min(15, results.length));
+                }
+
+                // ✅ MOVIE PACK VERIFICATION
+                // Trigger: Only if Debrid key is present
+                if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+                    const MAX_MOVIE_VERIFY = 5;
+                    const DELAY_MS = 200;
+
+                    // Separate known/verified from unverified
+                    const verifiedMovies = [];
+                    const unverifiedMovies = [];
+
+                    for (const res of filteredResults) {
+                        // If it already has fileIndex, it's a known pack file from DB
+                        if (res.fileIndex !== undefined && res.fileIndex !== null) {
+                            verifiedMovies.push(res);
+                        } else {
+                            unverifiedMovies.push(res);
+                        }
+                    }
+
+                    unverifiedMovies.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+
+                    const newlyVerified = [];
+                    const excluded = [];
+                    const needsExternalVerification = [];
+
+                    console.log(`🎬 [MOVIE VERIFY] Checking DB cache for ${unverifiedMovies.length} potential packs...`);
+
+                    // 1️⃣ FAST PATH: Check DB Cache for ALL unverified movies
+                    for (const result of unverifiedMovies) {
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                        if (!infoHash) {
+                            newlyVerified.push(result);
+                            continue;
+                        }
+
+                        // Only check cache if size seems like a pack (> 4GB typically, but let's check all large ones)
+                        // Actually, check all. Cache is fast.
+                        try {
+                            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                            if (cachedFiles && cachedFiles.length > 0) {
+                                // CACHE HIT: It's a pack (or we have files logged)
+                                const fileInfo = await packFilesHandler.resolveMoviePackFile(
+                                    infoHash,
+                                    config,
+                                    mediaDetails.imdbId,
+                                    mediaDetails.title, // Use MAIN title for fuzzy match
+                                    mediaDetails.year,
+                                    dbHelper
+                                );
+
+                                if (fileInfo) {
+                                    console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
+                                    result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                    result.file_size = fileInfo.fileSize;
+                                    result.fileIndex = fileInfo.fileIndex;
+                                    result.file_title = fileInfo.fileName;
+                                    result.sizeInBytes = fileInfo.fileSize;
+                                    result.size = formatBytes(fileInfo.fileSize);
+                                    newlyVerified.push(result);
+                                } else {
+                                    // If it's a pack but movie not found -> EXCLUDE
+                                    // BUT BE CAREFUL: strict exclusion only if > 1 file.
+                                    // resolveMoviePackFile returns null only if Not Found or Error.
+                                    // If it was a single file mismatch, it might return null too? 
+                                    // Actually resolveMoviePackFile returns valid object for single file if verified.
+                                    console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
+                                    excluded.push(result);
+                                }
+                            } else {
+                                // CACHE MISS: Add to external queue
+                                needsExternalVerification.push(result);
                             }
                         } catch (e) {
-                            if (DEBUG_MODE) console.warn(`⚠️ [SCRAPE VERIFY] DB check failed, using safe delay: ${e.message}`);
-                        }
-
-                        if (!isCached) {
-                            await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                            needsExternalVerification.push(result);
                         }
                     }
 
-                    console.log(`📦 [SCRAPE VERIFY] (${i + 1}/${toVerify.length}) Checking "${result.title.substring(0, 50)}..."`);
+                    // 2️⃣ SLOW PATH: External Verification
+                    // Only verify if likely a pack (e.g. name contains keywords OR size is huge)
+                    // OR just verify top X results to be safe?
+                    // Let's verify top X.
+                    const toVerifyExternal = needsExternalVerification.slice(0, MAX_MOVIE_VERIFY);
+                    const skipped = needsExternalVerification.slice(MAX_MOVIE_VERIFY);
 
-                    // ✅ Save original pack size BEFORE any modification
-                    const originalPackSize = result.sizeInBytes || 0;
+                    console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
 
-                    try {
-                        const fileInfo = await packFilesHandler.resolveSeriesPackFile(
-                            infoHash,
-                            config,
-                            seriesImdbId,
-                            seasonNum,
-                            episodeNum,
-                            dbHelper
-                        );
+                    for (let i = 0; i < toVerifyExternal.length; i++) {
+                        const result = toVerifyExternal[i];
+                        const infoHash = result.infoHash?.toLowerCase();
 
-                        if (fileInfo) {
-                            console.log(`✅ [SCRAPE VERIFY] Found E${episodeNum}: ${fileInfo.fileName}`);
-                            // Use totalPackSize from fileInfo if available, otherwise use original sizeInBytes
-                            result.packSize = fileInfo.totalPackSize || originalPackSize;
-                            result.file_size = fileInfo.fileSize;
-                            result.fileIndex = fileInfo.fileIndex;
-                            result.file_title = fileInfo.fileName;
-                            result.sizeInBytes = fileInfo.fileSize;
-                            result.size = formatBytes(fileInfo.fileSize);
+                        // Heuristic: If size < 3GB and no "pack" keywords, assume it's a single movie and valid.
+                        // Skip expensive API call for obvious single files.
+                        const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
+
+                        if (!isLikelyPack) {
+                            newlyVerified.push(result); // Assume valid single movie
+                            continue;
+                        }
+
+                        if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                        console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+
+                        try {
+                            const fileInfo = await packFilesHandler.resolveMoviePackFile(
+                                infoHash,
+                                config,
+                                mediaDetails.imdbId,
+                                mediaDetails.title,
+                                mediaDetails.year,
+                                dbHelper
+                            );
+
+                            if (fileInfo) {
+                                console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
+                                result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                result.file_size = fileInfo.fileSize;
+                                result.fileIndex = fileInfo.fileIndex;
+                                result.file_title = fileInfo.fileName;
+                                result.sizeInBytes = fileInfo.fileSize;
+                                result.size = formatBytes(fileInfo.fileSize);
+                                newlyVerified.push(result);
+                            } else {
+                                // If resolve returns null, it means it's a pack but movie NOT found.
+                                // OR fetch failed.
+                                console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
+                                excluded.push(result);
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [MOVIE VERIFY] Error, keeping: ${err.message}`);
                             newlyVerified.push(result);
-                        } else {
-                            console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
-                            excluded.push(result);
                         }
-                    } catch (err) {
-                        console.warn(`⚠️ [SCRAPE VERIFY] Error: ${err.message} - keeping pack`);
-                        newlyVerified.push(result);
                     }
-                }
 
-                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skipped.length} skipped`);
-                filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified, ...skipped];
+                    // Combined
+                    // Note: We do NOT exclude skipped movies (unlike series packs) because 
+                    // for movies, "unverified" usually just means "we didn't check inside", 
+                    // but likely it IS the movie itself (single file).
+                    // We only exclude if we POSITIVELY identified it as a pack missing the file.
+                    filteredResults = [...verifiedMovies, ...newlyVerified, ...skipped];
+                    console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results`);
+                }
             }
 
-            // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
-            if (filteredResults.length === 0 && originalCount > 0) {
-                console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
-            }
-        } else if (type === 'movie') {
-            const originalCount = filteredResults.length;
-            let movieDetails = null;
-            if (mediaDetails.tmdbId) {
-                movieDetails = await getTMDBDetails(mediaDetails.tmdbId, 'movie', tmdbKey);
-            }
-            filteredResults = filteredResults.filter(result => {
-                const torrentTitle = result.title || result.websiteTitle;
-
-                // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
-                // Packs are identified by having a fileIndex (from pack_files table)
-                if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                    console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
-                    return true; // Always keep packs, they're already filtered by IMDb ID in DB query
-                }
-
-                // Try matching with English title
-                const mainTitleMatch = isExactMovieMatch(
-                    torrentTitle,
-                    mediaDetails.title,
-                    mediaDetails.year
-                );
-                if (mainTitleMatch) return true;
-
-                // Try matching with Italian title
-                if (italianTitle && italianTitle !== mediaDetails.title) {
-                    const italianMatch = isExactMovieMatch(
-                        torrentTitle,
-                        italianTitle,
-                        mediaDetails.year
-                    );
-                    if (italianMatch) return true;
-                }
-
-                // Try matching with original title
-                if (movieDetails && movieDetails.original_title && movieDetails.original_title !== mediaDetails.title) {
-                    return isExactMovieMatch(
-                        torrentTitle,
-                        movieDetails.original_title,
-                        mediaDetails.year
-                    );
-                }
-                return false;
-            });
-            console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
-
-            // If exact matching removed too many results, be more lenient
-            if (filteredResults.length === 0 && originalCount > 0) {
-                console.log('⚠️ Exact filtering removed all results, using broader match');
-                filteredResults = results.slice(0, Math.min(15, results.length));
-            }
-        }
-
-        // ✅ LANGUAGE FILTERING (Post-Season Filter)
-        // Apply "Italian Preference" ONLY after we have filtered for the correct season/episode.
-        // This ensures we don't discard English S02 just because we found Italian S01.
-        if (filteredResults.length > 0) {
-            const hasItalianResults = filteredResults.some(r => {
-                const lang = getLanguageInfo(r.title, italianTitle, r.source);
-                return lang.isItalian || lang.isMulti;
-            });
-
-            if (hasItalianResults) {
-                const originalCount = filteredResults.length;
-                const italianOnly = filteredResults.filter(r => {
+            // ✅ LANGUAGE FILTERING (Post-Season Filter)
+            // Apply "Italian Preference" ONLY after we have filtered for the correct season/episode.
+            // This ensures we don't discard English S02 just because we found Italian S01.
+            if (filteredResults.length > 0) {
+                const hasItalianResults = filteredResults.some(r => {
                     const lang = getLanguageInfo(r.title, italianTitle, r.source);
                     return lang.isItalian || lang.isMulti;
                 });
 
-                // Only apply if we actually filter something out
-                if (italianOnly.length < originalCount) {
-                    // console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
+                if (hasItalianResults) {
+                    const originalCount = filteredResults.length;
+                    const italianOnly = filteredResults.filter(r => {
+                        const lang = getLanguageInfo(r.title, italianTitle, r.source);
+                        return lang.isItalian || lang.isMulti;
+                    });
 
-                    // ✅ STRICT FILTER: Even if we keep non-Italian as fallback for display,
-                    // we mark them so they don't get saved to the DB if the user wants strict DB
-                    // Actually, user said "non ita non metterli nel db".
-                    // So we will just STRICTLY filter them out here if Italians are found.
-                    // But if NO Italians are found, we might want to return them for viewing but NOT save them.
+                    // Only apply if we actually filter something out
+                    if (italianOnly.length < originalCount) {
+                        // console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
 
-                    // Current implementation: filteredResults = italianOnly;
-                    // This already hides them from view AND DB because we continue with `filteredResults`.
-                    filteredResults = italianOnly;
+                        // ✅ STRICT FILTER: Even if we keep non-Italian as fallback for display,
+                        // we mark them so they don't get saved to the DB if the user wants strict DB
+                        // Actually, user said "non ita non metterli nel db".
+                        // So we will just STRICTLY filter them out here if Italians are found.
+                        // But if NO Italians are found, we might want to return them for viewing but NOT save them.
+
+                        // Current implementation: filteredResults = italianOnly;
+                        // This already hides them from view AND DB because we continue with `filteredResults`.
+                        filteredResults = italianOnly;
+                    }
+                } else {
+                    // No Italian results found.
+                    // User said: "non ita non metterli nel db... non servono..."
+                    // If we want to prevent them from hitting the DB, we must filter them out.
+                    // BUT if we filter them out here, the user sees "No streams".
+                    // If we want to show them but not save them, we need a flag.
+                    // Let's implement Strict Filtering: If no ITA, return NOTHING (or keep logic but block DB save).
+                    // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
+
+                    console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
+                    filteredResults.forEach(r => r.skipDbSave = true);
                 }
-            } else {
-                // No Italian results found.
-                // User said: "non ita non metterli nel db... non servono..."
-                // If we want to prevent them from hitting the DB, we must filter them out.
-                // BUT if we filter them out here, the user sees "No streams".
-                // If we want to show them but not save them, we need a flag.
-                // Let's implement Strict Filtering: If no ITA, return NOTHING (or keep logic but block DB save).
-                // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
-
-                console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
-                filteredResults.forEach(r => r.skipDbSave = true);
             }
-        }
 
-        // Limit results for performance
-        const maxResults = 30; // Increased limit
-        filteredResults = filteredResults.slice(0, maxResults);
+            // Limit results for performance
+            const maxResults = 30; // Increased limit
+            filteredResults = filteredResults.slice(0, maxResults);
 
-        console.log(`🔄 Checking debrid services for ${filteredResults.length} results...`);
-        const hashes = filteredResults.map(t => t.infoHash.toLowerCase()).filter(h => h && h.length >= 32);
+            console.log(`🔄 Checking debrid services for ${filteredResults.length} results...`);
+            const hashes = filteredResults.map(t => t.infoHash.toLowerCase()).filter(h => h && h.length >= 32);
 
-        if (hashes.length === 0) {
-            console.log('❌ No valid info hashes found');
-            return { streams: [] };
-        }
+            if (hashes.length === 0) {
+                console.log('❌ No valid info hashes found');
+                return { streams: [] };
+            }
 
-        // ✅ Check cache for enabled services in parallel
-        let rdCacheResults = {};
-        let rdUserTorrents = [];
-        let torboxCacheResults = {};
-        let torboxUserTorrents = [];
-        let adCacheResults = {};
+            // ✅ Check cache for enabled services in parallel
+            let rdCacheResults = {};
+            let rdUserTorrents = [];
+            let torboxCacheResults = {};
+            let torboxUserTorrents = [];
+            let adCacheResults = {};
 
-        const cacheChecks = [];
+            const cacheChecks = [];
 
-        if (useRealDebrid) {
-            console.log('👑 Checking Real-Debrid cache...');
-            cacheChecks.push(
-                (async () => {
-                    // ⚠️ instantAvailability is DISABLED by RealDebrid (error_code 37)
-                    // Strategy: DB cache + Leviathan-style live check (Add → Status → Delete)
+            if (useRealDebrid) {
+                console.log('👑 Checking Real-Debrid cache...');
+                cacheChecks.push(
+                    (async () => {
+                        // ⚠️ instantAvailability is DISABLED by RealDebrid (error_code 37)
+                        // Strategy: DB cache + Leviathan-style live check (Add → Status → Delete)
 
-                    // STEP 1: Check DB cache for known cached torrents (< 20 days)
-                    let dbCachedResults = {};
-                    if (dbEnabled) {
-                        dbCachedResults = await dbHelper.getRdCachedAvailability(hashes);
-                        console.log(`💾 [DB Cache] ${Object.keys(dbCachedResults).length}/${hashes.length} hashes found in cache (< 20 days)`);
-                    }
-
-                    // STEP 2: Set DB cached results as base
-                    rdCacheResults = { ...dbCachedResults };
-
-                    // STEP 3: Get user torrents (personal cache - already added to RD account)
-                    rdUserTorrents = await rdService.getTorrents().catch(e => {
-                        console.error("⚠️ Failed to fetch RD user torrents.", e.message);
-                        return [];
-                    });
-
-                    // STEP 4: Save user's personal cache to DB (becomes global cache for all users)
-                    if (dbEnabled && rdUserTorrents.length > 0) {
-                        const userCacheToSave = rdUserTorrents
-                            .filter(t => {
-                                if (!t.hash || t.status !== 'downloaded') return false;
-                                const hLower = t.hash.toLowerCase();
-                                if (!hashes.includes(hLower)) return false;
-
-                                // ✅ STRICT DB FILTER
-                                const res = filteredResults.find(r => r.infoHash?.toLowerCase() === hLower);
-                                if (res?.skipDbSave) return false;
-
-                                return true;
-                            })
-                            .map(t => ({
-                                hash: t.hash.toLowerCase(),
-                                cached: true,
-                                file_title: t.filename,
-                                size: t.bytes
-                            }));
-
-                        if (userCacheToSave.length > 0) {
-                            await dbHelper.updateRdCacheStatus(userCacheToSave, type);
-                            console.log(`💾 [GLOBAL CACHE] Saved ${userCacheToSave.length} RD personal torrents to DB (now available for all users)`);
+                        // STEP 1: Check DB cache for known cached torrents (< 20 days)
+                        let dbCachedResults = {};
+                        if (dbEnabled) {
+                            dbCachedResults = await dbHelper.getRdCachedAvailability(hashes);
+                            console.log(`💾 [DB Cache] ${Object.keys(dbCachedResults).length}/${hashes.length} hashes found in cache (< 20 days)`);
                         }
-                    }
 
-                    // STEP 5: Leviathan-style live check for hashes NOT in DB cache
-                    // Find hashes that don't have cache info yet
-                    // Only exclude user torrents that are DOWNLOADED (confirmed cached)
-                    const userDownloadedHashes = new Set(
-                        rdUserTorrents
-                            .filter(t => t.status === 'downloaded')
-                            .map(t => t.hash?.toLowerCase())
-                    );
-                    const uncachedHashes = hashes.filter(h => {
-                        // Only skip live check if DB says cached=true (confirmed in cache)
-                        // If cached=false or undefined, we should re-check
-                        const isConfirmedCached = dbCachedResults[h]?.cached === true;
-                        const inUserDownloaded = userDownloadedHashes.has(h);
+                        // STEP 2: Set DB cached results as base
+                        rdCacheResults = { ...dbCachedResults };
 
-                        return !isConfirmedCached && !inUserDownloaded;
-                    });
+                        // STEP 3: Get user torrents (personal cache - already added to RD account)
+                        rdUserTorrents = await rdService.getTorrents().catch(e => {
+                            console.error("⚠️ Failed to fetch RD user torrents.", e.message);
+                            return [];
+                        });
 
-                    // ✅ ONE-TIME enrichment: Items cached but never had file_title checked
-                    // file_title === undefined means never checked, '' means checked but not found
-                    const needsFileTitleEnrichment = hashes.filter(h => {
-                        const dbEntry = dbCachedResults[h];
-                        return dbEntry?.cached === true && dbEntry?.file_title === undefined;
-                    }).slice(0, 3); // Max 3 per request to avoid slowdown
+                        // STEP 4: Save user's personal cache to DB (becomes global cache for all users)
+                        if (dbEnabled && rdUserTorrents.length > 0) {
+                            const userCacheToSave = rdUserTorrents
+                                .filter(t => {
+                                    if (!t.hash || t.status !== 'downloaded') return false;
+                                    const hLower = t.hash.toLowerCase();
+                                    if (!hashes.includes(hLower)) return false;
 
-                    if (uncachedHashes.length > 0 && config.rd_key) {
-                        console.log(`🔍 [RD Live Check] ${uncachedHashes.length} hashes without cache info`);
+                                    // ✅ STRICT DB FILTER
+                                    const res = filteredResults.find(r => r.infoHash?.toLowerCase() === hLower);
+                                    if (res?.skipDbSave) return false;
 
-                        // Build items array with hash and magnet for checking
-                        const itemsToCheck = uncachedHashes.map(hash => {
-                            const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                            // ✅ STRICT DB FILTER: Don't live-check non-ITA items
-                            if (result?.skipDbSave) return null;
-                            return result ? { hash, magnet: result.magnetLink } : null;
-                        }).filter(Boolean);
+                                    return true;
+                                })
+                                .map(t => ({
+                                    hash: t.hash.toLowerCase(),
+                                    cached: true,
+                                    file_title: t.filename,
+                                    size: t.bytes
+                                }));
 
-                        if (itemsToCheck.length > 0) {
-                            // Count how many are already confirmed cached in DB
-                            const dbCachedCount = hashes.filter(h => dbCachedResults[h]?.cached === true).length;
+                            if (userCacheToSave.length > 0) {
+                                await dbHelper.updateRdCacheStatus(userCacheToSave, type);
+                                console.log(`💾 [GLOBAL CACHE] Saved ${userCacheToSave.length} RD personal torrents to DB (now available for all users)`);
+                            }
+                        }
 
-                            // SYNC: Check enough to reach 5 total verified
-                            const syncLimit = Math.max(0, 5 - dbCachedCount);
-                            const syncItems = itemsToCheck.slice(0, syncLimit);
+                        // STEP 5: Leviathan-style live check for hashes NOT in DB cache
+                        // Find hashes that don't have cache info yet
+                        // Only exclude user torrents that are DOWNLOADED (confirmed cached)
+                        const userDownloadedHashes = new Set(
+                            rdUserTorrents
+                                .filter(t => t.status === 'downloaded')
+                                .map(t => t.hash?.toLowerCase())
+                        );
+                        const uncachedHashes = hashes.filter(h => {
+                            // Only skip live check if DB says cached=true (confirmed in cache)
+                            // If cached=false or undefined, we should re-check
+                            const isConfirmedCached = dbCachedResults[h]?.cached === true;
+                            const inUserDownloaded = userDownloadedHashes.has(h);
 
-                            console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
+                            return !isConfirmedCached && !inUserDownloaded;
+                        });
 
-                            if (syncItems.length > 0) {
-                                // 🚀 Fire-and-forget: Check RD cache in background (add/delete is slow!)
-                                // Users won't see "⚡" immediately for NEW items, but searching again instantly will show it.
-                                console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
-                                rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
-                                    .then(async (liveCheckResults) => {
-                                        // Save results to DB
-                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
-                                            // Ensure not blocked by strict filter
-                                            const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                                            if (originalResult?.skipDbSave) {
-                                                return null;
+                        // ✅ ONE-TIME enrichment: Items cached but never had file_title checked
+                        // file_title === undefined means never checked, '' means checked but not found
+                        const needsFileTitleEnrichment = hashes.filter(h => {
+                            const dbEntry = dbCachedResults[h];
+                            return dbEntry?.cached === true && dbEntry?.file_title === undefined;
+                        }).slice(0, 3); // Max 3 per request to avoid slowdown
+
+                        if (uncachedHashes.length > 0 && config.rd_key) {
+                            console.log(`🔍 [RD Live Check] ${uncachedHashes.length} hashes without cache info`);
+
+                            // Build items array with hash and magnet for checking
+                            const itemsToCheck = uncachedHashes.map(hash => {
+                                const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                // ✅ STRICT DB FILTER: Don't live-check non-ITA items
+                                if (result?.skipDbSave) return null;
+                                return result ? { hash, magnet: result.magnetLink } : null;
+                            }).filter(Boolean);
+
+                            if (itemsToCheck.length > 0) {
+                                // Count how many are already confirmed cached in DB
+                                const dbCachedCount = hashes.filter(h => dbCachedResults[h]?.cached === true).length;
+
+                                // SYNC: Check enough to reach 5 total verified
+                                const syncLimit = Math.max(0, 5 - dbCachedCount);
+                                const syncItems = itemsToCheck.slice(0, syncLimit);
+
+                                console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
+
+                                if (syncItems.length > 0) {
+                                    // 🚀 Fire-and-forget: Check RD cache in background (add/delete is slow!)
+                                    // Users won't see "⚡" immediately for NEW items, but searching again instantly will show it.
+                                    console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
+                                    rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
+                                        .then(async (liveCheckResults) => {
+                                            // Save results to DB
+                                            const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
+                                                // Ensure not blocked by strict filter
+                                                const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                                if (originalResult?.skipDbSave) {
+                                                    return null;
+                                                }
+                                                return {
+                                                    hash,
+                                                    cached: data.cached,
+                                                    file_title: data.file_title || null,
+                                                    file_size: data.file_size || null
+                                                };
+                                            }).filter(Boolean);
+
+                                            if (liveResultsToSave.length > 0 && dbEnabled) {
+                                                await dbHelper.updateRdCacheStatus(liveResultsToSave, type);
+                                                console.log(`💾 [DB] Saved ${liveResultsToSave.length} background live check results`);
                                             }
-                                            return {
-                                                hash,
-                                                cached: data.cached,
-                                                file_title: data.file_title || null,
-                                                file_size: data.file_size || null
-                                            };
-                                        }).filter(Boolean);
+                                        })
+                                        .catch(err => console.warn(`⚠️ [RD Cache] Background check failed: ${err.message}`));
+                                }
 
-                                        if (liveResultsToSave.length > 0 && dbEnabled) {
-                                            await dbHelper.updateRdCacheStatus(liveResultsToSave, type);
-                                            console.log(`💾 [DB] Saved ${liveResultsToSave.length} background live check results`);
+                                // ASYNC: Process remaining hashes in background (local, non-blocking)
+                                const asyncItems = itemsToCheck.slice(syncLimit);
+                                if (asyncItems.length > 0) {
+                                    rdCacheChecker.enrichCacheBackground(asyncItems, config.rd_key, dbHelper);
+                                    console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
+                                }
+                            }
+                        }
+
+                        // ✅ ONE-TIME: Enrich file_title for cached items that never had it checked
+                        if (needsFileTitleEnrichment.length > 0 && config.rd_key) {
+                            console.log(`📝 [File Title] Background enrichment for ${needsFileTitleEnrichment.length} cached items missing file_title...`);
+                            const enrichItems = needsFileTitleEnrichment.map(hash => {
+                                const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                return result ? { hash, magnet: result.magnetLink } : null;
+                            }).filter(Boolean);
+
+                            if (enrichItems.length > 0) {
+                                // Fire-and-forget background enrichment
+                                rdCacheChecker.checkCacheSync(enrichItems, config.rd_key, enrichItems.length)
+                                    .then(async (enrichResults) => {
+                                        const toSave = Object.entries(enrichResults).map(([hash, data]) => ({
+                                            hash,
+                                            cached: data.cached,
+                                            // Use '' (empty string) if no file_title found - this marks it as "checked"
+                                            file_title: data.file_title || ''
+                                        }));
+                                        if (toSave.length > 0 && dbEnabled) {
+                                            await dbHelper.updateRdCacheStatus(toSave, type);
+                                            console.log(`✅ [File Title] Enriched ${toSave.length} items (one-time)`);
                                         }
                                     })
-                                    .catch(err => console.warn(`⚠️ [RD Cache] Background check failed: ${err.message}`));
-                            }
-
-                            // ASYNC: Process remaining hashes in background (local, non-blocking)
-                            const asyncItems = itemsToCheck.slice(syncLimit);
-                            if (asyncItems.length > 0) {
-                                rdCacheChecker.enrichCacheBackground(asyncItems, config.rd_key, dbHelper);
-                                console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
+                                    .catch(err => console.warn(`⚠️ [File Title] Enrichment failed: ${err.message}`));
                             }
                         }
-                    }
+                    })()
+                );
+            }
 
-                    // ✅ ONE-TIME: Enrich file_title for cached items that never had it checked
-                    if (needsFileTitleEnrichment.length > 0 && config.rd_key) {
-                        console.log(`📝 [File Title] Background enrichment for ${needsFileTitleEnrichment.length} cached items missing file_title...`);
-                        const enrichItems = needsFileTitleEnrichment.map(hash => {
-                            const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                            return result ? { hash, magnet: result.magnetLink } : null;
-                        }).filter(Boolean);
-
-                        if (enrichItems.length > 0) {
-                            // Fire-and-forget background enrichment
-                            rdCacheChecker.checkCacheSync(enrichItems, config.rd_key, enrichItems.length)
-                                .then(async (enrichResults) => {
-                                    const toSave = Object.entries(enrichResults).map(([hash, data]) => ({
-                                        hash,
-                                        cached: data.cached,
-                                        // Use '' (empty string) if no file_title found - this marks it as "checked"
-                                        file_title: data.file_title || ''
-                                    }));
-                                    if (toSave.length > 0 && dbEnabled) {
-                                        await dbHelper.updateRdCacheStatus(toSave, type);
-                                        console.log(`✅ [File Title] Enriched ${toSave.length} items (one-time)`);
-                                    }
-                                })
-                                .catch(err => console.warn(`⚠️ [File Title] Enrichment failed: ${err.message}`));
-                        }
-                    }
-                })()
-            );
-        }
-
-        if (useTorbox) {
-            console.log('📦 Checking Torbox cache...');
-            cacheChecks.push(
-                Promise.all([
-                    torboxService.checkCache(hashes),
-                    torboxService.getTorrents().catch(e => {
-                        console.error("⚠️ Failed to fetch Torbox user torrents.", e.message);
-                        return [];
+            if (useTorbox) {
+                console.log('📦 Checking Torbox cache...');
+                cacheChecks.push(
+                    Promise.all([
+                        torboxService.checkCache(hashes),
+                        torboxService.getTorrents().catch(e => {
+                            console.error("⚠️ Failed to fetch Torbox user torrents.", e.message);
+                            return [];
+                        })
+                    ]).then(([cache, torrents]) => {
+                        torboxCacheResults = cache;
+                        torboxUserTorrents = torrents;
                     })
-                ]).then(([cache, torrents]) => {
-                    torboxCacheResults = cache;
-                    torboxUserTorrents = torrents;
-                })
-            );
-        }
+                );
+            }
 
-        if (useAllDebrid) {
-            console.log('🅰️ Checking AllDebrid cache...');
-            cacheChecks.push(
-                adService.checkCache(hashes).then(cache => {
-                    adCacheResults = cache;
-                }).catch(e => {
-                    console.error("⚠️ Failed to fetch AllDebrid cache.", e.message);
-                })
-            );
-        }
+            if (useAllDebrid) {
+                console.log('🅰️ Checking AllDebrid cache...');
+                cacheChecks.push(
+                    adService.checkCache(hashes).then(cache => {
+                        adCacheResults = cache;
+                    }).catch(e => {
+                        console.error("⚠️ Failed to fetch AllDebrid cache.", e.message);
+                    })
+                );
+            }
 
-        await Promise.all(cacheChecks);
+            await Promise.all(cacheChecks);
 
-        console.log(`✅ Cache check complete. RD: ${rdUserTorrents.length} torrents, Torbox: ${torboxUserTorrents.length} torrents, AllDebrid: ${Object.keys(adCacheResults).length} hashes`);
+            console.log(`✅ Cache check complete. RD: ${rdUserTorrents.length} torrents, Torbox: ${torboxUserTorrents.length} torrents, AllDebrid: ${Object.keys(adCacheResults).length} hashes`);
 
-        // ✅ PACK FILE MATCHING: For movies with pack torrents, determine best file
-        if (type === 'movie' && mediaDetails) {
-            console.log(`\n🎯 [Pack] Checking for pack torrents in ${filteredResults.length} results...`);
+            // ✅ PACK FILE MATCHING: For movies with pack torrents, determine best file
+            if (type === 'movie' && mediaDetails) {
+                console.log(`\n🎯 [Pack] Checking for pack torrents in ${filteredResults.length} results...`);
+
+                for (const result of filteredResults) {
+                    // Detect if this is a pack (has all_imdb_ids or matches pack pattern)
+                    const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title) ||
+                        /\b(19[2-9]\d|20[0-3]\d)-(19[2-9]\d|20[0-3]\d)\b/.test(result.title);
+
+                    if (isPack) {
+                        console.log(`📦 [Pack] Detected pack: "${result.title}"`);
+
+                        // Try to get torrent info to access file list
+                        // We'll do this lazily when user clicks, but we can mark it as a pack
+                        result.isPack = true;
+
+                        // For now, we'll handle file selection in the stream endpoint
+                        // The stream endpoint will need to:
+                        // 1. Add magnet to RD/Torbox
+                        // 2. Get torrent info (file list)
+                        // 3. Call matchPackFile() to find best file
+                        // 4. Select that specific file
+                    }
+                }
+            }
+
+            // ✅ Build streams with enhanced error handling - supports multiple debrid services
+            let streams = [];
+
+            // ⏩ INTROSKIP: Lookup intro data for series episodes (only for debrid)
+            let introData = null;
+            const useAnyDebrid = useRealDebrid || useTorbox;
+            if (config.introskip_enabled && type === 'series' && season && episode && useAnyDebrid) {
+                const seriesImdbId = mediaDetails?.imdbId || imdbId;
+                if (seriesImdbId && seriesImdbId.startsWith('tt')) {
+                    console.log(`⏩ [IntroSkip] Looking up intro for ${seriesImdbId} S${season}E${episode}...`);
+                    introData = await introSkip.lookupIntro(seriesImdbId, parseInt(season), parseInt(episode));
+                    if (introData) {
+                        console.log(`⏩ [IntroSkip] Found intro: ${introData.start_sec}s - ${introData.end_sec}s (confidence: ${introData.confidence})`);
+                    } else {
+                        console.log(`⏩ [IntroSkip] No intro data found`);
+                    }
+                }
+            }
 
             for (const result of filteredResults) {
-                // Detect if this is a pack (has all_imdb_ids or matches pack pattern)
-                const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title) ||
-                    /\b(19[2-9]\d|20[0-3]\d)-(19[2-9]\d|20[0-3]\d)\b/.test(result.title);
+                try {
+                    const qualityDisplay = result.quality ? result.quality.toUpperCase() : 'Unknown';
+                    const qualitySymbol = getQualitySymbol(qualityDisplay);
+                    const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle);
+                    const packIcon = isSeasonPack(result.title) ? '📦 ' : ''; // Season pack indicator
+                    const encodedConfig = btoa(JSON.stringify(config));
+                    const infoHashLower = result.infoHash.toLowerCase();
 
-                if (isPack) {
-                    console.log(`📦 [Pack] Detected pack: "${result.title}"`);
+                    // ✅ REAL-DEBRID STREAM (if enabled)
+                    if (useRealDebrid) {
+                        const rdCacheData = rdCacheResults[infoHashLower];
+                        const rdUserTorrent = rdUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
 
-                    // Try to get torrent info to access file list
-                    // We'll do this lazily when user clicks, but we can mark it as a pack
-                    result.isPack = true;
-
-                    // For now, we'll handle file selection in the stream endpoint
-                    // The stream endpoint will need to:
-                    // 1. Add magnet to RD/Torbox
-                    // 2. Get torrent info (file list)
-                    // 3. Call matchPackFile() to find best file
-                    // 4. Select that specific file
-                }
-            }
-        }
-
-        // ✅ Build streams with enhanced error handling - supports multiple debrid services
-        let streams = [];
-
-        // ⏩ INTROSKIP: Lookup intro data for series episodes (only for debrid)
-        let introData = null;
-        const useAnyDebrid = useRealDebrid || useTorbox;
-        if (config.introskip_enabled && type === 'series' && season && episode && useAnyDebrid) {
-            const seriesImdbId = mediaDetails?.imdbId || imdbId;
-            if (seriesImdbId && seriesImdbId.startsWith('tt')) {
-                console.log(`⏩ [IntroSkip] Looking up intro for ${seriesImdbId} S${season}E${episode}...`);
-                introData = await introSkip.lookupIntro(seriesImdbId, parseInt(season), parseInt(episode));
-                if (introData) {
-                    console.log(`⏩ [IntroSkip] Found intro: ${introData.start_sec}s - ${introData.end_sec}s (confidence: ${introData.confidence})`);
-                } else {
-                    console.log(`⏩ [IntroSkip] No intro data found`);
-                }
-            }
-        }
-
-        for (const result of filteredResults) {
-            try {
-                const qualityDisplay = result.quality ? result.quality.toUpperCase() : 'Unknown';
-                const qualitySymbol = getQualitySymbol(qualityDisplay);
-                const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle);
-                const packIcon = isSeasonPack(result.title) ? '📦 ' : ''; // Season pack indicator
-                const encodedConfig = btoa(JSON.stringify(config));
-                const infoHashLower = result.infoHash.toLowerCase();
-
-                // ✅ REAL-DEBRID STREAM (if enabled)
-                if (useRealDebrid) {
-                    const rdCacheData = rdCacheResults[infoHashLower];
-                    const rdUserTorrent = rdUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
-
-                    // ✅ Populate file_title from cache only for MOVIES
-                    // For series, resolveSeriesPackFile already set the correct episode file_title
-                    // Cache returns the largest file which is wrong for series packs
-                    if (type === 'movie') {
-                        if (!result.file_title && rdCacheData?.file_title) {
-                            result.file_title = rdCacheData.file_title;
-                            console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
-                        } else if (result.file_title) {
-                            console.log(`📄 [RD] Using DB file_title (movie): ${result.file_title.substring(0, 40)}...`);
-                        }
-                    }
-
-                    let streamUrl = '';
-                    let cacheType = 'none';
-                    let streamError = null;
-
-                    // ✅ UNIFIED ENDPOINT: Always use /rd-stream/ with magnet link
-                    // For series, add season/episode info for pattern matching in packs
-                    // For movie packs, add fileIdx for specific file selection
-                    if (type === 'series' && season && episode) {
-                        streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/${season}/${episode}`;
-                    } else if (type === 'movie' && result.fileIndex !== undefined && result.fileIndex !== null) {
-                        // Movie pack: add fileIdx to URL
-                        streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/pack/${result.fileIndex}`;
-                    } else {
-                        streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
-                    }
-
-                    // ✅ CACHE PRIORITY: DB cache (global) > User torrents (personal) > None
-                    // 1. Check DB cache (saved by any user, valid < 5 days)
-                    // 2. Check user's personal torrents (already added to their RD account)
-                    // 3. No cache available
-
-                    // DEBUG: Log cache lookup
-                    if (rdCacheData) {
-                        console.log(`🔍 [Cache Debug] ${infoHashLower.substring(0, 8)}: cached=${rdCacheData.cached}, file_title=${rdCacheData.file_title?.substring(0, 30) || 'null'}`);
-                    }
-
-                    if (rdCacheData?.cached) {
-                        cacheType = 'global';
-                        console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title.substring(0, 50)}...`);
-                    } else if (rdUserTorrent && rdUserTorrent.status === 'downloaded') {
-                        cacheType = 'personal';
-                        console.log(`👑 👤 Found in RD PERSONAL cache: ${result.title}`);
-                    } else {
-                        cacheType = 'none';
-                    }
-
-                    const isCached = cacheType === 'global' || cacheType === 'personal';
-                    const cacheStatusIcon = isCached ? '⚡' : '⏬';
-                    const errorIcon = streamError ? '⚠️ ' : '';
-
-                    // New Name Format: IL 🏴‍☠️ 🔮 [👑] [⚡] \n [Quality]
-                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
-
-                    if (result.externalAddon) {
-                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
-                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
-                    }
-
-                    // AIOStreams-compatible format or standard format
-                    let streamName;
-                    const introIcon = introData ? '⏩ ' : '';
-                    if (config.aiostreams_mode) {
-                        streamName = aioFormatter.formatStreamName({
-                            addonName: 'IlCorsaroViola',
-                            service: 'realdebrid',
-                            cached: isCached,
-                            quality: result.quality || 'Unknown',
-                            hasError: !!streamError
-                        });
-                        if (introData) streamName = `${introIcon}${streamName}`;
-                    } else {
-                        streamName = `${introIcon}${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
-                    }
-
-                    const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
-
-                    // New Title Format
-                    let titleLine1 = '';
-                    let titleLine2 = '';
-
-                    // ✅ Define isPack at top level for size calculation
-                    // Relaxed check: valid if we have specific file_title differing from torrent title
-                    const isPack = type === 'movie'
-                        ? (result.file_title && result.file_title !== result.title)
-                        : packFilesHandler.isSeasonPack(result.title);
-
-                    // ✅ MOVIE/SERIES TITLE DISPLAY
-                    // Logic: Single file = only filename, Pack = pack name / file name
-                    const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
-                    const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
-
-                    // Define sizes for display logic
-                    const episodeSize = Number(result.file_size) || 0;
-                    const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
-
-                    if (type === 'movie') {
-                        if (isPack) {
-                            if (config.aiostreams_mode) {
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
-                            } else {
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                        // ✅ Populate file_title from cache only for MOVIES
+                        // For series, resolveSeriesPackFile already set the correct episode file_title
+                        // Cache returns the largest file which is wrong for series packs
+                        if (type === 'movie') {
+                            if (!result.file_title && rdCacheData?.file_title) {
+                                result.file_title = rdCacheData.file_title;
+                                console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                            } else if (result.file_title) {
+                                console.log(`📄 [RD] Using DB file_title (movie): ${result.file_title.substring(0, 40)}...`);
                             }
-                        } else {
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
-                    } else {
-                        // SERIES logic
-                        if (isPack) {
-                            if (result.file_title) {
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
-                            } else if (season && episode && mediaDetails) {
-                                const seasonStr = String(season).padStart(2, '0');
-                                const episodeStr = String(episode).padStart(2, '0');
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                            } else {
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanMainFilename}`;
-                            }
+
+                        let streamUrl = '';
+                        let cacheType = 'none';
+                        let streamError = null;
+
+                        // ✅ UNIFIED ENDPOINT: Always use /rd-stream/ with magnet link
+                        // For series, add season/episode info for pattern matching in packs
+                        // For movie packs, add fileIdx for specific file selection
+                        if (type === 'series' && season && episode) {
+                            streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/${season}/${episode}`;
+                        } else if (type === 'movie' && result.fileIndex !== undefined && result.fileIndex !== null) {
+                            // Movie pack: add fileIdx to URL
+                            streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/pack/${result.fileIndex}`;
                         } else {
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
+                            streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
                         }
-                    }
 
-                    // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
-                    let sizeLine;
+                        // ✅ CACHE PRIORITY: DB cache (global) > User torrents (personal) > None
+                        // 1. Check DB cache (saved by any user, valid < 5 days)
+                        // 2. Check user's personal torrents (already added to their RD account)
+                        // 3. No cache available
 
-                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        // Pack with known episode size: show both
+                        // DEBUG: Log cache lookup
+                        if (rdCacheData) {
+                            console.log(`🔍 [Cache Debug] ${infoHashLower.substring(0, 8)}: cached=${rdCacheData.cached}, file_title=${rdCacheData.file_title?.substring(0, 30) || 'null'}`);
+                        }
+
+                        if (rdCacheData?.cached) {
+                            cacheType = 'global';
+                            console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title.substring(0, 50)}...`);
+                        } else if (rdUserTorrent && rdUserTorrent.status === 'downloaded') {
+                            cacheType = 'personal';
+                            console.log(`👑 👤 Found in RD PERSONAL cache: ${result.title}`);
+                        } else {
+                            cacheType = 'none';
+                        }
+
+                        const isCached = cacheType === 'global' || cacheType === 'personal';
+                        const cacheStatusIcon = isCached ? '⚡' : '⏬';
+                        const errorIcon = streamError ? '⚠️ ' : '';
+
+                        // New Name Format: IL 🏴‍☠️ 🔮 [👑] [⚡] \n [Quality]
+                        let badgePrefix = 'IL 🏴‍☠️ 🔮';
+
+                        if (result.externalAddon) {
+                            const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                            badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                        }
+
+                        // AIOStreams-compatible format or standard format
+                        let streamName;
+                        const introIcon = introData ? '⏩ ' : '';
                         if (config.aiostreams_mode) {
-                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                            streamName = aioFormatter.formatStreamName({
+                                addonName: 'IlCorsaroViola',
+                                service: 'realdebrid',
+                                cached: isCached,
+                                quality: result.quality || 'Unknown',
+                                hasError: !!streamError
+                            });
+                            if (introData) streamName = `${introIcon}${streamName}`;
                         } else {
-                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                            streamName = `${introIcon}${badgePrefix} [👑] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
                         }
-                    } else {
-                        // Single file or pack without episode size
-                        sizeLine = `💾 ${result.size || 'Unknown'}`;
-                    }
 
-                    // Languages
-                    const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
-                    const langDisplay = langInfo.displayLabel;
-                    const languageLine = `🗣️ ${langDisplay}`;
+                        const debugInfo = streamError ? `\n⚠️ Stream error: ${streamError}` : '';
 
-                    // Normalize provider name
-                    let providerName = result.source;
+                        // New Title Format
+                        let titleLine1 = '';
+                        let titleLine2 = '';
 
-                    // For external addons, display ONLY the specific provider in parentheses
-                    if (result.externalAddon && result.externalProvider) {
-                        providerName = `(${result.externalProvider})`;
-                    }
+                        // ✅ Define isPack at top level for size calculation
+                        // Relaxed check: valid if we have specific file_title differing from torrent title
+                        const isPack = type === 'movie'
+                            ? (result.file_title && result.file_title !== result.title)
+                            : packFilesHandler.isSeasonPack(result.title);
 
-                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
-                        providerName = 'IlCorsaroNero';
-                    }
+                        // ✅ MOVIE/SERIES TITLE DISPLAY
+                        // Logic: Single file = only filename, Pack = pack name / file name
+                        const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
+                        const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
 
-                    const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
+                        // Define sizes for display logic
+                        const episodeSize = Number(result.file_size) || 0;
+                        const packSize = Number(result.packSize) || (episodeSize > 0 && isPack ? (Number(result.sizeInBytes) || 0) : 0);
 
-                    // Proxy RD indicator
-                    const proxyActive = config.mediaflow_url ? true : false;
-                    const lastLine = proxyActive ? '☂️ Proxy RD' : '';
-
-                    const streamTitle = [
-                        titleLine1,
-                        titleLine2,
-                        sizeLine,
-                        languageLine,
-                        providerLine,
-                        lastLine,
-                        debugInfo
-                    ].filter(Boolean).join('\n');
-
-                    // Build stream with infoHash for P2P fallback
-                    const rdStream = {
-                        name: streamName,
-                        title: streamTitle,
-                        infoHash: result.infoHash,
-                        url: streamUrl,
-                        // AIOStreams: Explicitly pass sizes at root level if needed (Ensure NUMBER)
-                        size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
-                        // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
-                        ...(isPack && result.title ? { folderName: result.title } : {}),
-                        ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
-                        behaviorHints: {
-                            bingeGroup: 'uindex-realdebrid-optimized',
-                            notWebReady: false,
-                            // AIOStreams compatibility: provide file size and name for dedup
-                            ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
-                            // ✅ AIOStreams: Add folderName for pack torrents (pack title = folder, file_title = filename)
-                            ...(isPack && result.title ? { folderName: result.title } : {})
-                        },
-                        _meta: {
-                            infoHash: result.infoHash,
-                            cached: isCached,
-                            cacheSource: cacheType,
-                            service: 'realdebrid',
-                            originalSize: result.size,
-                            quality: result.quality,
-                            seeders: result.seeders,
-                            error: streamError
-                        }
-                    };
-
-                    // Add fileIdx for pack torrents (P2P fallback support)
-                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                        rdStream.fileIdx = result.fileIndex;
-                    }
-
-                    // ✅ Apply custom formatter if configured
-                    applyCustomFormatter(rdStream, result, config, 'RD', isCached);
-
-                    streams.push(rdStream);
-                }
-
-                // ✅ TORBOX STREAM (if enabled)
-                if (useTorbox) {
-                    const torboxCacheData = torboxCacheResults[infoHashLower];
-                    const torboxUserTorrent = torboxUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
-
-                    // ✅ Populate file_title from cache only for MOVIES
-                    // For series, resolveSeriesPackFile already set the correct episode file_title  
-                    // Cache returns the largest file which is wrong for series packs
-                    if (type === 'movie' && !result.file_title) {
-                        // Try Torbox cache first, then RD cache (cross-debrid sharing)
-                        if (torboxCacheData?.file_title) {
-                            result.file_title = torboxCacheData.file_title;
-                            console.log(`📄 [Torbox] Using Torbox cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
-                        } else if (rdCacheResults[infoHashLower]?.file_title) {
-                            // ✅ Use RD-extracted file_title for Torbox streams (cross-debrid benefit!)
-                            result.file_title = rdCacheResults[infoHashLower].file_title;
-                            console.log(`📄 [Torbox] Using RD cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
-                        }
-                    }
-
-                    let streamUrl = '';
-                    let cacheType = 'none';
-                    let streamError = null;
-
-                    // ✅ UNIFIED ENDPOINT: Always use /torbox-stream/ with magnet link
-                    // The endpoint will handle: global cache, personal cache, or add new torrent
-                    // Include season/episode for series to select correct file from pack
-                    if (type === 'series' && season && episode) {
-                        streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/${season}/${episode}`;
-                        console.log(`📦 [Torbox] Stream URL with S${season}E${episode}: ${result.title}`);
-                    } else {
-                        streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
-                    }
-
-                    // ✅ EXACT TORRENTIO LOGIC: If Torbox says cached, show as cached
-                    if (torboxCacheData?.cached) {
-                        cacheType = 'global';
-                        console.log(`📦 ⚡ Torbox GLOBAL cache available: ${result.title}`);
-                    } else if (torboxUserTorrent && torboxUserTorrent.download_finished === true) {
-                        cacheType = 'personal';
-                        console.log(`📦 👤 Found in Torbox PERSONAL cache: ${result.title}`);
-                    } else {
-                        cacheType = 'none';
-                    }
-
-                    const isCached = cacheType === 'global' || cacheType === 'personal';
-                    const cacheStatusIcon = isCached ? '⚡' : '⏬';
-                    const errorIcon = streamError ? '⚠️ ' : '';
-
-                    // Badge uses addon name for external addons
-                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
-                    if (result.externalAddon) {
-                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
-                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
-                    }
-
-                    // AIOStreams-compatible format or standard format
-                    let streamName;
-                    const introIconTB = introData ? '⏩ ' : '';
-                    if (config.aiostreams_mode) {
-                        streamName = aioFormatter.formatStreamName({
-                            addonName: 'IlCorsaroViola',
-                            service: 'torbox',
-                            cached: isCached,
-                            quality: result.quality || 'Unknown',
-                            hasError: !!streamError
-                        });
-                        if (introData) streamName = `${introIconTB}${streamName}`;
-                    } else {
-                        streamName = `${introIconTB}${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
-                    }
-
-                    // New Title Format
-                    let titleLine1 = '';
-                    let titleLine2 = '';
-
-                    // ✅ Define isPack at top level for size calculation
-                    // Relaxed check: valid if we have specific file_title differing from torrent title
-                    const isPack = type === 'movie'
-                        ? (result.file_title && result.file_title !== result.title)
-                        : packFilesHandler.isSeasonPack(result.title);
-
-                    // ✅ MOVIE/SERIES TITLE DISPLAY
-                    // Logic: Single file = only filename, Pack = pack name + file name
-                    const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
-                    const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
-
-                    if (type === 'movie') {
-                        if (isPack) {
-                            // Movie collection: show BOTH pack and file (pack first, file second for consistency)
-                            if (config.aiostreams_mode) {
-                                // AIOStreams: pack on line 1, file on line 2 (matches RD format)
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                        if (type === 'movie') {
+                            if (isPack) {
+                                if (config.aiostreams_mode) {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                } else {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                }
                             } else {
-                                // Normal mode: pack first, then file
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
                             }
                         } else {
-                            // Single movie: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
+                            // SERIES logic
+                            if (isPack) {
+                                if (result.file_title) {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                } else if (season && episode && mediaDetails) {
+                                    const seasonStr = String(season).padStart(2, '0');
+                                    const episodeStr = String(episode).padStart(2, '0');
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                } else {
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanMainFilename}`;
+                                }
+                            } else {
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
                         }
-                    } else {
-                        // SERIES logic
-                        if (isPack) {
-                            // Season pack: show BOTH pack and episode file
-                            if (config.aiostreams_mode && result.file_title) {
-                                // AIOStreams: pack on line 1, file on line 2 (matches RD format)
+
+                        // ✅ SIZE DISPLAY: Show "pack / episode" format like MediaFusion when we have both sizes
+                        let sizeLine;
+
+                        if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                            // Pack with known episode size: show both
+                            if (config.aiostreams_mode) {
+                                sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                            } else {
+                                sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                            }
+                        } else {
+                            // Single file or pack without episode size
+                            sizeLine = `💾 ${result.size || 'Unknown'}`;
+                        }
+
+                        // Languages
+                        const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
+                        const langDisplay = langInfo.displayLabel;
+                        const languageLine = `🗣️ ${langDisplay}`;
+
+                        // Normalize provider name
+                        let providerName = result.source;
+
+                        // For external addons, display ONLY the specific provider in parentheses
+                        if (result.externalAddon && result.externalProvider) {
+                            providerName = `(${result.externalProvider})`;
+                        }
+
+                        if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
+                            providerName = 'IlCorsaroNero';
+                        }
+
+                        const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
+
+                        // Proxy RD indicator
+                        const proxyActive = config.mediaflow_url ? true : false;
+                        const lastLine = proxyActive ? '☂️ Proxy RD' : '';
+
+                        const streamTitle = [
+                            titleLine1,
+                            titleLine2,
+                            sizeLine,
+                            languageLine,
+                            providerLine,
+                            lastLine,
+                            debugInfo
+                        ].filter(Boolean).join('\n');
+
+                        // Build stream with infoHash for P2P fallback
+                        const rdStream = {
+                            name: streamName,
+                            title: streamTitle,
+                            infoHash: result.infoHash,
+                            url: streamUrl,
+                            // AIOStreams: Explicitly pass sizes at root level if needed (Ensure NUMBER)
+                            size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
+                            folderSize: Number(result.packSize || result.sizeInBytes || 0),
+                            // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
+                            ...(isPack && result.title ? { folderName: result.title } : {}),
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                            behaviorHints: {
+                                bingeGroup: 'uindex-realdebrid-optimized',
+                                notWebReady: false,
+                                // AIOStreams compatibility: provide file size and name for dedup
+                                ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
+                                ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                                // ✅ AIOStreams: Add folderName for pack torrents (pack title = folder, file_title = filename)
+                                ...(isPack && result.title ? { folderName: result.title } : {})
+                            },
+                            _meta: {
+                                infoHash: result.infoHash,
+                                cached: isCached,
+                                cacheSource: cacheType,
+                                service: 'realdebrid',
+                                originalSize: result.size,
+                                quality: result.quality,
+                                seeders: result.seeders,
+                                error: streamError
+                            }
+                        };
+
+                        // Add fileIdx for pack torrents (P2P fallback support)
+                        if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                            rdStream.fileIdx = result.fileIndex;
+                        }
+
+                        // ✅ Apply custom formatter if configured
+                        applyCustomFormatter(rdStream, result, config, 'RD', isCached);
+
+                        streams.push(rdStream);
+                    }
+
+                    // ✅ TORBOX STREAM (if enabled)
+                    if (useTorbox) {
+                        const torboxCacheData = torboxCacheResults[infoHashLower];
+                        const torboxUserTorrent = torboxUserTorrents.find(t => t.hash?.toLowerCase() === infoHashLower);
+
+                        // ✅ Populate file_title from cache only for MOVIES
+                        // For series, resolveSeriesPackFile already set the correct episode file_title  
+                        // Cache returns the largest file which is wrong for series packs
+                        if (type === 'movie' && !result.file_title) {
+                            // Try Torbox cache first, then RD cache (cross-debrid sharing)
+                            if (torboxCacheData?.file_title) {
+                                result.file_title = torboxCacheData.file_title;
+                                console.log(`📄 [Torbox] Using Torbox cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                            } else if (rdCacheResults[infoHashLower]?.file_title) {
+                                // ✅ Use RD-extracted file_title for Torbox streams (cross-debrid benefit!)
+                                result.file_title = rdCacheResults[infoHashLower].file_title;
+                                console.log(`📄 [Torbox] Using RD cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                            }
+                        }
+
+                        let streamUrl = '';
+                        let cacheType = 'none';
+                        let streamError = null;
+
+                        // ✅ UNIFIED ENDPOINT: Always use /torbox-stream/ with magnet link
+                        // The endpoint will handle: global cache, personal cache, or add new torrent
+                        // Include season/episode for series to select correct file from pack
+                        if (type === 'series' && season && episode) {
+                            streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/${season}/${episode}`;
+                            console.log(`📦 [Torbox] Stream URL with S${season}E${episode}: ${result.title}`);
+                        } else {
+                            streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
+                        }
+
+                        // ✅ EXACT TORRENTIO LOGIC: If Torbox says cached, show as cached
+                        if (torboxCacheData?.cached) {
+                            cacheType = 'global';
+                            console.log(`📦 ⚡ Torbox GLOBAL cache available: ${result.title}`);
+                        } else if (torboxUserTorrent && torboxUserTorrent.download_finished === true) {
+                            cacheType = 'personal';
+                            console.log(`📦 👤 Found in Torbox PERSONAL cache: ${result.title}`);
+                        } else {
+                            cacheType = 'none';
+                        }
+
+                        const isCached = cacheType === 'global' || cacheType === 'personal';
+                        const cacheStatusIcon = isCached ? '⚡' : '⏬';
+                        const errorIcon = streamError ? '⚠️ ' : '';
+
+                        // Badge uses addon name for external addons
+                        let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                        if (result.externalAddon) {
+                            const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                            badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                        }
+
+                        // AIOStreams-compatible format or standard format
+                        let streamName;
+                        const introIconTB = introData ? '⏩ ' : '';
+                        if (config.aiostreams_mode) {
+                            streamName = aioFormatter.formatStreamName({
+                                addonName: 'IlCorsaroViola',
+                                service: 'torbox',
+                                cached: isCached,
+                                quality: result.quality || 'Unknown',
+                                hasError: !!streamError
+                            });
+                            if (introData) streamName = `${introIconTB}${streamName}`;
+                        } else {
+                            streamName = `${introIconTB}${badgePrefix} [📦] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                        }
+
+                        // New Title Format
+                        let titleLine1 = '';
+                        let titleLine2 = '';
+
+                        // ✅ Define isPack at top level for size calculation
+                        // Relaxed check: valid if we have specific file_title differing from torrent title
+                        const isPack = type === 'movie'
+                            ? (result.file_title && result.file_title !== result.title)
+                            : packFilesHandler.isSeasonPack(result.title);
+
+                        // ✅ MOVIE/SERIES TITLE DISPLAY
+                        // Logic: Single file = only filename, Pack = pack name + file name
+                        const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
+                        const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
+
+                        if (type === 'movie') {
+                            if (isPack) {
+                                // Movie collection: show BOTH pack and file (pack first, file second for consistency)
+                                if (config.aiostreams_mode) {
+                                    // AIOStreams: pack on line 1, file on line 2 (matches RD format)
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                } else {
+                                    // Normal mode: pack first, then file
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                }
+                            } else {
+                                // Single movie: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
+                        } else {
+                            // SERIES logic
+                            if (isPack) {
+                                // Season pack: show BOTH pack and episode file
+                                if (config.aiostreams_mode && result.file_title) {
+                                    // AIOStreams: pack on line 1, file on line 2 (matches RD format)
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                } else {
+                                    // Normal mode: pack first, then file
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    if (result.file_title) {
+                                        titleLine2 = `📂 ${cleanFileTitle}`;
+                                    } else if (season && episode && mediaDetails) {
+                                        const seasonStr = String(season).padStart(2, '0');
+                                        const episodeStr = String(episode).padStart(2, '0');
+                                        titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                    } else {
+                                        titleLine2 = `📂 ${cleanMainFilename}`;
+                                    }
+                                }
+                            } else {
+                                // Single episode: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
+                        }
+
+                        // Size display with pack/episode format
+                        let sizeLine;
+                        const packSize = result.packSize || 0;
+                        const episodeSize = result.file_size || 0;
+                        if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                            // ✅ AIOStreams: File size first, pack size second with different emoji
+                            if (config.aiostreams_mode) {
+                                sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                            } else {
+                                sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                            }
+                        } else {
+                            sizeLine = `💾 ${result.size || 'Unknown'}`;
+                        }
+
+                        const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
+                        const langDisplay = langInfo.displayLabel;
+                        const languageLine = `🗣️ ${langDisplay}`;
+
+                        // Normalize provider name
+                        let providerName = result.source;
+
+                        // For external addons, display ONLY the specific provider in parentheses
+                        if (result.externalAddon && result.externalProvider) {
+                            providerName = `(${result.externalProvider})`;
+                        }
+
+                        if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
+                            providerName = 'IlCorsaroNero';
+                        }
+
+                        const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
+                        const lastLine = '';
+
+                        const streamTitle = [
+                            titleLine1,
+                            titleLine2,
+                            sizeLine,
+                            languageLine,
+                            providerLine,
+                            lastLine
+                        ].filter(Boolean).join('\n');
+
+                        // Build stream with infoHash for P2P fallback
+                        const torboxStream = {
+                            name: streamName,
+                            title: streamTitle,
+                            infoHash: result.infoHash,
+                            url: streamUrl,
+                            // AIOStreams: Explicitly pass sizes at root level (Ensure NUMBER)
+                            size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
+                            folderSize: Number(result.packSize || result.sizeInBytes || 0),
+                            // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
+                            ...(isPack && result.title ? { folderName: result.title } : {}),
+                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                            behaviorHints: {
+                                bingeGroup: 'uindex-torbox-optimized',
+                                notWebReady: false,
+                                // AIOStreams compatibility
+                                ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
+                                ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
+                                // ✅ AIOStreams: Add folderName for pack torrents
+                                ...(isPack && result.title ? { folderName: result.title } : {})
+                            },
+                            _meta: {
+                                infoHash: result.infoHash,
+                                cached: isCached,
+                                cacheSource: cacheType,
+                                service: 'torbox',
+                                originalSize: result.size,
+                                quality: result.quality,
+                                seeders: result.seeders
+                            }
+                        };
+
+                        // Add fileIdx for pack torrents (P2P fallback support)
+                        if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                            torboxStream.fileIdx = result.fileIndex;
+                        }
+
+                        // ✅ Apply custom formatter if configured
+                        applyCustomFormatter(torboxStream, result, config, 'TB', isCached);
+
+                        streams.push(torboxStream);
+                    }
+
+                    // ✅ ALLDEBRID STREAM (if enabled)
+                    if (useAllDebrid) {
+                        const adCacheData = adCacheResults[infoHashLower];
+
+                        let streamUrl = '';
+                        let cacheType = 'none';
+                        let streamError = null;
+
+                        // ✅ UNIFIED ENDPOINT: Always use /ad-stream/ with magnet link
+                        streamUrl = `${workerOrigin}/ad-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
+
+                        if (adCacheData?.cached) {
+                            cacheType = 'global';
+                            console.log(`🅰️ ⚡ AllDebrid GLOBAL cache available: ${result.title}`);
+                        } else {
+                            cacheType = 'none';
+                        }
+
+                        const isCached = cacheType === 'global';
+                        const cacheStatusIcon = isCached ? '⚡' : '⏬';
+                        const errorIcon = streamError ? '⚠️ ' : '';
+
+                        // Badge uses addon name for external addons
+                        let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                        if (result.externalAddon) {
+                            const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                            badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                        }
+
+                        // AIOStreams-compatible format or standard format
+                        let streamName;
+                        if (config.aiostreams_mode) {
+                            streamName = aioFormatter.formatStreamName({
+                                addonName: 'IlCorsaroViola',
+                                service: 'alldebrid',
+                                cached: isCached,
+                                quality: result.quality || 'Unknown',
+                                hasError: !!streamError
+                            });
+                        } else {
+                            streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
+                        }
+
+                        // New Title Format
+                        let titleLine1 = '';
+                        let titleLine2 = '';
+
+                        // ✅ Define isPack at top level for size calculation
+                        const isPack = type === 'movie'
+                            ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                            : packFilesHandler.isSeasonPack(result.title);
+
+                        // ✅ MOVIE/SERIES TITLE DISPLAY
+                        // Logic: Single file = only filename, Pack = pack name + file name
+                        const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
+                        const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
+
+                        if (type === 'movie') {
+                            if (isPack) {
+                                // Movie collection: show BOTH pack and file
+                                if (config.aiostreams_mode) {
+                                    // AIO mode: file first, then pack
+                                    titleLine1 = `📂 ${cleanFileTitle}`;
+                                    titleLine2 = `🗳️ ${result.title}`;
+                                } else {
+                                    // Normal mode: pack first, then file
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    titleLine2 = `📂 ${cleanFileTitle}`;
+                                }
+                            } else {
+                                // Single movie: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
+                        } else {
+                            // SERIES logic
+                            if (isPack) {
+                                // Season pack: show BOTH pack and episode file
+                                if (config.aiostreams_mode && result.file_title) {
+                                    // AIO mode: file first, then pack
+                                    titleLine1 = `📂 ${cleanFileTitle}`;
+                                    titleLine2 = `🗳️ ${result.title}`;
+                                } else {
+                                    // Normal mode: pack first, then file
+                                    titleLine1 = `🗳️ ${result.title}`;
+                                    if (result.file_title) {
+                                        titleLine2 = `📂 ${cleanFileTitle}`;
+                                    } else if (season && episode && mediaDetails) {
+                                        const seasonStr = String(season).padStart(2, '0');
+                                        const episodeStr = String(episode).padStart(2, '0');
+                                        titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
+                                    } else {
+                                        titleLine2 = `📂 ${cleanMainFilename}`;
+                                    }
+                                }
+                            } else {
+                                // Single episode: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
+                        }
+
+                        // Size display with pack/episode format
+                        let sizeLine;
+                        const packSize = result.packSize || 0;
+                        const episodeSize = result.file_size || 0;
+                        if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                            // ✅ AIOStreams: File size first, pack size second with different emoji
+                            if (config.aiostreams_mode) {
+                                sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
+                            } else {
+                                sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                            }
+                        } else {
+                            sizeLine = `💾 ${result.size || 'Unknown'}`;
+                        }
+
+                        const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
+                        const langDisplay = langInfo.displayLabel;
+                        const languageLine = `🗣️ ${langDisplay}`;
+
+                        // Normalize provider name
+                        let providerName = result.source;
+
+                        // For external addons, display ONLY the specific provider in parentheses
+                        if (result.externalAddon && result.externalProvider) {
+                            providerName = `(${result.externalProvider})`;
+                        }
+
+                        if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
+                            providerName = 'IlCorsaroNero';
+                        }
+
+                        const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
+                        const lastLine = '';
+
+                        const streamTitle = [
+                            titleLine1,
+                            titleLine2,
+                            sizeLine,
+                            languageLine,
+                            providerLine,
+                            lastLine
+                        ].filter(Boolean).join('\n');
+
+                        // Build stream with infoHash for P2P fallback
+                        const adStream = {
+                            name: streamName,
+                            title: streamTitle,
+                            infoHash: result.infoHash,
+                            url: streamUrl,
+                            // AIOStreams (Ensure NUMBER)
+                            size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
+                            folderSize: Number(result.packSize || result.sizeInBytes || 0),
+                            behaviorHints: {
+                                bingeGroup: 'uindex-alldebrid-optimized',
+                                notWebReady: false,
+                                // AIOStreams compatibility
+                                ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
+                                ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
+                            },
+                            _meta: {
+                                infoHash: result.infoHash,
+                                cached: isCached,
+                                cacheSource: cacheType,
+                                service: 'alldebrid',
+                                originalSize: result.size,
+                                quality: result.quality,
+                                seeders: result.seeders
+                            }
+                        };
+
+                        // Add fileIdx for pack torrents (P2P fallback support)
+                        if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                            adStream.fileIdx = result.fileIndex;
+                        }
+
+                        streams.push(adStream);
+                    }
+
+                    // ✅ P2P STREAM (if no debrid service enabled)
+                    if (!useRealDebrid && !useTorbox && !useAllDebrid) {
+                        // Badge uses addon name for external addons
+                        let badgePrefix = 'IL 🏴‍☠️ 🔮';
+                        if (result.externalAddon) {
+                            const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
+                            badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
+                        }
+
+                        // AIOStreams-compatible format or standard format
+                        let streamName;
+                        if (config.aiostreams_mode) {
+                            streamName = aioFormatter.formatStreamName({
+                                addonName: 'IlCorsaroViola',
+                                service: 'p2p',
+                                cached: false, // P2P is never cached
+                                quality: result.quality || 'Unknown',
+                                hasError: false
+                            });
+                        } else {
+                            streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
+                        }
+
+                        // New Title Format
+                        let titleLine1 = '';
+                        let titleLine2 = '';
+
+                        // ✅ Define isPack at top level for size calculation
+                        const isPack = type === 'movie'
+                            ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                            : packFilesHandler.isSeasonPack(result.title);
+
+                        // ✅ MOVIE/SERIES TITLE DISPLAY
+                        // Logic: Single file = only filename, Pack = pack name + file name
+                        const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
+                        const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
+
+                        if (type === 'movie') {
+                            if (isPack) {
+                                // Movie collection: show BOTH pack and file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 titleLine2 = `📂 ${cleanFileTitle}`;
                             } else {
-                                // Normal mode: pack first, then file
+                                // Single movie: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
+                            }
+                        } else {
+                            // SERIES logic
+                            if (isPack) {
+                                // Season pack: show BOTH pack and episode file
                                 titleLine1 = `🗳️ ${result.title}`;
                                 if (result.file_title) {
                                     titleLine2 = `📂 ${cleanFileTitle}`;
@@ -7623,1377 +8196,893 @@ async function handleStream(type, id, config, workerOrigin) {
                                 } else {
                                     titleLine2 = `📂 ${cleanMainFilename}`;
                                 }
+                            } else {
+                                // Single episode: show ONLY the filename (not the torrent name)
+                                titleLine1 = `🎬 ${cleanMainFilename}`;
                             }
-                        } else {
-                            // Single episode: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
                         }
-                    }
 
-                    // Size display with pack/episode format
-                    let sizeLine;
-                    const packSize = result.packSize || 0;
-                    const episodeSize = result.file_size || 0;
-                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        // ✅ AIOStreams: File size first, pack size second with different emoji
-                        if (config.aiostreams_mode) {
-                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
-                        } else {
-                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
-                        }
-                    } else {
-                        sizeLine = `💾 ${result.size || 'Unknown'}`;
-                    }
+                        // Size display with pack/episode format
+                        let sizeLine;
+                        const episodeSize = result.file_size || 0;
+                        const packSize = result.packSize || (episodeSize > 0 && isPack ? (result.sizeInBytes || 0) : 0);
 
-                    const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
-                    const langDisplay = langInfo.displayLabel;
-                    const languageLine = `🗣️ ${langDisplay}`;
-
-                    // Normalize provider name
-                    let providerName = result.source;
-
-                    // For external addons, display ONLY the specific provider in parentheses
-                    if (result.externalAddon && result.externalProvider) {
-                        providerName = `(${result.externalProvider})`;
-                    }
-
-                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
-                        providerName = 'IlCorsaroNero';
-                    }
-
-                    const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
-                    const lastLine = '';
-
-                    const streamTitle = [
-                        titleLine1,
-                        titleLine2,
-                        sizeLine,
-                        languageLine,
-                        providerLine,
-                        lastLine
-                    ].filter(Boolean).join('\n');
-
-                    // Build stream with infoHash for P2P fallback
-                    const torboxStream = {
-                        name: streamName,
-                        title: streamTitle,
-                        infoHash: result.infoHash,
-                        url: streamUrl,
-                        // AIOStreams: Explicitly pass sizes at root level (Ensure NUMBER)
-                        size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
-                        // ✅ AIOStreams: Add folderName and filename at ROOT level for templates
-                        ...(isPack && result.title ? { folderName: result.title } : {}),
-                        ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
-                        behaviorHints: {
-                            bingeGroup: 'uindex-torbox-optimized',
-                            notWebReady: false,
-                            // AIOStreams compatibility
-                            ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
-                            // ✅ AIOStreams: Add folderName for pack torrents
-                            ...(isPack && result.title ? { folderName: result.title } : {})
-                        },
-                        _meta: {
-                            infoHash: result.infoHash,
-                            cached: isCached,
-                            cacheSource: cacheType,
-                            service: 'torbox',
-                            originalSize: result.size,
-                            quality: result.quality,
-                            seeders: result.seeders
-                        }
-                    };
-
-                    // Add fileIdx for pack torrents (P2P fallback support)
-                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                        torboxStream.fileIdx = result.fileIndex;
-                    }
-
-                    // ✅ Apply custom formatter if configured
-                    applyCustomFormatter(torboxStream, result, config, 'TB', isCached);
-
-                    streams.push(torboxStream);
-                }
-
-                // ✅ ALLDEBRID STREAM (if enabled)
-                if (useAllDebrid) {
-                    const adCacheData = adCacheResults[infoHashLower];
-
-                    let streamUrl = '';
-                    let cacheType = 'none';
-                    let streamError = null;
-
-                    // ✅ UNIFIED ENDPOINT: Always use /ad-stream/ with magnet link
-                    streamUrl = `${workerOrigin}/ad-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
-
-                    if (adCacheData?.cached) {
-                        cacheType = 'global';
-                        console.log(`🅰️ ⚡ AllDebrid GLOBAL cache available: ${result.title}`);
-                    } else {
-                        cacheType = 'none';
-                    }
-
-                    const isCached = cacheType === 'global';
-                    const cacheStatusIcon = isCached ? '⚡' : '⏬';
-                    const errorIcon = streamError ? '⚠️ ' : '';
-
-                    // Badge uses addon name for external addons
-                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
-                    if (result.externalAddon) {
-                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
-                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
-                    }
-
-                    // AIOStreams-compatible format or standard format
-                    let streamName;
-                    if (config.aiostreams_mode) {
-                        streamName = aioFormatter.formatStreamName({
-                            addonName: 'IlCorsaroViola',
-                            service: 'alldebrid',
-                            cached: isCached,
-                            quality: result.quality || 'Unknown',
-                            hasError: !!streamError
-                        });
-                    } else {
-                        streamName = `${badgePrefix} [🅰️] [${cacheStatusIcon}]${errorIcon}\n${result.quality || 'Unknown'}`;
-                    }
-
-                    // New Title Format
-                    let titleLine1 = '';
-                    let titleLine2 = '';
-
-                    // ✅ Define isPack at top level for size calculation
-                    const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
-                        : packFilesHandler.isSeasonPack(result.title);
-
-                    // ✅ MOVIE/SERIES TITLE DISPLAY
-                    // Logic: Single file = only filename, Pack = pack name + file name
-                    const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
-                    const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
-
-                    if (type === 'movie') {
+                        // Debug: log sizes for P2P
                         if (isPack) {
-                            // Movie collection: show BOTH pack and file
+                            console.log(`📦 [P2P SIZE] Pack: "${result.title.substring(0, 40)}..." packSize=${formatBytes(packSize)}, episodeSize=${formatBytes(episodeSize)}, rawPackSize=${formatBytes(result.packSize || 0)}`);
+                        }
+
+                        if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
+                            // ✅ AIOStreams: File size first, pack size second with different emoji
                             if (config.aiostreams_mode) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
+                                sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
                             } else {
-                                // Normal mode: pack first, then file
-                                titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
                             }
                         } else {
-                            // Single movie: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
+                            sizeLine = `💾 ${result.size || 'Unknown'}`;
                         }
-                    } else {
-                        // SERIES logic
-                        if (isPack) {
-                            // Season pack: show BOTH pack and episode file
-                            if (config.aiostreams_mode && result.file_title) {
-                                // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
-                                titleLine2 = `🗳️ ${result.title}`;
-                            } else {
-                                // Normal mode: pack first, then file
-                                titleLine1 = `🗳️ ${result.title}`;
-                                if (result.file_title) {
-                                    titleLine2 = `📂 ${cleanFileTitle}`;
-                                } else if (season && episode && mediaDetails) {
-                                    const seasonStr = String(season).padStart(2, '0');
-                                    const episodeStr = String(episode).padStart(2, '0');
-                                    titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                                } else {
-                                    titleLine2 = `📂 ${cleanMainFilename}`;
-                                }
-                            }
-                        } else {
-                            // Single episode: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
+
+                        const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
+                        const langDisplay = langInfo.displayLabel;
+                        const languageLine = `🗣️ ${langDisplay}`;
+
+                        // Normalize provider name
+                        let providerName = result.source;
+
+                        // For external addons, display ONLY the specific provider in parentheses
+                        if (result.externalAddon && result.externalProvider) {
+                            providerName = `(${result.externalProvider})`;
                         }
-                    }
 
-                    // Size display with pack/episode format
-                    let sizeLine;
-                    const packSize = result.packSize || 0;
-                    const episodeSize = result.file_size || 0;
-                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        // ✅ AIOStreams: File size first, pack size second with different emoji
-                        if (config.aiostreams_mode) {
-                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
-                        } else {
-                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
+                        if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
+                            providerName = 'IlCorsaroNero';
                         }
-                    } else {
-                        sizeLine = `💾 ${result.size || 'Unknown'}`;
-                    }
 
-                    const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
-                    const langDisplay = langInfo.displayLabel;
-                    const languageLine = `🗣️ ${langDisplay}`;
+                        const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
+                        const lastLine = '';
 
-                    // Normalize provider name
-                    let providerName = result.source;
+                        const streamTitle = [
+                            titleLine1,
+                            titleLine2,
+                            sizeLine,
+                            languageLine,
+                            providerLine,
+                            lastLine
+                        ].filter(Boolean).join('\n');
 
-                    // For external addons, display ONLY the specific provider in parentheses
-                    if (result.externalAddon && result.externalProvider) {
-                        providerName = `(${result.externalProvider})`;
-                    }
-
-                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
-                        providerName = 'IlCorsaroNero';
-                    }
-
-                    const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
-                    const lastLine = '';
-
-                    const streamTitle = [
-                        titleLine1,
-                        titleLine2,
-                        sizeLine,
-                        languageLine,
-                        providerLine,
-                        lastLine
-                    ].filter(Boolean).join('\n');
-
-                    // Build stream with infoHash for P2P fallback
-                    const adStream = {
-                        name: streamName,
-                        title: streamTitle,
-                        infoHash: result.infoHash,
-                        url: streamUrl,
-                        // AIOStreams (Ensure NUMBER)
-                        size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
-                        behaviorHints: {
-                            bingeGroup: 'uindex-alldebrid-optimized',
-                            notWebReady: false,
-                            // AIOStreams compatibility
-                            ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
-                        },
-                        _meta: {
+                        // 🔥 P2P Pack Support: Add fileIdx for pack torrents
+                        const p2pStream = {
+                            name: streamName,
+                            title: streamTitle,
                             infoHash: result.infoHash,
-                            cached: isCached,
-                            cacheSource: cacheType,
-                            service: 'alldebrid',
-                            originalSize: result.size,
-                            quality: result.quality,
-                            seeders: result.seeders
+
+                            // AIOStreams (Ensure NUMBER)
+                            size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
+                            folderSize: Number(result.packSize || result.sizeInBytes || 0),
+
+                            behaviorHints: {
+                                bingeGroup: 'uindex-p2p',
+                                notWebReady: true,
+                                // AIOStreams compatibility
+                                ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
+                                ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
+                            },
+                            _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
+                        };
+
+                        // Add fileIdx if this is a pack torrent with a specific file selected
+                        if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                            p2pStream.fileIdx = result.fileIndex;
+                            console.log(`🔥 [P2P Pack] Added fileIdx=${result.fileIndex} for ${result.title.substring(0, 50)}...`);
                         }
-                    };
 
-                    // Add fileIdx for pack torrents (P2P fallback support)
-                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                        adStream.fileIdx = result.fileIndex;
+                        streams.push(p2pStream);
+
+                        // ✅ Apply custom formatter if configured (same as RD/TB)
+                        applyCustomFormatter(p2pStream, result, config, 'P2P', false);
                     }
 
-                    streams.push(adStream);
-                }
+                } catch (error) {
+                    console.error(`❌ Error processing result:`, error);
 
-                // ✅ P2P STREAM (if no debrid service enabled)
-                if (!useRealDebrid && !useTorbox && !useAllDebrid) {
-                    // Badge uses addon name for external addons
-                    let badgePrefix = 'IL 🏴‍☠️ 🔮';
-                    if (result.externalAddon) {
-                        const addonName = EXTERNAL_ADDONS[result.externalAddon] ? EXTERNAL_ADDONS[result.externalAddon].name : result.externalAddon;
-                        badgePrefix = `${result.sourceEmoji || '🔗'} ${addonName}`;
-                    }
-
-                    // AIOStreams-compatible format or standard format
-                    let streamName;
-                    if (config.aiostreams_mode) {
-                        streamName = aioFormatter.formatStreamName({
-                            addonName: 'IlCorsaroViola',
-                            service: 'p2p',
-                            cached: false, // P2P is never cached
-                            quality: result.quality || 'Unknown',
-                            hasError: false
-                        });
-                    } else {
-                        streamName = `${badgePrefix} [🧲] [⏬]\n${result.quality || 'Unknown'}`;
-                    }
-
-                    // New Title Format
-                    let titleLine1 = '';
-                    let titleLine2 = '';
-
-                    // ✅ Define isPack at top level for size calculation
-                    const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
-                        : packFilesHandler.isSeasonPack(result.title);
-
-                    // ✅ MOVIE/SERIES TITLE DISPLAY
-                    // Logic: Single file = only filename, Pack = pack name + file name
-                    const cleanFileTitle = result.file_title ? result.file_title.split('/').pop() : '';
-                    const cleanMainFilename = (result.file_title || result.filename || result.title || '').split('/').pop();
-
-                    if (type === 'movie') {
-                        if (isPack) {
-                            // Movie collection: show BOTH pack and file
-                            titleLine1 = `🗳️ ${result.title}`;
-                            titleLine2 = `📂 ${cleanFileTitle}`;
-                        } else {
-                            // Single movie: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
-                        }
-                    } else {
-                        // SERIES logic
-                        if (isPack) {
-                            // Season pack: show BOTH pack and episode file
-                            titleLine1 = `🗳️ ${result.title}`;
-                            if (result.file_title) {
-                                titleLine2 = `📂 ${cleanFileTitle}`;
-                            } else if (season && episode && mediaDetails) {
-                                const seasonStr = String(season).padStart(2, '0');
-                                const episodeStr = String(episode).padStart(2, '0');
-                                titleLine2 = `📂 ${mediaDetails.title} S${seasonStr}E${episodeStr}`;
-                            } else {
-                                titleLine2 = `📂 ${cleanMainFilename}`;
-                            }
-                        } else {
-                            // Single episode: show ONLY the filename (not the torrent name)
-                            titleLine1 = `🎬 ${cleanMainFilename}`;
-                        }
-                    }
-
-                    // Size display with pack/episode format
-                    let sizeLine;
-                    const episodeSize = result.file_size || 0;
-                    const packSize = result.packSize || (episodeSize > 0 && isPack ? (result.sizeInBytes || 0) : 0);
-
-                    // Debug: log sizes for P2P
-                    if (isPack) {
-                        console.log(`📦 [P2P SIZE] Pack: "${result.title.substring(0, 40)}..." packSize=${formatBytes(packSize)}, episodeSize=${formatBytes(episodeSize)}, rawPackSize=${formatBytes(result.packSize || 0)}`);
-                    }
-
-                    if (isPack && episodeSize > 0 && packSize > 0 && episodeSize < packSize) {
-                        // ✅ AIOStreams: File size first, pack size second with different emoji
-                        if (config.aiostreams_mode) {
-                            sizeLine = `💾 ${formatBytes(episodeSize)} / 📂 ${formatBytes(packSize)}`;
-                        } else {
-                            sizeLine = `💾 ${formatBytes(packSize)} / ${formatBytes(episodeSize)}`;
-                        }
-                    } else {
-                        sizeLine = `💾 ${result.size || 'Unknown'}`;
-                    }
-
-                    const langInfo = getLanguageInfo(result.title, italianTitle, result.source);
-                    const langDisplay = langInfo.displayLabel;
-                    const languageLine = `🗣️ ${langDisplay}`;
-
-                    // Normalize provider name
-                    let providerName = result.source;
-
-                    // For external addons, display ONLY the specific provider in parentheses
-                    if (result.externalAddon && result.externalProvider) {
-                        providerName = `(${result.externalProvider})`;
-                    }
-
-                    if (providerName.toLowerCase().includes('corsaro') && !result.externalAddon) {
-                        providerName = 'IlCorsaroNero';
-                    }
-
-                    const providerLine = `🔗 ${providerName} 👥 ${result.seeders || 0}`;
-                    const lastLine = '';
-
-                    const streamTitle = [
-                        titleLine1,
-                        titleLine2,
-                        sizeLine,
-                        languageLine,
-                        providerLine,
-                        lastLine
-                    ].filter(Boolean).join('\n');
-
-                    // 🔥 P2P Pack Support: Add fileIdx for pack torrents
-                    const p2pStream = {
-                        name: streamName,
-                        title: streamTitle,
-                        infoHash: result.infoHash,
-
-                        // AIOStreams (Ensure NUMBER)
-                        size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
-                        folderSize: Number(result.packSize || result.sizeInBytes || 0),
-
+                    // Return a basic stream even if processing failed
+                    streams.push({
+                        name: `❌ ${result.title} (Error)`,
+                        title: `Error processing: ${error.message}`,
+                        url: result.magnetLink,
                         behaviorHints: {
-                            bingeGroup: 'uindex-p2p',
-                            notWebReady: true,
-                            // AIOStreams compatibility
-                            ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
-                            ...(cleanMainFilename ? { filename: cleanMainFilename } : {})
+                            bingeGroup: 'uindex-error',
+                            notWebReady: true
+                        }
+                    });
+                }
+            }
+
+            // Helper function for resolution score
+            const getResolutionScore = (stream) => {
+                const quality = (stream._meta?.quality || '').toLowerCase();
+                const name = (stream.name || '').toLowerCase();
+                const title = (stream.title || '').toLowerCase();
+                const combined = quality + ' ' + name + ' ' + title;
+
+                if (combined.includes('2160') || combined.includes('4k')) return 2160;
+                if (combined.includes('1080')) return 1080;
+                if (combined.includes('720')) return 720;
+                if (combined.includes('480')) return 480;
+                return 0;
+            };
+
+            // Helper function for size in bytes
+            const getSizeInBytes = (stream) => {
+                let sizeStr = stream._meta?.originalSize;
+
+                // Fallback: try to find size in title (e.g. "💾 1.5 GB")
+                if (!sizeStr && stream.title) {
+                    const match = stream.title.match(/💾\s*(.+)/);
+                    if (match) sizeStr = match[1];
+                }
+
+                if (!sizeStr) return 0;
+
+                // Parse "1.5 GB", "700 MB", etc.
+                const sizeStrConverted = String(sizeStr || '');
+                const match = sizeStrConverted.match(/([\d.]+)\s*([a-zA-Z]+)/);
+                if (!match) return 0;
+
+                const val = parseFloat(match[1]);
+                const unit = match[2].toUpperCase();
+
+                let multiplier = 1;
+                if (unit.includes('GB')) multiplier = 1024 * 1024 * 1024;
+                else if (unit.includes('MB')) multiplier = 1024 * 1024;
+                else if (unit.includes('KB')) multiplier = 1024;
+
+                return val * multiplier;
+            };
+
+            // ✅ P2P MODE SORTING: Quality > Seeders > Size (no cache priority)
+            // ✅ DEBRID MODE SORTING: Cache > Resolution > Size > Seeders
+            const isP2PMode = !useRealDebrid && !useTorbox && !useAllDebrid;
+
+            if (isP2PMode) {
+                console.log(`🔄 [P2P Sorting] Applying P2P sort order: Quality > Seeders > Size`);
+                streams.sort((a, b) => {
+                    // 1. Resolution (High to Low)
+                    const resA = getResolutionScore(a);
+                    const resB = getResolutionScore(b);
+
+                    if (resA !== resB) {
+                        return resB - resA; // Higher resolution first
+                    }
+
+                    // 2. Seeders (More is better)
+                    const seedsA = a._meta?.seeders || 0;
+                    const seedsB = b._meta?.seeders || 0;
+
+                    if (seedsA !== seedsB) {
+                        return seedsB - seedsA; // Higher seeders first
+                    }
+
+                    // 3. Size (Tie-breaker: Larger first)
+                    const sizeA = getSizeInBytes(a);
+                    const sizeB = getSizeInBytes(b);
+                    return sizeB - sizeA;
+                });
+            } else {
+                // ✅ DEBRID SORTING: Cache > Resolution > Size > Seeders
+                streams.sort((a, b) => {
+                    // 1. Cached Status (Cached first)
+                    const isCachedA = (a._meta && a._meta.cached) || (a.name && a.name.includes('⚡'));
+                    const isCachedB = (b._meta && b._meta.cached) || (b.name && b.name.includes('⚡'));
+
+                    if (isCachedA !== isCachedB) {
+                        return isCachedA ? -1 : 1; // Cached comes first
+                    }
+
+                    // 2. Resolution (High to Low)
+                    const resA = getResolutionScore(a);
+                    const resB = getResolutionScore(b);
+
+                    if (resA !== resB) {
+                        return resB - resA; // Higher resolution first
+                    }
+
+                    // 3. Size (Big to Small)
+                    const sizeA = getSizeInBytes(a);
+                    const sizeB = getSizeInBytes(b);
+
+                    if (sizeA !== sizeB) {
+                        return sizeB - sizeA; // Larger size first
+                    }
+
+                    // 4. Seeders (Fallback)
+                    const seedsA = a._meta?.seeders || 0;
+                    const seedsB = b._meta?.seeders || 0;
+                    return seedsB - seedsA;
+                });
+            }
+
+            // ✅ Apply Max Resolution Limit (if configured)
+            if (config.max_res_limit) {
+                const limit = parseInt(config.max_res_limit);
+                if (!isNaN(limit) && limit > 0) {
+                    console.log(`✂️ Applying resolution limit: max ${limit} results per resolution`);
+                    streams = limitResultsByResolution(streams, limit);
+                }
+            }
+
+            const cachedCount = streams.filter(s => s.name.includes('⚡')).length;
+            const totalTime = Date.now() - startTime;
+
+            console.log(`🎉 Successfully processed ${streams.length} streams in ${totalTime}ms`);
+            console.log(`⚡ ${cachedCount} cached streams available for instant playback`);
+
+            // 🔥 ENRICHMENT: VPS webhook with load balancing (must complete BEFORE returning response)
+            console.log(`🔍 [Background Check] dbEnabled=${dbEnabled}, mediaDetails=${!!mediaDetails}, tmdbId=${mediaDetails?.tmdbId}, imdbId=${mediaDetails?.imdbId}, kitsuId=${mediaDetails?.kitsuId}`);
+
+            if (dbEnabled && mediaDetails && (mediaDetails.tmdbId || mediaDetails.imdbId || mediaDetails.kitsuId)) {
+                console.log(`🔍 [Enrichment] Preparing webhook for "${mediaDetails.title}"`);
+                console.log(`🔍 [Enrichment Titles] Italian: "${italianTitle || 'N/A'}", Original: "${originalTitle || 'N/A'}", English: "${mediaDetails.title}"`);
+
+                // 🔄 Load balancing: Round-robin between VPS1 and VPS2
+                const enrichmentServers = [
+                    process.env.ENRICHMENT_SERVER_URL,
+                    process.env.ENRICHMENT_SERVER_URL_2
+                ].filter(Boolean); // Remove undefined values
+
+                if (enrichmentServers.length === 0) {
+                    console.warn('⚠️ [Enrichment] No enrichment servers configured');
+                    enrichmentServers.push('http://89.168.25.177:3001/enrich'); // Fallback
+                }
+
+                // Simple round-robin counter (rotates between servers)
+                if (!global.enrichmentServerIndex) {
+                    global.enrichmentServerIndex = 0;
+                }
+                const enrichmentUrl = enrichmentServers[global.enrichmentServerIndex % enrichmentServers.length];
+                global.enrichmentServerIndex = (global.enrichmentServerIndex + 1) % enrichmentServers.length;
+
+                const enrichmentApiKey = process.env.ENRICHMENT_API_KEY || 'change-me-in-production';
+
+                console.log(`🚀 [Webhook] Calling VPS enrichment (server ${global.enrichmentServerIndex === 0 ? 2 : 1}): ${enrichmentUrl}`);
+
+                try {
+                    const webhookResponse = await fetch(enrichmentUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': enrichmentApiKey
                         },
-                        _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
-                    };
+                        body: JSON.stringify({
+                            imdbId: mediaDetails.imdbId,
+                            tmdbId: mediaDetails.tmdbId,
+                            italianTitle: italianTitle,
+                            originalTitle: originalTitle || mediaDetails.title,
+                            type: type,
+                            year: mediaDetails.year,
+                            searchQueries: finalSearchQueries || [] // ✅ Send pre-built queries
+                        }),
+                        signal: AbortSignal.timeout(5000)
+                    });
 
-                    // Add fileIdx if this is a pack torrent with a specific file selected
-                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                        p2pStream.fileIdx = result.fileIndex;
-                        console.log(`🔥 [P2P Pack] Added fileIdx=${result.fileIndex} for ${result.title.substring(0, 50)}...`);
+                    if (webhookResponse.ok) {
+                        console.log(`✅ [Webhook] Enrichment queued (${webhookResponse.status})`);
+                    } else {
+                        console.warn(`⚠️ [Webhook] Failed: ${webhookResponse.status}`);
                     }
-
-                    streams.push(p2pStream);
-
-                    // ✅ Apply custom formatter if configured (same as RD/TB)
-                    applyCustomFormatter(p2pStream, result, config, 'P2P', false);
+                } catch (err) {
+                    console.warn(`⚠️ [Webhook] Unreachable:`, err.message);
                 }
-
-            } catch (error) {
-                console.error(`❌ Error processing result:`, error);
-
-                // Return a basic stream even if processing failed
-                streams.push({
-                    name: `❌ ${result.title} (Error)`,
-                    title: `Error processing: ${error.message}`,
-                    url: result.magnetLink,
-                    behaviorHints: {
-                        bingeGroup: 'uindex-error',
-                        notWebReady: true
-                    }
-                });
+            } else {
+                console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
             }
+
+            return {
+                streams,
+                _debug: {
+                    originalQuery: searchQueries[0],
+                    totalResults: results.length,
+                    filteredResults: filteredResults.length,
+                    finalStreams: streams.length,
+                    cachedStreams: cachedCount,
+                    processingTimeMs: totalTime,
+                    tmdbData: mediaDetails
+                }
+            };
+
+        } catch (error) {
+            const totalTime = Date.now() - startTime;
+            console.error(`❌ Error in handleStream after ${totalTime}ms:`, error);
+
+            return {
+                streams: [],
+                _debug: {
+                    error: error.message,
+                    processingTimeMs: totalTime,
+                    step: 'handleStream'
+                }
+            };
         }
-
-        // Helper function for resolution score
-        const getResolutionScore = (stream) => {
-            const quality = (stream._meta?.quality || '').toLowerCase();
-            const name = (stream.name || '').toLowerCase();
-            const title = (stream.title || '').toLowerCase();
-            const combined = quality + ' ' + name + ' ' + title;
-
-            if (combined.includes('2160') || combined.includes('4k')) return 2160;
-            if (combined.includes('1080')) return 1080;
-            if (combined.includes('720')) return 720;
-            if (combined.includes('480')) return 480;
-            return 0;
-        };
-
-        // Helper function for size in bytes
-        const getSizeInBytes = (stream) => {
-            let sizeStr = stream._meta?.originalSize;
-
-            // Fallback: try to find size in title (e.g. "💾 1.5 GB")
-            if (!sizeStr && stream.title) {
-                const match = stream.title.match(/💾\s*(.+)/);
-                if (match) sizeStr = match[1];
-            }
-
-            if (!sizeStr) return 0;
-
-            // Parse "1.5 GB", "700 MB", etc.
-            const sizeStrConverted = String(sizeStr || '');
-            const match = sizeStrConverted.match(/([\d.]+)\s*([a-zA-Z]+)/);
-            if (!match) return 0;
-
-            const val = parseFloat(match[1]);
-            const unit = match[2].toUpperCase();
-
-            let multiplier = 1;
-            if (unit.includes('GB')) multiplier = 1024 * 1024 * 1024;
-            else if (unit.includes('MB')) multiplier = 1024 * 1024;
-            else if (unit.includes('KB')) multiplier = 1024;
-
-            return val * multiplier;
-        };
-
-        // ✅ P2P MODE SORTING: Quality > Seeders > Size (no cache priority)
-        // ✅ DEBRID MODE SORTING: Cache > Resolution > Size > Seeders
-        const isP2PMode = !useRealDebrid && !useTorbox && !useAllDebrid;
-
-        if (isP2PMode) {
-            console.log(`🔄 [P2P Sorting] Applying P2P sort order: Quality > Seeders > Size`);
-            streams.sort((a, b) => {
-                // 1. Resolution (High to Low)
-                const resA = getResolutionScore(a);
-                const resB = getResolutionScore(b);
-
-                if (resA !== resB) {
-                    return resB - resA; // Higher resolution first
-                }
-
-                // 2. Seeders (More is better)
-                const seedsA = a._meta?.seeders || 0;
-                const seedsB = b._meta?.seeders || 0;
-
-                if (seedsA !== seedsB) {
-                    return seedsB - seedsA; // Higher seeders first
-                }
-
-                // 3. Size (Tie-breaker: Larger first)
-                const sizeA = getSizeInBytes(a);
-                const sizeB = getSizeInBytes(b);
-                return sizeB - sizeA;
-            });
-        } else {
-            // ✅ DEBRID SORTING: Cache > Resolution > Size > Seeders
-            streams.sort((a, b) => {
-                // 1. Cached Status (Cached first)
-                const isCachedA = (a._meta && a._meta.cached) || (a.name && a.name.includes('⚡'));
-                const isCachedB = (b._meta && b._meta.cached) || (b.name && b.name.includes('⚡'));
-
-                if (isCachedA !== isCachedB) {
-                    return isCachedA ? -1 : 1; // Cached comes first
-                }
-
-                // 2. Resolution (High to Low)
-                const resA = getResolutionScore(a);
-                const resB = getResolutionScore(b);
-
-                if (resA !== resB) {
-                    return resB - resA; // Higher resolution first
-                }
-
-                // 3. Size (Big to Small)
-                const sizeA = getSizeInBytes(a);
-                const sizeB = getSizeInBytes(b);
-
-                if (sizeA !== sizeB) {
-                    return sizeB - sizeA; // Larger size first
-                }
-
-                // 4. Seeders (Fallback)
-                const seedsA = a._meta?.seeders || 0;
-                const seedsB = b._meta?.seeders || 0;
-                return seedsB - seedsA;
-            });
-        }
-
-        // ✅ Apply Max Resolution Limit (if configured)
-        if (config.max_res_limit) {
-            const limit = parseInt(config.max_res_limit);
-            if (!isNaN(limit) && limit > 0) {
-                console.log(`✂️ Applying resolution limit: max ${limit} results per resolution`);
-                streams = limitResultsByResolution(streams, limit);
-            }
-        }
-
-        const cachedCount = streams.filter(s => s.name.includes('⚡')).length;
-        const totalTime = Date.now() - startTime;
-
-        console.log(`🎉 Successfully processed ${streams.length} streams in ${totalTime}ms`);
-        console.log(`⚡ ${cachedCount} cached streams available for instant playback`);
-
-        // 🔥 ENRICHMENT: VPS webhook with load balancing (must complete BEFORE returning response)
-        console.log(`🔍 [Background Check] dbEnabled=${dbEnabled}, mediaDetails=${!!mediaDetails}, tmdbId=${mediaDetails?.tmdbId}, imdbId=${mediaDetails?.imdbId}, kitsuId=${mediaDetails?.kitsuId}`);
-
-        if (dbEnabled && mediaDetails && (mediaDetails.tmdbId || mediaDetails.imdbId || mediaDetails.kitsuId)) {
-            console.log(`🔍 [Enrichment] Preparing webhook for "${mediaDetails.title}"`);
-            console.log(`🔍 [Enrichment Titles] Italian: "${italianTitle || 'N/A'}", Original: "${originalTitle || 'N/A'}", English: "${mediaDetails.title}"`);
-
-            // 🔄 Load balancing: Round-robin between VPS1 and VPS2
-            const enrichmentServers = [
-                process.env.ENRICHMENT_SERVER_URL,
-                process.env.ENRICHMENT_SERVER_URL_2
-            ].filter(Boolean); // Remove undefined values
-
-            if (enrichmentServers.length === 0) {
-                console.warn('⚠️ [Enrichment] No enrichment servers configured');
-                enrichmentServers.push('http://89.168.25.177:3001/enrich'); // Fallback
-            }
-
-            // Simple round-robin counter (rotates between servers)
-            if (!global.enrichmentServerIndex) {
-                global.enrichmentServerIndex = 0;
-            }
-            const enrichmentUrl = enrichmentServers[global.enrichmentServerIndex % enrichmentServers.length];
-            global.enrichmentServerIndex = (global.enrichmentServerIndex + 1) % enrichmentServers.length;
-
-            const enrichmentApiKey = process.env.ENRICHMENT_API_KEY || 'change-me-in-production';
-
-            console.log(`🚀 [Webhook] Calling VPS enrichment (server ${global.enrichmentServerIndex === 0 ? 2 : 1}): ${enrichmentUrl}`);
-
-            try {
-                const webhookResponse = await fetch(enrichmentUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': enrichmentApiKey
-                    },
-                    body: JSON.stringify({
-                        imdbId: mediaDetails.imdbId,
-                        tmdbId: mediaDetails.tmdbId,
-                        italianTitle: italianTitle,
-                        originalTitle: originalTitle || mediaDetails.title,
-                        type: type,
-                        year: mediaDetails.year,
-                        searchQueries: finalSearchQueries || [] // ✅ Send pre-built queries
-                    }),
-                    signal: AbortSignal.timeout(5000)
-                });
-
-                if (webhookResponse.ok) {
-                    console.log(`✅ [Webhook] Enrichment queued (${webhookResponse.status})`);
-                } else {
-                    console.warn(`⚠️ [Webhook] Failed: ${webhookResponse.status}`);
-                }
-            } catch (err) {
-                console.warn(`⚠️ [Webhook] Unreachable:`, err.message);
-            }
-        } else {
-            console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
-        }
-
-        return {
-            streams,
-            _debug: {
-                originalQuery: searchQueries[0],
-                totalResults: results.length,
-                filteredResults: filteredResults.length,
-                finalStreams: streams.length,
-                cachedStreams: cachedCount,
-                processingTimeMs: totalTime,
-                tmdbData: mediaDetails
-            }
-        };
-
-    } catch (error) {
-        const totalTime = Date.now() - startTime;
-        console.error(`❌ Error in handleStream after ${totalTime}ms:`, error);
-
-        return {
-            streams: [],
-            _debug: {
-                error: error.message,
-                processingTimeMs: totalTime,
-                step: 'handleStream'
-            }
-        };
     }
-}
 
 // ✅ TMDB helper functions (keeping existing but adding better error handling)
 async function getTMDBDetails(tmdbId, type = 'movie', tmdbApiKey, append = 'external_ids', language = 'it-IT') {
-    try {
-        const url = `${TMDB_BASE_URL}/${type}/${tmdbId}?api_key=${tmdbApiKey}&language=${language}&append_to_response=${append}`;
-        console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
-        const response = await fetch(url, {
-            signal: AbortSignal.timeout(8000)
-        });
-        console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
-        if (!response.ok) {
-            const errorText = await response.text().catch(() => 'Unable to read error');
-            console.error(`❌ [TMDB] Error response: ${errorText.substring(0, 200)}`);
-            throw new Error(`TMDB API error: ${response.status}`);
-        }
-        const data = await response.json();
-        console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
-        return data;
-    } catch (error) {
-        console.warn('⚠️ TMDB fetch warning (will use fallback):', error.message);
-        return null;
-    }
-}
-
-async function getTVShowDetails(tmdbId, seasonNum, episodeNum, tmdbApiKey) {
-    try {
-        const showResponse = await fetch(
-            `${TMDB_BASE_URL}/tv/${tmdbId}?api_key=${tmdbApiKey}&append_to_response=external_ids`,
-            { signal: AbortSignal.timeout(8000) }
-        );
-        if (!showResponse.ok) {
-            const errorText = await showResponse.text().catch(() => 'Unable to read error');
-            console.error(`❌ [TMDB] /tv/${tmdbId} error: ${showResponse.status} - ${errorText.substring(0, 200)}`);
-            throw new Error(`TMDB API error: ${showResponse.status}`);
-        }
-        const showData = await showResponse.json();
-
-        const episodeResponse = await fetch(
-            `${TMDB_BASE_URL}/tv/${tmdbId}/season/${seasonNum}/episode/${episodeNum}?api_key=${tmdbApiKey}`,
-            { signal: AbortSignal.timeout(8000) }
-        );
-        if (!episodeResponse.ok) {
-            const errorText = await episodeResponse.text().catch(() => 'Unable to read error');
-            console.error(`❌ [TMDB] /tv/${tmdbId}/season/${seasonNum}/episode/${episodeNum} error: ${episodeResponse.status} - ${errorText.substring(0, 200)}`);
-            throw new Error(`TMDB episode API error: ${episodeResponse.status}`);
-        }
-        const episodeData = await episodeResponse.json();
-
-        return {
-            showTitle: showData.name,
-            episodeTitle: episodeData.name,
-            seasonNumber: seasonNum,
-            episodeNumber: episodeNum,
-            airDate: episodeData.air_date,
-            imdbId: showData.external_ids?.imdb_id
-        };
-    } catch (error) {
-        console.warn('⚠️ TMDB TV fetch warning (will use fallback):', error.message);
-        return null;
-    }
-}
-
-// ✅ Enhanced search endpoint for testing
-async function handleSearch({ query, type }, config) {
-    if (!query) throw new Error('Missing required parameter: query');
-    if (!['movie', 'series', 'anime'].includes(type)) throw new Error('Invalid type. Must be "movie", "series", or "anime"');
-
-    console.log(`🔍 Handling search: "${query}" (${type})`);
-
-    try {
-        // ✅ Estrai titolo e anno dal query (es. "Fuori 2025" -> titolo="Fuori", anno=2025)
-        const yearMatch = query.match(/\s*\(?\b(19\d{2}|20\d{2})\b\)?$/);
-        const extractedYear = yearMatch ? parseInt(yearMatch[1]) : null;
-        const cleanedTitle = yearMatch ? query.replace(yearMatch[0], '').trim() : query;
-
-        console.log(`📝 [Search] Extracted title: "${cleanedTitle}", year: ${extractedYear || 'N/A'}`);
-
-        // Build basic metadata for Knaben API
-        const basicMetadata = {
-            primaryTitle: query,
-            title: query,
-            titles: [query],
-        };
-
-        const basicParsedId = {
-            mediaType: type,
-        };
-
-        // ✅ ValidationMetadata per la search (validazione titolo)
-        // IMPORTANTE: usa solo il titolo senza anno per il matching!
-        const basicValidationMetadata = {
-            titles: [cleanedTitle, query].filter(Boolean), // Titolo pulito + query originale
-            year: extractedYear,
-            season: undefined,
-            episode: undefined,
-        };
-
-        // --- MODIFICA: RICERCA E ORDINAMENTO SEPARATO ---
-        const [uindexResults, corsaroNeroResults, knabenResults] = await Promise.allSettled([
-            fetchUIndexData(query, type, null, basicValidationMetadata), // Con validazione titolo
-            fetchCorsaroNeroData(query, type), // Non richiede config
-            fetchKnabenData(query, type, { ...basicMetadata, titles: basicValidationMetadata.titles }, basicParsedId)  // Usa titoli puliti per validazione
-        ]);
-
-        let corsaroAggregatedResults = [];
-        if (corsaroNeroResults.status === 'fulfilled' && corsaroNeroResults.value) {
-            corsaroAggregatedResults.push(...corsaroNeroResults.value);
-        }
-
-        let uindexAggregatedResults = [];
-        if (uindexResults.status === 'fulfilled' && uindexResults.value) {
-            uindexAggregatedResults.push(...uindexResults.value);
-        }
-
-        let knabenAggregatedResults = [];
-        if (knabenResults.status === 'fulfilled' && knabenResults.value) {
-            knabenAggregatedResults.push(...knabenResults.value);
-        }
-
-        // Deduplicate and sort
-        const seenHashes = new Set();
-
-        const uniqueCorsaro = corsaroAggregatedResults.filter(r => {
-            if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
-            seenHashes.add(r.infoHash);
-            return true;
-        });
-        const sortedCorsaro = sortByQualityAndSeeders(uniqueCorsaro);
-        const limitedCorsaro = limitResultsByLanguageAndQuality(sortedCorsaro, 5, 2);
-
-        const uniqueUindex = uindexAggregatedResults.filter(r => {
-            if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
-            seenHashes.add(r.infoHash);
-            return true;
-        });
-        const sortedUindex = sortByQualityAndSeeders(uniqueUindex);
-        const limitedUindex = limitResultsByLanguageAndQuality(sortedUindex, 5, 2);
-
-        const uniqueKnaben = knabenAggregatedResults.filter(r => {
-            if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
-            seenHashes.add(r.infoHash);
-            return true;
-        });
-        const sortedKnaben = sortByQualityAndSeeders(uniqueKnaben);
-        const limitedKnaben = limitResultsByLanguageAndQuality(sortedKnaben, 5, 2);
-
-        // Combina i risultati già limitati
-        const results = [...limitedCorsaro, ...limitedKnaben, ...limitedUindex];
-        // --- FINE MODIFICA ---
-
-        return {
-            query: query,
-            type: type,
-            totalResults: results.length,
-            results: results.slice(0, 50).map(result => ({
-                title: result.title,
-                filename: result.filename,
-                quality: result.quality,
-                size: result.size,
-                seeders: result.seeders,
-                leechers: result.leechers,
-                magnetLink: result.magnetLink,
-                infoHash: result.infoHash,
-                source: result.source
-            }))
-        };
-    } catch (error) {
-        console.error(`❌ Error in handleSearch:`, error);
-        throw error;
-    }
-}
-
-// ✅ Main Vercel Serverless Function handler
-export default async function handler(req, res) {
-    const startTime = Date.now();
-    const corsHeaders = {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-    };
-
-    // Set CORS headers for all responses
-    Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
-
-    if (req.method === 'OPTIONS') {
-        return res.status(204).end();
-    }
-
-    // Vercel adaptation: get env from process.env
-    const env = process.env;
-
-    const url = new URL(req.url, `https://${req.headers.host}`);
-    console.log(`🌐 ${req.method} ${url.pathname} - ${req.headers['user-agent']?.substring(0, 50) || 'Unknown'}`);
-
-    // ✅ Log decoded config if available
-    try {
-        const configMatch = url.pathname.match(/^\/([a-zA-Z0-9+\/=]+)(\/|$)/);
-        if (configMatch && configMatch[1] && configMatch[1].length > 20) {
-            const configStr = atob(configMatch[1]);
-            const config = JSON.parse(configStr);
-
-            // Only hide Real-Debrid key (user requested: show Torbox and TMDB keys)
-            if (config.rd_key) config.rd_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
-            if (config.alldebrid_key) config.alldebrid_key = '🔗🔗🔗 [HIDDEN] 🔗🔗🔗';
-            if (config.premiumize_key) config.premiumize_key = '💎💎💎 [HIDDEN] 💎💎💎';
-            if (config.offcloud_key) config.offcloud_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
-
-            console.log(`📜 Decoded Config:`, JSON.stringify(config));
-        }
-    } catch (e) {
-        // Ignore parsing errors, it might not be a config path
-    }
-
-
-    // ✅ Serve la pagina di configurazione alla root
-    if (url.pathname === '/') {
         try {
-            // Vercel adaptation: read template.html from the filesystem
-            const templatePath = path.join(process.cwd(), 'template.html');
-            const templateHtml = await fs.readFile(templatePath, 'utf-8');
-            res.setHeader('Content-Type', 'text/html;charset=UTF-8');
-            return res.status(200).send(templateHtml);
+            const url = `${TMDB_BASE_URL}/${type}/${tmdbId}?api_key=${tmdbApiKey}&language=${language}&append_to_response=${append}`;
+            console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
+            const response = await fetch(url, {
+                signal: AbortSignal.timeout(8000)
+            });
+            console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => 'Unable to read error');
+                console.error(`❌ [TMDB] Error response: ${errorText.substring(0, 200)}`);
+                throw new Error(`TMDB API error: ${response.status}`);
+            }
+            const data = await response.json();
+            console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
+            return data;
+        } catch (error) {
+            console.warn('⚠️ TMDB fetch warning (will use fallback):', error.message);
+            return null;
+        }
+    }
+
+    async function getTVShowDetails(tmdbId, seasonNum, episodeNum, tmdbApiKey) {
+        try {
+            const showResponse = await fetch(
+                `${TMDB_BASE_URL}/tv/${tmdbId}?api_key=${tmdbApiKey}&append_to_response=external_ids`,
+                { signal: AbortSignal.timeout(8000) }
+            );
+            if (!showResponse.ok) {
+                const errorText = await showResponse.text().catch(() => 'Unable to read error');
+                console.error(`❌ [TMDB] /tv/${tmdbId} error: ${showResponse.status} - ${errorText.substring(0, 200)}`);
+                throw new Error(`TMDB API error: ${showResponse.status}`);
+            }
+            const showData = await showResponse.json();
+
+            const episodeResponse = await fetch(
+                `${TMDB_BASE_URL}/tv/${tmdbId}/season/${seasonNum}/episode/${episodeNum}?api_key=${tmdbApiKey}`,
+                { signal: AbortSignal.timeout(8000) }
+            );
+            if (!episodeResponse.ok) {
+                const errorText = await episodeResponse.text().catch(() => 'Unable to read error');
+                console.error(`❌ [TMDB] /tv/${tmdbId}/season/${seasonNum}/episode/${episodeNum} error: ${episodeResponse.status} - ${errorText.substring(0, 200)}`);
+                throw new Error(`TMDB episode API error: ${episodeResponse.status}`);
+            }
+            const episodeData = await episodeResponse.json();
+
+            return {
+                showTitle: showData.name,
+                episodeTitle: episodeData.name,
+                seasonNumber: seasonNum,
+                episodeNumber: episodeNum,
+                airDate: episodeData.air_date,
+                imdbId: showData.external_ids?.imdb_id
+            };
+        } catch (error) {
+            console.warn('⚠️ TMDB TV fetch warning (will use fallback):', error.message);
+            return null;
+        }
+    }
+
+    // ✅ Enhanced search endpoint for testing
+    async function handleSearch({ query, type }, config) {
+        if (!query) throw new Error('Missing required parameter: query');
+        if (!['movie', 'series', 'anime'].includes(type)) throw new Error('Invalid type. Must be "movie", "series", or "anime"');
+
+        console.log(`🔍 Handling search: "${query}" (${type})`);
+
+        try {
+            // ✅ Estrai titolo e anno dal query (es. "Fuori 2025" -> titolo="Fuori", anno=2025)
+            const yearMatch = query.match(/\s*\(?\b(19\d{2}|20\d{2})\b\)?$/);
+            const extractedYear = yearMatch ? parseInt(yearMatch[1]) : null;
+            const cleanedTitle = yearMatch ? query.replace(yearMatch[0], '').trim() : query;
+
+            console.log(`📝 [Search] Extracted title: "${cleanedTitle}", year: ${extractedYear || 'N/A'}`);
+
+            // Build basic metadata for Knaben API
+            const basicMetadata = {
+                primaryTitle: query,
+                title: query,
+                titles: [query],
+            };
+
+            const basicParsedId = {
+                mediaType: type,
+            };
+
+            // ✅ ValidationMetadata per la search (validazione titolo)
+            // IMPORTANTE: usa solo il titolo senza anno per il matching!
+            const basicValidationMetadata = {
+                titles: [cleanedTitle, query].filter(Boolean), // Titolo pulito + query originale
+                year: extractedYear,
+                season: undefined,
+                episode: undefined,
+            };
+
+            // --- MODIFICA: RICERCA E ORDINAMENTO SEPARATO ---
+            const [uindexResults, corsaroNeroResults, knabenResults] = await Promise.allSettled([
+                fetchUIndexData(query, type, null, basicValidationMetadata), // Con validazione titolo
+                fetchCorsaroNeroData(query, type), // Non richiede config
+                fetchKnabenData(query, type, { ...basicMetadata, titles: basicValidationMetadata.titles }, basicParsedId)  // Usa titoli puliti per validazione
+            ]);
+
+            let corsaroAggregatedResults = [];
+            if (corsaroNeroResults.status === 'fulfilled' && corsaroNeroResults.value) {
+                corsaroAggregatedResults.push(...corsaroNeroResults.value);
+            }
+
+            let uindexAggregatedResults = [];
+            if (uindexResults.status === 'fulfilled' && uindexResults.value) {
+                uindexAggregatedResults.push(...uindexResults.value);
+            }
+
+            let knabenAggregatedResults = [];
+            if (knabenResults.status === 'fulfilled' && knabenResults.value) {
+                knabenAggregatedResults.push(...knabenResults.value);
+            }
+
+            // Deduplicate and sort
+            const seenHashes = new Set();
+
+            const uniqueCorsaro = corsaroAggregatedResults.filter(r => {
+                if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
+                seenHashes.add(r.infoHash);
+                return true;
+            });
+            const sortedCorsaro = sortByQualityAndSeeders(uniqueCorsaro);
+            const limitedCorsaro = limitResultsByLanguageAndQuality(sortedCorsaro, 5, 2);
+
+            const uniqueUindex = uindexAggregatedResults.filter(r => {
+                if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
+                seenHashes.add(r.infoHash);
+                return true;
+            });
+            const sortedUindex = sortByQualityAndSeeders(uniqueUindex);
+            const limitedUindex = limitResultsByLanguageAndQuality(sortedUindex, 5, 2);
+
+            const uniqueKnaben = knabenAggregatedResults.filter(r => {
+                if (!r.infoHash || seenHashes.has(r.infoHash)) return false;
+                seenHashes.add(r.infoHash);
+                return true;
+            });
+            const sortedKnaben = sortByQualityAndSeeders(uniqueKnaben);
+            const limitedKnaben = limitResultsByLanguageAndQuality(sortedKnaben, 5, 2);
+
+            // Combina i risultati già limitati
+            const results = [...limitedCorsaro, ...limitedKnaben, ...limitedUindex];
+            // --- FINE MODIFICA ---
+
+            return {
+                query: query,
+                type: type,
+                totalResults: results.length,
+                results: results.slice(0, 50).map(result => ({
+                    title: result.title,
+                    filename: result.filename,
+                    quality: result.quality,
+                    size: result.size,
+                    seeders: result.seeders,
+                    leechers: result.leechers,
+                    magnetLink: result.magnetLink,
+                    infoHash: result.infoHash,
+                    source: result.source
+                }))
+            };
+        } catch (error) {
+            console.error(`❌ Error in handleSearch:`, error);
+            throw error;
+        }
+    }
+
+    // ✅ Main Vercel Serverless Function handler
+    export default async function handler(req, res) {
+        const startTime = Date.now();
+        const corsHeaders = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        };
+
+        // Set CORS headers for all responses
+        Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
+
+        if (req.method === 'OPTIONS') {
+            return res.status(204).end();
+        }
+
+        // Vercel adaptation: get env from process.env
+        const env = process.env;
+
+        const url = new URL(req.url, `https://${req.headers.host}`);
+        console.log(`🌐 ${req.method} ${url.pathname} - ${req.headers['user-agent']?.substring(0, 50) || 'Unknown'}`);
+
+        // ✅ Log decoded config if available
+        try {
+            const configMatch = url.pathname.match(/^\/([a-zA-Z0-9+\/=]+)(\/|$)/);
+            if (configMatch && configMatch[1] && configMatch[1].length > 20) {
+                const configStr = atob(configMatch[1]);
+                const config = JSON.parse(configStr);
+
+                // Only hide Real-Debrid key (user requested: show Torbox and TMDB keys)
+                if (config.rd_key) config.rd_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
+                if (config.alldebrid_key) config.alldebrid_key = '🔗🔗🔗 [HIDDEN] 🔗🔗🔗';
+                if (config.premiumize_key) config.premiumize_key = '💎💎💎 [HIDDEN] 💎💎💎';
+                if (config.offcloud_key) config.offcloud_key = '☁️☁️☁️ [HIDDEN] ☁️☁️☁️';
+
+                console.log(`📜 Decoded Config:`, JSON.stringify(config));
+            }
         } catch (e) {
-            console.error("Error reading template.html:", e);
-            return res.status(500).send('Template not found.');
+            // Ignore parsing errors, it might not be a config path
         }
-    }
 
-    // ✅ Configure endpoint - Opens with existing config preloaded
-    if (url.pathname === '/configure' || url.pathname.endsWith('/configure')) {
-        try {
-            let existingConfig = null;
 
-            // DEBUG: Log full request details
-            console.log('🔍 [Configure] Request URL:', url.href);
-            console.log('🔍 [Configure] Pathname:', url.pathname);
-            console.log('🔍 [Configure] Search params:', Array.from(url.searchParams.entries()));
+        // ✅ Serve la pagina di configurazione alla root
+        if (url.pathname === '/') {
+            try {
+                // Vercel adaptation: read template.html from the filesystem
+                const templatePath = path.join(process.cwd(), 'template.html');
+                const templateHtml = await fs.readFile(templatePath, 'utf-8');
+                res.setHeader('Content-Type', 'text/html;charset=UTF-8');
+                return res.status(200).send(templateHtml);
+            } catch (e) {
+                console.error("Error reading template.html:", e);
+                return res.status(500).send('Template not found.');
+            }
+        }
 
-            // Method 1: Check if config is in path (/{config}/configure)
-            const pathParts = url.pathname.split('/');
-            if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
-                try {
-                    existingConfig = JSON.parse(atob(pathParts[1]));
-                    console.log('📝 [Configure] Loaded existing config from URL path');
-                } catch (e) {
-                    console.warn('⚠️ [Configure] Failed to parse config from path:', e.message);
+        // ✅ Configure endpoint - Opens with existing config preloaded
+        if (url.pathname === '/configure' || url.pathname.endsWith('/configure')) {
+            try {
+                let existingConfig = null;
+
+                // DEBUG: Log full request details
+                console.log('🔍 [Configure] Request URL:', url.href);
+                console.log('🔍 [Configure] Pathname:', url.pathname);
+                console.log('🔍 [Configure] Search params:', Array.from(url.searchParams.entries()));
+
+                // Method 1: Check if config is in path (/{config}/configure)
+                const pathParts = url.pathname.split('/');
+                if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
+                    try {
+                        existingConfig = JSON.parse(atob(pathParts[1]));
+                        console.log('📝 [Configure] Loaded existing config from URL path');
+                    } catch (e) {
+                        console.warn('⚠️ [Configure] Failed to parse config from path:', e.message);
+                    }
                 }
-            }
 
-            // Method 2: Check query parameter (Stremio uses ?config=)
-            if (!existingConfig && url.searchParams.has('config')) {
-                try {
-                    const configParam = url.searchParams.get('config');
-                    existingConfig = JSON.parse(atob(configParam));
-                    console.log('📝 [Configure] Loaded existing config from query parameter');
-                } catch (e) {
-                    console.warn('⚠️ [Configure] Failed to parse config from query:', e.message);
+                // Method 2: Check query parameter (Stremio uses ?config=)
+                if (!existingConfig && url.searchParams.has('config')) {
+                    try {
+                        const configParam = url.searchParams.get('config');
+                        existingConfig = JSON.parse(atob(configParam));
+                        console.log('📝 [Configure] Loaded existing config from query parameter');
+                    } catch (e) {
+                        console.warn('⚠️ [Configure] Failed to parse config from query:', e.message);
+                    }
                 }
-            }
 
-            if (existingConfig) {
-                console.log('✅ [Configure] Config loaded:', Object.keys(existingConfig));
-            } else {
-                console.log('ℹ️ [Configure] No existing config found - showing blank form');
-            }
+                if (existingConfig) {
+                    console.log('✅ [Configure] Config loaded:', Object.keys(existingConfig));
+                } else {
+                    console.log('ℹ️ [Configure] No existing config found - showing blank form');
+                }
 
-            // Read template and inject existing config as JSON
-            const templatePath = path.join(process.cwd(), 'template.html');
-            let templateHtml = await fs.readFile(templatePath, 'utf-8');
+                // Read template and inject existing config as JSON
+                const templatePath = path.join(process.cwd(), 'template.html');
+                let templateHtml = await fs.readFile(templatePath, 'utf-8');
 
-            // Inject existing config into template (if present)
-            if (existingConfig) {
-                const configJson = JSON.stringify(existingConfig);
-                // Insert script before </body> to preload config
-                const configScript = `
+                // Inject existing config into template (if present)
+                if (existingConfig) {
+                    const configJson = JSON.stringify(existingConfig);
+                    // Insert script before </body> to preload config
+                    const configScript = `
                     <script>
                     window.EXISTING_CONFIG = ${configJson};
                     console.log('✅ Existing configuration loaded:', window.EXISTING_CONFIG);
                     </script>
                 `;
-                templateHtml = templateHtml.replace('</body>', `${configScript}</body>`);
-            }
+                    templateHtml = templateHtml.replace('</body>', `${configScript}</body>`);
+                }
 
-            res.setHeader('Content-Type', 'text/html;charset=UTF-8');
-            return res.status(200).send(templateHtml);
-        } catch (e) {
-            console.error("Error reading template.html:", e);
-            return res.status(500).send('Template not found.');
+                res.setHeader('Content-Type', 'text/html;charset=UTF-8');
+                return res.status(200).send(templateHtml);
+            } catch (e) {
+                console.error("Error reading template.html:", e);
+                return res.status(500).send('Template not found.');
+            }
         }
-    }
 
-    // ✅ Serve static logo files (with or without config prefix)
-    if (url.pathname.endsWith('/logo.png') || url.pathname.endsWith('/prisonmike.png')) {
-        try {
-            // Extract filename from end of path
-            const filename = url.pathname.endsWith('/logo.png') ? 'logo.png' : 'prisonmike.png';
-
-            // ✅ Redirect logo.png to external URL
-            if (filename === 'logo.png') {
-                return res.redirect(302, 'https://i.imgur.com/kZK4KKS.png');
-            }
-
-            const logoPath = path.join(process.cwd(), 'public', filename);
-
-            console.log(`🖼️ [Logo] Serving ${filename} from ${logoPath}`);
-
+        // ✅ Serve static logo files (with or without config prefix)
+        if (url.pathname.endsWith('/logo.png') || url.pathname.endsWith('/prisonmike.png')) {
             try {
-                const logoData = await fs.readFile(logoPath);
-                res.setHeader('Content-Type', 'image/png');
-                res.setHeader('Cache-Control', 'public, max-age=31536000');
-                return res.status(200).send(logoData);
-            } catch (err) {
-                console.warn(`⚠️ Logo file not found: ${filename}`, err.message);
-                res.setHeader('Content-Type', 'text/plain');
-                return res.status(404).send('Logo not found');
-            }
-        } catch (e) {
-            console.error('Error serving logo:', e);
-            return res.status(500).send('Error serving logo');
-        }
-    }
+                // Extract filename from end of path
+                const filename = url.pathname.endsWith('/logo.png') ? 'logo.png' : 'prisonmike.png';
 
-    // ✅ MediaFlow Proxy Endpoint - Server-side proxying
-    try {
-        // Stremio manifest
-        // Gestisce sia /manifest.json che /{config}/manifest.json
-        if (url.pathname.endsWith('/manifest.json')) {
-            // Extract config from URL path to determine addon name
-            const pathParts = url.pathname.split('/');
-            let addonName = 'IlCorsaroViola';
+                // ✅ Redirect logo.png to external URL
+                if (filename === 'logo.png') {
+                    return res.redirect(302, 'https://i.imgur.com/kZK4KKS.png');
+                }
 
-            // Check if there's a config segment (e.g., /{config}/manifest.json)
-            if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
+                const logoPath = path.join(process.cwd(), 'public', filename);
+
+                console.log(`🖼️ [Logo] Serving ${filename} from ${logoPath}`);
+
                 try {
-                    const encodedConfigStr = pathParts[1];
-                    let config;
+                    const logoData = await fs.readFile(logoPath);
+                    res.setHeader('Content-Type', 'image/png');
+                    res.setHeader('Cache-Control', 'public, max-age=31536000');
+                    return res.status(200).send(logoData);
+                } catch (err) {
+                    console.warn(`⚠️ Logo file not found: ${filename}`, err.message);
+                    res.setHeader('Content-Type', 'text/plain');
+                    return res.status(404).send('Logo not found');
+                }
+            } catch (e) {
+                console.error('Error serving logo:', e);
+                return res.status(500).send('Error serving logo');
+            }
+        }
+
+        // ✅ MediaFlow Proxy Endpoint - Server-side proxying
+        try {
+            // Stremio manifest
+            // Gestisce sia /manifest.json che /{config}/manifest.json
+            if (url.pathname.endsWith('/manifest.json')) {
+                // Extract config from URL path to determine addon name
+                const pathParts = url.pathname.split('/');
+                let addonName = 'IlCorsaroViola';
+
+                // Check if there's a config segment (e.g., /{config}/manifest.json)
+                if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
+                    try {
+                        const encodedConfigStr = pathParts[1];
+                        let config;
+                        try {
+                            config = JSON.parse(atob(encodedConfigStr));
+                        } catch (e1) {
+                            console.warn('⚠️ Standard config parsing failed, trying URI decode fallback:', e1.message);
+                            try {
+                                // Fallback for double-encoded or legacy formats
+                                const decoded = atob(encodedConfigStr);
+                                config = JSON.parse(decodeURIComponent(escape(decoded)));
+                            } catch (e2) {
+                                console.error('❌ Config parsing failed completely:', e2.message);
+                                throw e1; // Re-throw original error
+                            }
+                        }
+
+                        // Determine which debrid services are configured
+                        const hasRD = config.rd_key && config.rd_key.length > 0;
+                        const hasTB = config.torbox_key && config.torbox_key.length > 0;
+                        const hasAD = config.ad_key && config.ad_key.length > 0;
+
+                        // Check if MediaFlow proxy is configured (only applies to RD)
+                        const hasProxy = config.mediaflow_url && config.mediaflow_url.length > 0;
+
+                        // Build dynamic name based on active services (using icons)
+                        const services = [];
+                        if (hasRD) services.push('👑');  // Crown for Real-Debrid
+                        if (hasTB) services.push('📦');  // Box for Torbox
+                        if (hasAD) services.push('🅰️');   // Red A for AllDebrid
+
+                        // Feature flags
+                        const hasFullIta = config.full_ita === true;
+                        const hasSkipIntro = config.introskip_enabled === true;
+                        const hasDbOnly = config.db_only === true;
+
+                        // Build feature suffix: ⚡ for DB Only, 🇮🇹 for FULL ITA, ⏩ for Skip Intro
+                        let featureSuffix = '';
+                        if (hasDbOnly) featureSuffix += '⚡';
+                        if (hasFullIta) featureSuffix += '🇮🇹';
+                        if (hasSkipIntro) featureSuffix += '⏩';
+
+                        if (services.length > 0) {
+                            // Add proxy indicator only if RD is enabled
+                            const proxyPrefix = (hasProxy && hasRD) ? '🕵️ ' : '';
+                            addonName = `${proxyPrefix}IlCorsaroViola ${services.join('+')}${featureSuffix}`;
+                        } else {
+                            addonName = `IlCorsaroViola 🧲${featureSuffix}`;  // Magnet for P2P
+                        }
+
+                        console.log(`📛 [Manifest] Dynamic addon name: ${addonName}`);
+                    } catch (e) {
+                        console.error('Error parsing config for addon name:', e);
+                        // Keep default name on error
+                    }
+                }
+
+                const manifest = {
+                    id: 'community.ilcorsaroviola.ita',
+                    version: '4.0.0',
+                    name: addonName,
+                    description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
+                    logo: 'https://i.imgur.com/kZK4KKS.png',
+                    resources: ['stream'],
+                    types: ['movie', 'series', 'anime'],
+                    idPrefixes: ['tt', 'kitsu'],
+                    catalogs: [],
+                    behaviorHints: {
+                        adult: false,
+                        p2p: true, // Indica che può restituire link magnet
+                        configurable: true, // ✅ Abilita pulsante "Configure" in Stremio
+                        configurationRequired: false // ✅ Non obbligatorio, ma disponibile
+                    }
+                };
+
+                res.setHeader('Content-Type', 'application/json');
+                return res.status(200).send(JSON.stringify(manifest, null, 2));
+            }
+
+            // Stream endpoint (main functionality)
+            // Gestisce il formato /{config}/stream/{type}/{id} inviato da Stremio
+            if (url.pathname.includes('/stream/')) {
+                const pathParts = url.pathname.split('/'); // e.g., ['', '{config}', 'stream', '{type}', '{id}.json']
+
+                // Estrae la configurazione dal primo segmento del path
+                const encodedConfigStr = pathParts[1];
+                let config = {};
+                if (encodedConfigStr && encodedConfigStr !== 'stream') {
                     try {
                         config = JSON.parse(atob(encodedConfigStr));
-                    } catch (e1) {
-                        console.warn('⚠️ Standard config parsing failed, trying URI decode fallback:', e1.message);
-                        try {
-                            // Fallback for double-encoded or legacy formats
-                            const decoded = atob(encodedConfigStr);
-                            config = JSON.parse(decodeURIComponent(escape(decoded)));
-                        } catch (e2) {
-                            console.error('❌ Config parsing failed completely:', e2.message);
-                            throw e1; // Re-throw original error
-                        }
+                    } catch (e) {
+                        console.error("Errore nel parsing della configurazione (segmento 1) dall'URL:", e);
                     }
-
-                    // Determine which debrid services are configured
-                    const hasRD = config.rd_key && config.rd_key.length > 0;
-                    const hasTB = config.torbox_key && config.torbox_key.length > 0;
-                    const hasAD = config.ad_key && config.ad_key.length > 0;
-
-                    // Check if MediaFlow proxy is configured (only applies to RD)
-                    const hasProxy = config.mediaflow_url && config.mediaflow_url.length > 0;
-
-                    // Build dynamic name based on active services (using icons)
-                    const services = [];
-                    if (hasRD) services.push('👑');  // Crown for Real-Debrid
-                    if (hasTB) services.push('📦');  // Box for Torbox
-                    if (hasAD) services.push('🅰️');   // Red A for AllDebrid
-
-                    // Feature flags
-                    const hasFullIta = config.full_ita === true;
-                    const hasSkipIntro = config.introskip_enabled === true;
-                    const hasDbOnly = config.db_only === true;
-
-                    // Build feature suffix: ⚡ for DB Only, 🇮🇹 for FULL ITA, ⏩ for Skip Intro
-                    let featureSuffix = '';
-                    if (hasDbOnly) featureSuffix += '⚡';
-                    if (hasFullIta) featureSuffix += '🇮🇹';
-                    if (hasSkipIntro) featureSuffix += '⏩';
-
-                    if (services.length > 0) {
-                        // Add proxy indicator only if RD is enabled
-                        const proxyPrefix = (hasProxy && hasRD) ? '🕵️ ' : '';
-                        addonName = `${proxyPrefix}IlCorsaroViola ${services.join('+')}${featureSuffix}`;
-                    } else {
-                        addonName = `IlCorsaroViola 🧲${featureSuffix}`;  // Magnet for P2P
-                    }
-
-                    console.log(`📛 [Manifest] Dynamic addon name: ${addonName}`);
-                } catch (e) {
-                    console.error('Error parsing config for addon name:', e);
-                    // Keep default name on error
                 }
-            }
 
-            const manifest = {
-                id: 'community.ilcorsaroviola.ita',
-                version: '4.0.0',
-                name: addonName,
-                description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
-                logo: 'https://i.imgur.com/kZK4KKS.png',
-                resources: ['stream'],
-                types: ['movie', 'series', 'anime'],
-                idPrefixes: ['tt', 'kitsu'],
-                catalogs: [],
-                behaviorHints: {
-                    adult: false,
-                    p2p: true, // Indica che può restituire link magnet
-                    configurable: true, // ✅ Abilita pulsante "Configure" in Stremio
-                    configurationRequired: false // ✅ Non obbligatorio, ma disponibile
+                // ✅ Add Jackettio ENV vars if available (fallback for private use)
+                if (env.JACKETT_URL && env.JACKETT_API_KEY) {
+                    config.jackett_url = env.JACKETT_URL;
+                    config.jackett_api_key = env.JACKETT_API_KEY;
+                    config.jackett_password = env.JACKETT_PASSWORD; // Optional
+                    console.log('🔍 [Jackettio] Using ENV configuration');
                 }
-            };
 
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(200).send(JSON.stringify(manifest, null, 2));
-        }
-
-        // Stream endpoint (main functionality)
-        // Gestisce il formato /{config}/stream/{type}/{id} inviato da Stremio
-        if (url.pathname.includes('/stream/')) {
-            const pathParts = url.pathname.split('/'); // e.g., ['', '{config}', 'stream', '{type}', '{id}.json']
-
-            // Estrae la configurazione dal primo segmento del path
-            const encodedConfigStr = pathParts[1];
-            let config = {};
-            if (encodedConfigStr && encodedConfigStr !== 'stream') {
-                try {
-                    config = JSON.parse(atob(encodedConfigStr));
-                } catch (e) {
-                    console.error("Errore nel parsing della configurazione (segmento 1) dall'URL:", e);
+                // ✅ Add MediaFlow Proxy ENV vars if available (for RD sharing)
+                if (env.MEDIAFLOW_URL && env.MEDIAFLOW_PASSWORD) {
+                    config.mediaflow_url = env.MEDIAFLOW_URL;
+                    config.mediaflow_password = env.MEDIAFLOW_PASSWORD;
+                    console.log('🔀 [MediaFlow] Using ENV configuration for RD sharing');
                 }
-            }
 
-            // ✅ Add Jackettio ENV vars if available (fallback for private use)
-            if (env.JACKETT_URL && env.JACKETT_API_KEY) {
-                config.jackett_url = env.JACKETT_URL;
-                config.jackett_api_key = env.JACKETT_API_KEY;
-                config.jackett_password = env.JACKETT_PASSWORD; // Optional
-                console.log('🔍 [Jackettio] Using ENV configuration');
-            }
+                // Estrae tipo e id dalle posizioni corrette
+                const type = pathParts[3];
+                const idWithSuffix = pathParts[4] || '';
+                const id = idWithSuffix.replace(/\.json$/, '');
 
-            // ✅ Add MediaFlow Proxy ENV vars if available (for RD sharing)
-            if (env.MEDIAFLOW_URL && env.MEDIAFLOW_PASSWORD) {
-                config.mediaflow_url = env.MEDIAFLOW_URL;
-                config.mediaflow_password = env.MEDIAFLOW_PASSWORD;
-                console.log('🔀 [MediaFlow] Using ENV configuration for RD sharing');
-            }
+                if (!type || !id || id.includes('config=')) { // Aggiunto controllo per evitare ID errati
+                    res.setHeader('Content-Type', 'application/json');
+                    return res.status(400).send(JSON.stringify({ streams: [], error: 'Invalid stream path' }));
+                }
 
-            // Estrae tipo e id dalle posizioni corrette
-            const type = pathParts[3];
-            const idWithSuffix = pathParts[4] || '';
-            const id = idWithSuffix.replace(/\.json$/, '');
+                // Passa la configurazione estratta (o un oggetto vuoto) a handleStream.
+                // Usa solo la configurazione dall'URL, senza fallback.
+                const result = await handleStream(type, id, config, url.origin);
 
-            if (!type || !id || id.includes('config=')) { // Aggiunto controllo per evitare ID errati
+                const responseTime = Date.now() - startTime;
+
+                console.log(`✅ Stream request completed in ${responseTime}ms`);
+
                 res.setHeader('Content-Type', 'application/json');
-                return res.status(400).send(JSON.stringify({ streams: [], error: 'Invalid stream path' }));
+                res.setHeader('X-Response-Time', `${responseTime}ms`);
+                res.setHeader('X-Results-Count', result.streams?.length || 0);
+                return res.status(200).send(JSON.stringify(result));
             }
 
-            // Passa la configurazione estratta (o un oggetto vuoto) a handleStream.
-            // Usa solo la configurazione dall'URL, senza fallback.
-            const result = await handleStream(type, id, config, url.origin);
+            // ✅ UNIFIED Real-Debrid Stream Endpoint
+            if (url.pathname.startsWith('/rd-stream/')) {
+                const pathParts = url.pathname.split('/');
+                const encodedConfigStr = pathParts[2];
+                const encodedMagnet = pathParts[3];
+                const seasonOrPackFlag = pathParts[4] ? pathParts[4] : null; // 'pack' or season number
+                const episodeOrFileIdx = pathParts[5] ? parseInt(pathParts[5]) : null; // episode number or fileIdx for pack
 
-            const responseTime = Date.now() - startTime;
+                // Determine type and extract parameters
+                let type, season, episode, packFileIdx;
+                if (seasonOrPackFlag === 'pack') {
+                    // Movie pack: /rd-stream/config/magnet/pack/0
+                    type = 'movie';
+                    packFileIdx = episodeOrFileIdx;
+                    season = null;
+                    episode = null;
+                } else if (seasonOrPackFlag !== null && episodeOrFileIdx !== null) {
+                    // Series: /rd-stream/config/magnet/1/5
+                    type = 'series';
+                    season = parseInt(seasonOrPackFlag);
+                    episode = episodeOrFileIdx;
+                    packFileIdx = null;
+                } else {
+                    // Single movie: /rd-stream/config/magnet
+                    type = 'movie';
+                    season = null;
+                    episode = null;
+                    packFileIdx = null;
+                }
 
-            console.log(`✅ Stream request completed in ${responseTime}ms`);
+                const workerOrigin = url.origin;
 
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('X-Response-Time', `${responseTime}ms`);
-            res.setHeader('X-Results-Count', result.streams?.length || 0);
-            return res.status(200).send(JSON.stringify(result));
-        }
+                // Initialize database for cache tracking
+                let dbEnabled = false;
+                try {
+                    dbHelper.initDatabase();
+                    dbEnabled = true;
+                } catch (error) {
+                    console.warn('⚠️ [DB] Failed to initialize database for /rd-stream/');
+                }
 
-        // ✅ UNIFIED Real-Debrid Stream Endpoint
-        if (url.pathname.startsWith('/rd-stream/')) {
-            const pathParts = url.pathname.split('/');
-            const encodedConfigStr = pathParts[2];
-            const encodedMagnet = pathParts[3];
-            const seasonOrPackFlag = pathParts[4] ? pathParts[4] : null; // 'pack' or season number
-            const episodeOrFileIdx = pathParts[5] ? parseInt(pathParts[5]) : null; // episode number or fileIdx for pack
-
-            // Determine type and extract parameters
-            let type, season, episode, packFileIdx;
-            if (seasonOrPackFlag === 'pack') {
-                // Movie pack: /rd-stream/config/magnet/pack/0
-                type = 'movie';
-                packFileIdx = episodeOrFileIdx;
-                season = null;
-                episode = null;
-            } else if (seasonOrPackFlag !== null && episodeOrFileIdx !== null) {
-                // Series: /rd-stream/config/magnet/1/5
-                type = 'series';
-                season = parseInt(seasonOrPackFlag);
-                episode = episodeOrFileIdx;
-                packFileIdx = null;
-            } else {
-                // Single movie: /rd-stream/config/magnet
-                type = 'movie';
-                season = null;
-                episode = null;
-                packFileIdx = null;
-            }
-
-            const workerOrigin = url.origin;
-
-            // Initialize database for cache tracking
-            let dbEnabled = false;
-            try {
-                dbHelper.initDatabase();
-                dbEnabled = true;
-            } catch (error) {
-                console.warn('⚠️ [DB] Failed to initialize database for /rd-stream/');
-            }
-
-            const htmlResponse = (title, message, isError = false) => `
+                const htmlResponse = (title, message, isError = false) => `
                 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
                 <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
                 </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 
-            let userConfig = {};
-            res.setHeader('Content-Type', 'text/html');
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
-            }
-
-            if (!userConfig.rd_key) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Real-Debrid non è stata configurata.', true));
-            }
-
-            if (!encodedMagnet) {
-                return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
-            }
-
-            try {
-                const magnetLink = decodeURIComponent(encodedMagnet);
-                const infoHash = extractInfoHash(magnetLink);
-                if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
-
-                const realdebrid = new RealDebrid(userConfig.rd_key);
-
-                console.log(`[RealDebrid] Resolving ${infoHash}`);
-
-                // 🔥 SMART REUSE: Use existing torrent but ensure ALL files are selected
-                let torrentId;
-                const existingTorrent = await realdebrid._findExistingTorrent(infoHash);
-
-                if (existingTorrent && existingTorrent.status !== 'error') {
-                    torrentId = existingTorrent.id;
-                    console.log(`♻️ [RD] Reusing existing torrent: ${torrentId} (status: ${existingTorrent.status})`);
-                } else {
-                    // STEP 1: Add magnet (RD will use cache if available)
-                    console.log(`[RealDebrid] Adding new magnet...`);
-                    try {
-                        const addResponse = await realdebrid.addMagnet(magnetLink);
-                        torrentId = addResponse.id;
-                    } catch (addError) {
-                        // 🔥 Handle error 19: torrent already exists
-                        if (addError.error_code === 19) {
-                            console.log(`[RealDebrid] Error 19: torrent already added, finding existing...`);
-                            const retryTorrent = await realdebrid._findExistingTorrent(infoHash);
-                            if (retryTorrent) torrentId = retryTorrent.id;
-                        } else {
-                            throw addError;
-                        }
-                    }
+                let userConfig = {};
+                res.setHeader('Content-Type', 'text/html');
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
                 }
 
-                if (!torrentId) throw new Error('Failed to get torrent ID');
+                if (!userConfig.rd_key) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Real-Debrid non è stata configurata.', true));
+                }
 
-                // STEP 2: Get torrent info
-                let torrent = await realdebrid.getTorrentInfo(torrentId);
+                if (!encodedMagnet) {
+                    return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
+                }
 
-                // STEP 3: Handle file selection if needed (like Torrentio _selectTorrentFiles)
-                let targetFile = null;
+                try {
+                    const magnetLink = decodeURIComponent(encodedMagnet);
+                    const infoHash = extractInfoHash(magnetLink);
+                    if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
 
-                if (torrent.status === 'waiting_files_selection') {
-                    console.log(`[RealDebrid] Selecting files...`);
-                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+                    const realdebrid = new RealDebrid(userConfig.rd_key);
 
-                    const videoFiles = (torrent.files || [])
-                        .filter(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            return videoExtensions.some(ext => lowerPath.endsWith(ext));
-                        })
-                        .filter(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
-                        })
-                        .sort((a, b) => b.bytes - a.bytes);
+                    console.log(`[RealDebrid] Resolving ${infoHash}`);
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx if provided
-                    if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
-                        console.log(`[RealDebrid] 🎬 Pack movie - selecting file at index ${packFileIdx}`);
-                        targetFile = videoFiles[packFileIdx];
-                        if (targetFile) {
-                            console.log(`[RealDebrid] ✅ Selected pack file [${packFileIdx}]: ${targetFile.path} (${(targetFile.bytes / 1024 / 1024).toFixed(0)}MB)`);
-                        } else {
-                            console.log(`[RealDebrid] ❌ Pack file index ${packFileIdx} not found! Available: ${videoFiles.length} files`);
-                            videoFiles.forEach((f, i) => {
-                                console.log(`  [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
-                            });
-                        }
-                    }
+                    // 🔥 SMART REUSE: Use existing torrent but ensure ALL files are selected
+                    let torrentId;
+                    const existingTorrent = await realdebrid._findExistingTorrent(infoHash);
 
-                    // ✅ PRIORITY 2: For series episodes, use pattern matching to find the correct file
-                    if (!targetFile && season && episode) {
-                        const seasonStr = String(season).padStart(2, '0');
-                        const episodeStr = String(episode).padStart(2, '0');
-                        console.log(`[RealDebrid] 🔍 Looking for S${seasonStr}E${episodeStr} (patterns: s${seasonStr}e${episodeStr}, ${season}x${episodeStr}, ${season}x${episode}, episodio.${episode})`);
-
-                        // Log all available files for debugging
-                        console.log(`[RealDebrid] 📂 Available files (${videoFiles.length}):`);
-                        videoFiles.forEach((f, i) => {
-                            const filename = f.path.split('/').pop();
-                            console.log(`  ${i + 1}. ${filename} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
-                        });
-
-                        // Try to find file matching the episode with STRICT patterns (word boundaries)
-                        targetFile = videoFiles.find(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            const lowerFilename = file.path.split('/').pop().toLowerCase();
-
-                            // Use regex with word boundaries to avoid partial matches like e1 matching e11
-                            // S07E01 should NOT match S07E11 or S07E10
-                            const patterns = [
-                                // Standard: S08E02 (with word boundary after episode number)
-                                new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
-                                // New: S08EP02 (Common in Italian releases)
-                                new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
-                                // Compact: 8x02 (with leading zero, word boundary)
-                                new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
-                                // Compact: 8x2 (without leading zero, word boundary)
-                                new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
-                                // Dotted: s08.e02
-                                new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
-                                // Spaced: Season 8 Episode 2
-                                new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
-                                // Italian: Stagione 8 Episodio 2
-                                new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
-                                // Episodio: episodio.2 or episodio 2
-                                new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
-                                // Compact numbers: 802 (surrounded by non-digits)
-                                new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
-                            ];
-
-                            const matches = patterns.some(pattern => pattern.test(lowerPath));
-
-                            if (matches) {
-                                console.log(`[RealDebrid] ✅ MATCHED: ${file.path}`);
+                    if (existingTorrent && existingTorrent.status !== 'error') {
+                        torrentId = existingTorrent.id;
+                        console.log(`♻️ [RD] Reusing existing torrent: ${torrentId} (status: ${existingTorrent.status})`);
+                    } else {
+                        // STEP 1: Add magnet (RD will use cache if available)
+                        console.log(`[RealDebrid] Adding new magnet...`);
+                        try {
+                            const addResponse = await realdebrid.addMagnet(magnetLink);
+                            torrentId = addResponse.id;
+                        } catch (addError) {
+                            // 🔥 Handle error 19: torrent already exists
+                            if (addError.error_code === 19) {
+                                console.log(`[RealDebrid] Error 19: torrent already added, finding existing...`);
+                                const retryTorrent = await realdebrid._findExistingTorrent(infoHash);
+                                if (retryTorrent) torrentId = retryTorrent.id;
+                            } else {
+                                throw addError;
                             }
-
-                            return matches;
-                        });
-
-                        if (targetFile) {
-                            console.log(`[RealDebrid] ✅ Selected episode file: ${targetFile.path}`);
-                        } else {
-                            console.log(`[RealDebrid] ❌ NO MATCH FOUND - Pattern matching failed for S${seasonStr}E${episodeStr}`);
-                            console.log(`[RealDebrid] ⚠️ Falling back to largest file (this is probably wrong!)`);
                         }
                     }
 
-                    // ✅ PRIORITY 3: Fallback - use largest file
-                    if (!targetFile) {
-                        targetFile = videoFiles[0] || torrent.files.sort((a, b) => b.bytes - a.bytes)[0];
-                        if (season && episode) {
-                            console.log(`[RealDebrid] ⚠️ Fallback: Using largest video file`);
-                        }
-                    }
+                    if (!torrentId) throw new Error('Failed to get torrent ID');
 
-                    if (targetFile) {
-                        // ✅ For series: Select ALL video files (not just target) so all episodes are available
-                        if (type === 'series' && videoFiles.length > 1) {
-                            const allVideoIds = videoFiles.map(f => f.id).join(',');
-                            console.log(`[RealDebrid] 📦 Selecting all ${videoFiles.length} video files for series pack`);
-                            await realdebrid.selectFiles(torrent.id, allVideoIds);
-                        } else {
-                            // For movies or single-file torrents, select only the target
-                            await realdebrid.selectFiles(torrent.id, targetFile.id);
-                        }
-                        torrent = await realdebrid.getTorrentInfo(torrent.id);
-                    }
-                }
+                    // STEP 2: Get torrent info
+                    let torrent = await realdebrid.getTorrentInfo(torrentId);
 
-                // STEP 4: Check torrent status (like Torrentio statusReady/statusDownloading)
-                const statusReady = ['downloaded', 'dead'].includes(torrent.status);
-                const statusDownloading = ['downloading', 'uploading', 'queued'].includes(torrent.status);
-                const statusMagnetError = torrent.status === 'magnet_error';
-                const statusError = ['error', 'magnet_error'].includes(torrent.status);
-                const statusOpening = torrent.status === 'magnet_conversion';
-                const statusWaitingSelection = torrent.status === 'waiting_files_selection';
+                    // STEP 3: Handle file selection if needed (like Torrentio _selectTorrentFiles)
+                    let targetFile = null;
 
-                if (statusReady) {
-                    // ✅ READY: Unrestrict and stream
-                    console.log(`[RealDebrid] Torrent ready, unrestricting...`);
+                    if (torrent.status === 'waiting_files_selection') {
+                        console.log(`[RealDebrid] Selecting files...`);
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+                        const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
 
-                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
-
-                    const selectedFiles = (torrent.files || []).filter(file => file.selected === 1);
-                    const allVideoFiles = (torrent.files || []).filter(file => {
-                        const lowerPath = file.path.toLowerCase();
-                        return videoExtensions.some(ext => lowerPath.endsWith(ext)) &&
-                            (!junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024);
-                    });
-
-                    const videos = selectedFiles
-                        .filter(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            return videoExtensions.some(ext => lowerPath.endsWith(ext));
-                        })
-                        .filter(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
-                        })
-                        .sort((a, b) => b.bytes - a.bytes);
-
-                    // 🔥 CRITICAL FIX: If series pack has incomplete file selection, add missing files
-                    if (type === 'series' && videos.length < allVideoFiles.length && allVideoFiles.length > 1) {
-                        console.log(`⚠️ [RD] Incomplete file selection: ${videos.length}/${allVideoFiles.length} videos selected`);
-                        console.log(`🔄 [RD] Adding ${allVideoFiles.length - videos.length} missing video files...`);
-
-                        const allVideoIds = allVideoFiles.map(f => f.id).join(',');
-                        await realdebrid.selectFiles(torrent.id, allVideoIds);
-
-                        // Re-fetch torrent info with updated selection
-                        torrent = await realdebrid.getTorrentInfo(torrent.id);
-                        console.log(`✅ [RD] Updated file selection: ${allVideoFiles.length} videos now selected`);
-
-                        // Refresh videos list
-                        const updatedSelectedFiles = (torrent.files || []).filter(file => file.selected === 1);
-                        videos.length = 0; // Clear array
-                        videos.push(...updatedSelectedFiles
+                        const videoFiles = (torrent.files || [])
                             .filter(file => {
                                 const lowerPath = file.path.toLowerCase();
                                 return videoExtensions.some(ext => lowerPath.endsWith(ext));
@@ -9002,661 +9091,814 @@ export default async function handler(req, res) {
                                 const lowerPath = file.path.toLowerCase();
                                 return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
                             })
-                            .sort((a, b) => b.bytes - a.bytes));
-                    }
+                            .sort((a, b) => b.bytes - a.bytes);
 
-                    let targetFile = null;
-
-                    // ✅ For series episodes, use pattern matching to find the correct file
-                    if (season && episode) {
-                        const seasonStr = String(season).padStart(2, '0');
-                        const episodeStr = String(episode).padStart(2, '0');
-                        console.log(`[RealDebrid] 🔍 Looking for S${seasonStr}E${episodeStr} (patterns: s${seasonStr}e${episodeStr}, ${season}x${episodeStr}, ${season}x${episode}, episodio.${episode})`);
-
-                        // Log all available files for debugging
-                        console.log(`[RealDebrid] 📂 Selected files (${videos.length}):`);
-                        videos.forEach((f, i) => {
-                            const filename = f.path.split('/').pop();
-                            console.log(`  ${i + 1}. ${filename} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
-                        });
-
-                        targetFile = videos.find(file => {
-                            const lowerPath = file.path.toLowerCase();
-                            const lowerFilename = file.path.split('/').pop().toLowerCase();
-
-                            // Use regex with word boundaries to avoid partial matches like e1 matching e11
-                            // S07E01 should NOT match S07E11 or S07E10
-                            const patterns = [
-                                // Standard: S08E02 (with word boundary after episode number)
-                                new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
-                                // New: S08EP02 (Common in Italian releases)
-                                new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
-                                // Compact: 8x02 (with leading zero, word boundary)
-                                new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
-                                // Compact: 8x2 (without leading zero, word boundary)
-                                new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
-                                // Dotted: s08.e02
-                                new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
-                                // Spaced: Season 8 Episode 2
-                                new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
-                                // Italian: Stagione 8 Episodio 2
-                                new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
-                                // Episodio: episodio.2 or episodio 2
-                                new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
-                                // Compact numbers: 802 (surrounded by non-digits)
-                                new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
-                            ];
-
-                            const matches = patterns.some(pattern => pattern.test(lowerPath));
-
-                            if (matches) {
-                                console.log(`[RealDebrid] ✅ MATCHED: ${file.path}`);
+                        // ✅ PRIORITY 1: For movie packs, use packFileIdx if provided
+                        if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
+                            console.log(`[RealDebrid] 🎬 Pack movie - selecting file at index ${packFileIdx}`);
+                            targetFile = videoFiles[packFileIdx];
+                            if (targetFile) {
+                                console.log(`[RealDebrid] ✅ Selected pack file [${packFileIdx}]: ${targetFile.path} (${(targetFile.bytes / 1024 / 1024).toFixed(0)}MB)`);
+                            } else {
+                                console.log(`[RealDebrid] ❌ Pack file index ${packFileIdx} not found! Available: ${videoFiles.length} files`);
+                                videoFiles.forEach((f, i) => {
+                                    console.log(`  [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
+                                });
                             }
+                        }
 
-                            return matches;
-                        });
+                        // ✅ PRIORITY 2: For series episodes, use pattern matching to find the correct file
+                        if (!targetFile && season && episode) {
+                            const seasonStr = String(season).padStart(2, '0');
+                            const episodeStr = String(episode).padStart(2, '0');
+                            console.log(`[RealDebrid] 🔍 Looking for S${seasonStr}E${episodeStr} (patterns: s${seasonStr}e${episodeStr}, ${season}x${episodeStr}, ${season}x${episode}, episodio.${episode})`);
+
+                            // Log all available files for debugging
+                            console.log(`[RealDebrid] 📂 Available files (${videoFiles.length}):`);
+                            videoFiles.forEach((f, i) => {
+                                const filename = f.path.split('/').pop();
+                                console.log(`  ${i + 1}. ${filename} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
+                            });
+
+                            // Try to find file matching the episode with STRICT patterns (word boundaries)
+                            targetFile = videoFiles.find(file => {
+                                const lowerPath = file.path.toLowerCase();
+                                const lowerFilename = file.path.split('/').pop().toLowerCase();
+
+                                // Use regex with word boundaries to avoid partial matches like e1 matching e11
+                                // S07E01 should NOT match S07E11 or S07E10
+                                const patterns = [
+                                    // Standard: S08E02 (with word boundary after episode number)
+                                    new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
+                                    // New: S08EP02 (Common in Italian releases)
+                                    new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
+                                    // Compact: 8x02 (with leading zero, word boundary)
+                                    new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
+                                    // Compact: 8x2 (without leading zero, word boundary)
+                                    new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
+                                    // Dotted: s08.e02
+                                    new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
+                                    // Spaced: Season 8 Episode 2
+                                    new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
+                                    // Italian: Stagione 8 Episodio 2
+                                    new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
+                                    // Episodio: episodio.2 or episodio 2
+                                    new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
+                                    // Compact numbers: 802 (surrounded by non-digits)
+                                    new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
+                                ];
+
+                                const matches = patterns.some(pattern => pattern.test(lowerPath));
+
+                                if (matches) {
+                                    console.log(`[RealDebrid] ✅ MATCHED: ${file.path}`);
+                                }
+
+                                return matches;
+                            });
+
+                            if (targetFile) {
+                                console.log(`[RealDebrid] ✅ Selected episode file: ${targetFile.path}`);
+                            } else {
+                                console.log(`[RealDebrid] ❌ NO MATCH FOUND - Pattern matching failed for S${seasonStr}E${episodeStr}`);
+                                console.log(`[RealDebrid] ⚠️ Falling back to largest file (this is probably wrong!)`);
+                            }
+                        }
+
+                        // ✅ PRIORITY 3: Fallback - use largest file
+                        if (!targetFile) {
+                            targetFile = videoFiles[0] || torrent.files.sort((a, b) => b.bytes - a.bytes)[0];
+                            if (season && episode) {
+                                console.log(`[RealDebrid] ⚠️ Fallback: Using largest video file`);
+                            }
+                        }
 
                         if (targetFile) {
-                            console.log(`[RealDebrid] ✅ Selected episode file: ${targetFile.path}`);
-                        } else {
-                            console.log(`[RealDebrid] ❌ NO MATCH FOUND - Pattern matching failed for S${seasonStr}E${episodeStr}`);
-                            console.log(`[RealDebrid] ⚠️ Falling back to largest file (this is probably wrong!)`);
-
-                            // 🔥 SMART FIX: For series, if episode not found, delete torrent and re-add with all files
-                            if (type === 'series' && selectedFiles.length < 5) { // Probably only 1 episode was selected
-                                console.log(`[RealDebrid] 🔄 Torrent has only ${selectedFiles.length} selected file(s), re-adding to select all episodes...`);
-
-                                try {
-                                    // Delete the existing torrent
-                                    await realdebrid.deleteTorrent(torrent.id);
-                                    console.log(`[RealDebrid] 🗑️ Deleted torrent ${torrent.id}`);
-
-                                    // Re-add the magnet and force file selection
-                                    console.log(`[RealDebrid] ➕ Re-adding magnet to select all files...`);
-                                    const newTorrent = await realdebrid.addMagnet(magnetLink);
-
-                                    // Wait for magnet conversion
-                                    let retries = 0;
-                                    let convertedTorrent = newTorrent;
-                                    while (convertedTorrent.status === 'magnet_conversion' && retries < 10) {
-                                        await new Promise(resolve => setTimeout(resolve, 1000));
-                                        convertedTorrent = await realdebrid.getTorrentInfo(newTorrent.id);
-                                        retries++;
-                                    }
-
-                                    if (convertedTorrent.status === 'waiting_files_selection') {
-                                        // Select ALL video files
-                                        const allFiles = convertedTorrent.files || [];
-                                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-                                        const allVideoFiles = allFiles.filter(file => {
-                                            const lowerPath = file.path.toLowerCase();
-                                            return videoExtensions.some(ext => lowerPath.endsWith(ext));
-                                        });
-
-                                        if (allVideoFiles.length > 0) {
-                                            const allVideoIds = allVideoFiles.map(f => f.id).join(',');
-                                            console.log(`[RealDebrid] 📦 Selecting all ${allVideoFiles.length} video files`);
-                                            await realdebrid.selectFiles(convertedTorrent.id, allVideoIds);
-
-                                            // ✅ SAVE FILE INFO: Save ALL files from the pack NOW (before redirect)
-                                            if (dbEnabled && infoHash) {
-                                                try {
-                                                    const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
-
-                                                    if (episodeImdbId) {
-                                                        console.log(`💾 [DB] Saving ALL ${allVideoFiles.length} files from re-added pack...`);
-
-                                                        for (const file of allVideoFiles) {
-                                                            const filename = file.path.split('/').pop();
-                                                            const episodeMatch = filename.match(/[se](\d{1,2})[ex](\d{1,2})|stagione[\s._-]*(\d{1,2})[\s._-]*episodio[\s._-]*(\d{1,2})|(\d{1,2})x(\d{1,2})/i);
-
-                                                            if (episodeMatch) {
-                                                                let fileSeason, fileEpisode;
-                                                                if (episodeMatch[1] && episodeMatch[2]) {
-                                                                    fileSeason = parseInt(episodeMatch[1]);
-                                                                    fileEpisode = parseInt(episodeMatch[2]);
-                                                                } else if (episodeMatch[3] && episodeMatch[4]) {
-                                                                    fileSeason = parseInt(episodeMatch[3]);
-                                                                    fileEpisode = parseInt(episodeMatch[4]);
-                                                                } else if (episodeMatch[5] && episodeMatch[6]) {
-                                                                    fileSeason = parseInt(episodeMatch[5]);
-                                                                    fileEpisode = parseInt(episodeMatch[6]);
-                                                                }
-
-                                                                if (fileSeason === parseInt(season)) {
-                                                                    const fileInfo = {
-                                                                        imdbId: episodeImdbId,
-                                                                        season: fileSeason,
-                                                                        episode: fileEpisode
-                                                                    };
-
-                                                                    await dbHelper.updateTorrentFileInfo(
-                                                                        infoHash,
-                                                                        file.id,
-                                                                        file.path,
-                                                                        fileInfo
-                                                                    );
-
-                                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename}`);
-                                                                }
-                                                            }
-                                                        }
-
-                                                        console.log(`✅ [DB] Finished saving all files from re-added pack`);
-                                                    }
-                                                } catch (fileErr) {
-                                                    console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
-                                                }
-                                            }
-
-                                            // Redirect to same URL to restart the flow
-                                            console.log(`[RealDebrid] 🔄 Reloading stream with all files selected...`);
-                                            return res.redirect(302, req.url);
-                                        }
-                                    }
-
-                                    console.log(`[RealDebrid] ❌ Failed to re-add torrent properly`);
-                                } catch (error) {
-                                    console.error(`[RealDebrid] ❌ Error re-adding torrent:`, error.message);
-                                }
+                            // ✅ For series: Select ALL video files (not just target) so all episodes are available
+                            if (type === 'series' && videoFiles.length > 1) {
+                                const allVideoIds = videoFiles.map(f => f.id).join(',');
+                                console.log(`[RealDebrid] 📦 Selecting all ${videoFiles.length} video files for series pack`);
+                                await realdebrid.selectFiles(torrent.id, allVideoIds);
+                            } else {
+                                // For movies or single-file torrents, select only the target
+                                await realdebrid.selectFiles(torrent.id, targetFile.id);
                             }
+                            torrent = await realdebrid.getTorrentInfo(torrent.id);
                         }
                     }
 
-                    // ✅ PRIORITY 3: Fallback - use largest file
-                    if (!targetFile) {
-                        targetFile = videos[0] || selectedFiles.sort((a, b) => b.bytes - a.bytes)[0];
-                        if (season && episode) {
-                            console.log(`[RealDebrid] ⚠️ Fallback: Using largest video file`);
-                        }
-                    }
-
-                    if (!targetFile) {
-                        console.log(`[RealDebrid] No video file found`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-
-                    // 🔥 CRITICAL FIX: Use SELECTED files to find the correct link index!
-                    // RealDebrid returns links[] array ONLY for selected files (selected=1)
-                    // We need to find which position our targetFile is AMONG SELECTED FILES
-                    const selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
-                    const fileIndex = selectedForLink.findIndex(f => f.id === targetFile.id);
-
-                    if (fileIndex === -1) {
-                        console.log(`[RealDebrid] ❌ Target file not in selected files (file.id=${targetFile.id})`);
-                        console.log(`[RealDebrid] Selected files: ${selectedForLink.map(f => `${f.id}:${f.path.split('/').pop()}`).join(', ')}`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-
-                    console.log(`[RealDebrid] 📍 File ID: ${targetFile.id}, Selected Index: ${fileIndex}/${selectedForLink.length}, Total links: ${(torrent.links || []).length}`);
-
-                    let downloadLink = torrent.links[fileIndex];
-
-                    if (!downloadLink) {
-                        console.log(`[RealDebrid] ❌ No download link at index ${fileIndex}`);
-                        console.log(`[RealDebrid] Available links: ${(torrent.links || []).length}`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-
-                    console.log(`[RealDebrid] ✅ Using link at index ${fileIndex} for file: ${targetFile.path.split('/').pop()}`);
-
-                    const unrestricted = await realdebrid.unrestrictLink(downloadLink);
-
-                    // 🔥 Torrentio-style: Check for access denied errors
-                    if (realdebrid._isAccessDeniedError(unrestricted)) {
-                        console.log(`[RealDebrid] ❌ Access denied (error ${unrestricted.error_code})`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/access_denied_v2.mp4`);
-                    }
-
-                    // 🔥 Torrentio-style: Check for infringing file errors
-                    if (realdebrid._isInfringingFileError(unrestricted)) {
-                        console.log(`[RealDebrid] ❌ Infringing file (error ${unrestricted.error_code})`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/infringing_file_v2.mp4`);
-                    }
-
-                    // 🔥 Torrentio-style: Check for limit exceeded
-                    if (realdebrid._isLimitExceededError(unrestricted)) {
-                        console.log(`[RealDebrid] ❌ Limit exceeded (error ${unrestricted.error_code})`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/limit_exceeded_v2.mp4`);
-                    }
-
-                    // 🔥 Torrentio-style: Check for torrent too big
-                    if (realdebrid._isTorrentTooBigError(unrestricted)) {
-                        console.log(`[RealDebrid] ❌ Torrent too big (error ${unrestricted.error_code})`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/torrent_too_big_v2.mp4`);
-                    }
-
-                    // 🔥 Torrentio-style: Check for failed download
-                    if (realdebrid._isFailedDownloadError(unrestricted)) {
-                        console.log(`[RealDebrid] ❌ Failed download (error ${unrestricted.error_code})`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-
-                    // ✅ CACHE SUCCESS: Refresh cache timestamp (+10 days from now)
-                    if (dbEnabled && infoHash) {
-                        try {
-                            // Refresh cache timestamp - extends validity to 10 more days
-                            await dbHelper.refreshRdCacheTimestamp(infoHash);
-                        } catch (dbErr) {
-                            console.error(`❌ [DB] Error refreshing cache: ${dbErr.message}`, dbErr);
-                        }
-
-                        // ✅ SAVE FILE INFO: Save ALL files from the pack for future lookups
-                        if (type === 'series' && season && torrent && torrent.files) {
-                            try {
-                                // Get imdbId from DB for this torrent
-                                const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
-
-                                if (episodeImdbId) {
-                                    // ✅ Check if files are already saved for this pack (avoid duplicate inserts)
-                                    const existingFiles = await dbHelper.searchEpisodeFiles(episodeImdbId, parseInt(season), 1);
-                                    const packAlreadySaved = existingFiles.some(f => f.info_hash?.toLowerCase() === infoHash.toLowerCase());
-
-                                    if (packAlreadySaved) {
-                                        console.log(`💾 [DB] Pack files already saved for ${infoHash}, skipping bulk save`);
-                                    } else {
-                                        console.log(`💾 [DB] Saving ALL ${torrent.files.length} files from pack...`);
-
-                                        // Iterate through ALL files in the pack
-                                        for (const file of torrent.files) {
-                                            // Only process video files
-                                            if (!file.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i)) {
-                                                continue;
-                                            }
-
-                                            // Try to extract episode number from filename
-                                            const filename = file.path.split('/').pop();
-                                            const episodeMatch = filename.match(/[se](\d{1,2})[ex](\d{1,2})|stagione[\s._-]*(\d{1,2})[\s._-]*episodio[\s._-]*(\d{1,2})|(\d{1,2})x(\d{1,2})/i);
-
-                                            if (episodeMatch) {
-                                                // Extract season and episode from match
-                                                let fileSeason, fileEpisode;
-                                                if (episodeMatch[1] && episodeMatch[2]) {
-                                                    fileSeason = parseInt(episodeMatch[1]);
-                                                    fileEpisode = parseInt(episodeMatch[2]);
-                                                } else if (episodeMatch[3] && episodeMatch[4]) {
-                                                    fileSeason = parseInt(episodeMatch[3]);
-                                                    fileEpisode = parseInt(episodeMatch[4]);
-                                                } else if (episodeMatch[5] && episodeMatch[6]) {
-                                                    fileSeason = parseInt(episodeMatch[5]);
-                                                    fileEpisode = parseInt(episodeMatch[6]);
-                                                }
-
-                                                // Only save if it matches the current season
-                                                if (fileSeason === parseInt(season)) {
-                                                    const fileInfo = {
-                                                        imdbId: episodeImdbId,
-                                                        season: fileSeason,
-                                                        episode: fileEpisode
-                                                    };
-
-                                                    await dbHelper.updateTorrentFileInfo(
-                                                        infoHash,
-                                                        file.id,
-                                                        file.path,
-                                                        fileInfo
-                                                    );
-
-                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename}`);
-                                                }
-                                            }
-                                        }
-
-                                        console.log(`✅ [DB] Finished saving all files from pack`);
-                                    }
-                                } else {
-                                    console.warn(`⚠️ [DB] No imdbId found for pack, skipping bulk save`);
-                                }
-                            } catch (fileErr) {
-                                console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
-                            }
-                        }
-
-                        // ✅ SAVE PACK FILES FOR MOVIES (Trilogies, Collections, etc.)
-                        // This saves the mapping between pack hash and individual film IMDb IDs
-                        if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined && targetFile && torrent && torrent.files) {
-                            try {
-                                // Get IMDb ID of the movie being played
-                                const movieImdbId = await dbHelper.getImdbIdByHash(infoHash);
-
-                                if (movieImdbId) {
-                                    console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
-
-                                    // Save this specific file mapping to pack_files table
-                                    const packFileData = [{
-                                        pack_hash: infoHash.toLowerCase(),
-                                        imdb_id: movieImdbId,
-                                        file_index: targetFile.id, // RealDebrid file.id
-                                        file_path: targetFile.path,
-                                        file_size: targetFile.bytes || 0
-                                    }];
-
-                                    await dbHelper.insertPackFiles(packFileData);
-                                    console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file ${targetFile.id} in pack ${infoHash}`);
-
-                                    // Also update the all_imdb_ids array on the torrents table
-                                    await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());
-                                } else {
-                                    console.warn(`⚠️ [DB] No IMDb ID found for movie pack, skipping save`);
-                                }
-                            } catch (packErr) {
-                                console.error(`❌ [DB] Error saving pack file mapping: ${packErr.message}`);
-                                // Don't fail the stream - this is a non-critical operation
-                            }
-                        }
-                    }
-
-                    // Check if it's a RAR archive
-                    if (unrestricted.download?.endsWith('.rar') || unrestricted.download?.endsWith('.zip')) {
-                        console.log(`[RealDebrid] Failed: RAR archive`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
-                    }
-
-                    let finalUrl = unrestricted.download;
-
-                    // IMPORTANT: Apply MediaFlow proxy for ALL RealDebrid streams if configured
-                    if (userConfig.mediaflow_url) {
-                        try {
-                            finalUrl = await proxyThroughMediaFlow(
-                                unrestricted.download,
-                                { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' },
-                                null // filename will be extracted from URL
-                            );
-                            console.log(`[RealDebrid] MediaFlow proxy applied to all streams`);
-                        } catch (mfError) {
-                            console.error(`❌ [RealDebrid] MediaFlow proxy failed: ${mfError.message}`);
-                            // 🛑 STOP! Do not fallback to direct link to avoid bans.
-                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                        }
-                    }
-
-                    // ⏩ INTROSKIP: Wrap in HLS proxy if enabled for series
-                    if (userConfig.introskip_enabled && type === 'series' && season && episode) {
-                        try {
-                            // Get imdbId for this torrent to lookup intro
-                            const episodeImdbId = dbEnabled ? await dbHelper.getImdbIdByHash(infoHash) : null;
-                            if (episodeImdbId && episodeImdbId.startsWith('tt')) {
-                                const introDataRD = await introSkip.lookupIntro(episodeImdbId, parseInt(season), parseInt(episode));
-                                if (introDataRD && introDataRD.end_sec > 0) {
-                                    // Wrap in HLS proxy for real intro skipping
-                                    const encodedStream = encodeURIComponent(finalUrl);
-                                    finalUrl = `${workerOrigin}/introskip/hls.m3u8?stream=${encodedStream}&start=${introDataRD.start_sec}&end=${introDataRD.end_sec}`;
-                                    console.log(`⏩ [IntroSkip] Wrapped in HLS proxy: ${introDataRD.start_sec}s - ${introDataRD.end_sec}s`);
-                                }
-                            }
-                        } catch (introErr) {
-                            console.warn(`⏩ [IntroSkip] Error applying HLS proxy: ${introErr.message}`);
-                        }
-                    }
-
-                    console.log(`[RealDebrid] Redirecting to stream`);
-                    return res.redirect(302, finalUrl);
-
-                } else if (statusDownloading || statusOpening || statusWaitingSelection) {
-                    // ⏳ DOWNLOADING: Show placeholder video
-                    console.log(`[RealDebrid] Torrent is downloading (status: ${torrent.status})...`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
-
-                } else if (statusMagnetError) {
-                    // ❌ MAGNET ERROR: Show failed opening video
-                    console.log(`[RealDebrid] Magnet error`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_opening_v2.mp4`);
-
-                } else if (statusError) {
-                    // ❌ ERROR: Show failed video
-                    console.log(`[RealDebrid] Torrent failed`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                }
-
-                // Fallback: something went wrong
-                console.log(`[RealDebrid] Unknown state (${torrent.status}), showing failed video`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-
-            } catch (error) {
-                console.error('👑 ❌ RD stream error:', error);
-
-                // 🔥 Torrentio-style: Check for specific error codes
-                const realdebrid = new RealDebrid(userConfig.rd_key || '');
-
-                if (realdebrid._isAccessDeniedError(error)) {
-                    console.log(`[RealDebrid] ❌ Access denied (error ${error.error_code})`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/access_denied_v2.mp4`);
-                }
-
-                if (realdebrid._isInfringingFileError(error)) {
-                    console.log(`[RealDebrid] ❌ Infringing file (error ${error.error_code})`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/infringing_file_v2.mp4`);
-                }
-
-                if (realdebrid._isLimitExceededError(error)) {
-                    console.log(`[RealDebrid] ❌ Limit exceeded (error ${error.error_code})`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/limit_exceeded_v2.mp4`);
-                }
-
-                if (realdebrid._isTorrentTooBigError(error)) {
-                    console.log(`[RealDebrid] ❌ Torrent too big (error ${error.error_code})`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/torrent_too_big_v2.mp4`);
-                }
-
-                if (realdebrid._isFailedDownloadError(error)) {
-                    console.log(`[RealDebrid] ❌ Failed download (error ${error.error_code})`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                }
-
-                // Handle text-based error messages (legacy)
-                const errorMsg = error.message?.toLowerCase() || '';
-
-                if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
-                    // Too many requests - show downloading placeholder
-                    console.log(`[RealDebrid] Rate limited, showing downloading placeholder`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
-                }
-
-                if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
-                    // Torrent not available or invalid
-                    console.log(`[RealDebrid] Torrent not available (400/404)`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                }
-
-                if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
-                    // Archive format not supported
-                    console.log(`[RealDebrid] Archive format not supported`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
-                }
-
-                if (errorMsg.includes('magnet')) {
-                    // Magnet error
-                    console.log(`[RealDebrid] Magnet conversion error`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_opening_v2.mp4`);
-                }
-
-                // Generic error: show failed placeholder
-                console.log(`[RealDebrid] Generic error, showing failed video`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-            }
-        }
-
-        // Endpoint to handle adding magnets to Real-Debrid for Android/Web compatibility
-        if (url.pathname.startsWith('/rd-add/')) {
-            const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-add', 'config_string', 'magnet_link']
-            const encodedConfigStr = pathParts[2];
-            const encodedMagnet = pathParts[3];
-            const workerOrigin = url.origin; // For MediaFlow proxy URL generation
-
-            const htmlResponse = (title, message, isError = false) => `
-                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
-                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
-                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
-
-            let userConfig = {};
-            res.setHeader('Content-Type', 'text/html');
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
-            }
-
-            if (!userConfig.rd_key) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Real-Debrid non è stata configurata. Impossibile aggiungere il torrent.', true));
-            }
-
-            if (!encodedMagnet) {
-                return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
-            }
-
-            try {
-                // ... (tutta la logica interna di /rd-add/ rimane invariata) ...
-                // ...
-
-                const magnetLink = decodeURIComponent(encodedMagnet);
-                const infoHash = extractInfoHash(magnetLink);
-                if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
-
-                const realdebrid = new RealDebrid(userConfig.rd_key);
-
-                // --- Robust Torrent Handling ---
-                const userTorrents = await realdebrid.getTorrents();
-                let torrent = userTorrents.find(t => t.hash.toLowerCase() === infoHash.toLowerCase());
-
-                if (torrent) {
-                    try {
-                        const errorStates = ['error', 'magnet_error', 'virus', 'dead'];
-                        const torrentInfo = await realdebrid.getTorrentInfo(torrent.id);
-                        if (errorStates.includes(torrentInfo.status)) {
-                            console.log(`🗑️ Found stale/failed torrent (ID: ${torrent.id}, Status: ${torrentInfo.status}). Deleting it.`);
-                            await realdebrid.deleteTorrent(torrent.id);
-                            torrent = null; // Force re-adding
-                        }
-                    } catch (e) {
-                        console.warn(`⚠️ Could not get info for existing torrent ${torrent.id}. Deleting it as a precaution.`, e.message);
-                        await realdebrid.deleteTorrent(torrent.id).catch(err => console.error(`Error during precautionary delete: ${err.message}`));
-                        torrent = null; // Force re-adding
-                    }
-                }
-
-                let torrentId;
-                if (!torrent) {
-                    console.log(`ℹ️ Adding new torrent with hash ${infoHash}.`);
-                    const addResponse = await realdebrid.addMagnet(magnetLink);
-                    torrentId = addResponse.id;
-                    if (!torrentId) throw new Error('Impossibile ottenere l\'ID del torrent da Real-Debrid.');
-                } else {
-                    torrentId = torrent.id;
-                    console.log(`ℹ️ Using existing torrent. ID: ${torrentId}`);
-                }
-
-                let torrentInfo;
-                let actionTaken = false;
-                for (let i = 0; i < 15; i++) { // Poll for up to ~30 seconds
-                    if (i === 0) await new Promise(resolve => setTimeout(resolve, 1500));
-
-                    torrentInfo = await realdebrid.getTorrentInfo(torrentId);
-                    const status = torrentInfo.status;
-                    console.log(`[Attempt ${i + 1}/15] Torrent ${torrentId} status: ${status}`);
-
-                    if (status === 'waiting_files_selection') {
-                        console.log(`▶️ Torrent requires file selection. Selecting main video file...`);
-                        if (!torrentInfo.files || torrentInfo.files.length === 0) throw new Error('Torrent is empty or invalid.');
-
-                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                    // STEP 4: Check torrent status (like Torrentio statusReady/statusDownloading)
+                    const statusReady = ['downloaded', 'dead'].includes(torrent.status);
+                    const statusDownloading = ['downloading', 'uploading', 'queued'].includes(torrent.status);
+                    const statusMagnetError = torrent.status === 'magnet_error';
+                    const statusError = ['error', 'magnet_error'].includes(torrent.status);
+                    const statusOpening = torrent.status === 'magnet_conversion';
+                    const statusWaitingSelection = torrent.status === 'waiting_files_selection';
+
+                    if (statusReady) {
+                        // ✅ READY: Unrestrict and stream
+                        console.log(`[RealDebrid] Torrent ready, unrestricting...`);
+
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
                         const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
 
-                        const videoFiles = torrentInfo.files.filter(file => {
+                        const selectedFiles = (torrent.files || []).filter(file => file.selected === 1);
+                        const allVideoFiles = (torrent.files || []).filter(file => {
                             const lowerPath = file.path.toLowerCase();
                             return videoExtensions.some(ext => lowerPath.endsWith(ext)) &&
-                                !junkKeywords.some(junk => lowerPath.includes(junk));
+                                (!junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024);
                         });
 
-                        const fileToDownload = videoFiles.length > 0
-                            ? videoFiles.reduce((max, file) => (file.bytes > max.bytes ? file : max), videoFiles[0])
-                            : torrentInfo.files.reduce((max, file) => (file.bytes > max.bytes ? file : max), torrentInfo.files[0]);
+                        const videos = selectedFiles
+                            .filter(file => {
+                                const lowerPath = file.path.toLowerCase();
+                                return videoExtensions.some(ext => lowerPath.endsWith(ext));
+                            })
+                            .filter(file => {
+                                const lowerPath = file.path.toLowerCase();
+                                return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
+                            })
+                            .sort((a, b) => b.bytes - a.bytes);
 
-                        if (!fileToDownload) throw new Error('Impossibile determinare il file da scaricare nel torrent.');
+                        // 🔥 CRITICAL FIX: If series pack has incomplete file selection, add missing files
+                        if (type === 'series' && videos.length < allVideoFiles.length && allVideoFiles.length > 1) {
+                            console.log(`⚠️ [RD] Incomplete file selection: ${videos.length}/${allVideoFiles.length} videos selected`);
+                            console.log(`🔄 [RD] Adding ${allVideoFiles.length - videos.length} missing video files...`);
 
-                        await realdebrid.selectFiles(torrentId, fileToDownload.id);
-                        console.log(`✅ Download started for file: ${fileToDownload.path}`);
-                        actionTaken = true;
-                        break;
-                    }
+                            const allVideoIds = allVideoFiles.map(f => f.id).join(',');
+                            await realdebrid.selectFiles(torrent.id, allVideoIds);
 
-                    if (['queued', 'downloading', 'downloaded'].includes(status)) {
-                        console.log(`ℹ️ Torrent is already active (status: ${status}). No action needed.`);
-                        actionTaken = true;
-                        break;
-                    }
+                            // Re-fetch torrent info with updated selection
+                            torrent = await realdebrid.getTorrentInfo(torrent.id);
+                            console.log(`✅ [RD] Updated file selection: ${allVideoFiles.length} videos now selected`);
 
-                    if (status === 'magnet_conversion') {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                        continue;
-                    }
-
-                    const errorStates = ['error', 'magnet_error', 'virus', 'dead'];
-                    if (errorStates.includes(status)) {
-                        throw new Error(`Torrent has a critical error state: ${status}`);
-                    }
-
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-
-                if (!actionTaken) {
-                    throw new Error(`Torrent did not become active after polling. Last status: ${torrentInfo.status}`);
-                }
-
-                if (torrentInfo.status === 'downloaded') {
-                    console.log('✅ Torrent already downloaded. Getting stream link directly...');
-                    try {
-                        if (!torrentInfo.links || torrentInfo.links.length === 0) throw new Error('Torrent scaricato ma Real-Debrid non ha fornito un link.');
-
-                        let downloadLink;
-                        if (torrentInfo.links.length === 1) {
-                            downloadLink = torrentInfo.links[0];
-                        } else {
-                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
-                            const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
-                            const selectedVideoFiles = torrentInfo.files.filter(file => file.selected === 1 && videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext)) && !junkKeywords.some(junk => file.path.toLowerCase().includes(junk)));
-                            let mainFile = selectedVideoFiles.length > 0 ? selectedVideoFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null) : torrentInfo.files.filter(f => f.selected === 1).reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
-                            if (!mainFile) throw new Error('Torrent completato ma nessun file valido risulta selezionato.');
-                            const filename = mainFile.path.split('/').pop();
-                            downloadLink = torrentInfo.links.find(link => decodeURIComponent(link).endsWith(filename));
-                            if (!downloadLink) throw new Error(`Could not match filename "${filename}" to any of the available links.`);
+                            // Refresh videos list
+                            const updatedSelectedFiles = (torrent.files || []).filter(file => file.selected === 1);
+                            videos.length = 0; // Clear array
+                            videos.push(...updatedSelectedFiles
+                                .filter(file => {
+                                    const lowerPath = file.path.toLowerCase();
+                                    return videoExtensions.some(ext => lowerPath.endsWith(ext));
+                                })
+                                .filter(file => {
+                                    const lowerPath = file.path.toLowerCase();
+                                    return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
+                                })
+                                .sort((a, b) => b.bytes - a.bytes));
                         }
 
-                        const unrestricted = await realdebrid.unrestrictLink(downloadLink);
-                        let finalStreamUrl = unrestricted.download;
+                        let targetFile = null;
 
-                        // ✅ CACHE SUCCESS: Mark torrent as cached in DB (5-day TTL)
-                        if (dbEnabled && infoHash) {
-                            try {
-                                await dbHelper.updateRdCacheStatus([{ hash: infoHash, cached: true }], type);
-                                console.log(`💾 [DB] Marked ${infoHash} as RD cached (5-day TTL)`);
-                            } catch (dbErr) {
-                                console.warn(`⚠️ Failed to update DB cache status: ${dbErr.message}`);
+                        // ✅ For series episodes, use pattern matching to find the correct file
+                        if (season && episode) {
+                            const seasonStr = String(season).padStart(2, '0');
+                            const episodeStr = String(episode).padStart(2, '0');
+                            console.log(`[RealDebrid] 🔍 Looking for S${seasonStr}E${episodeStr} (patterns: s${seasonStr}e${episodeStr}, ${season}x${episodeStr}, ${season}x${episode}, episodio.${episode})`);
+
+                            // Log all available files for debugging
+                            console.log(`[RealDebrid] 📂 Selected files (${videos.length}):`);
+                            videos.forEach((f, i) => {
+                                const filename = f.path.split('/').pop();
+                                console.log(`  ${i + 1}. ${filename} (${(f.bytes / 1024 / 1024).toFixed(0)}MB)`);
+                            });
+
+                            targetFile = videos.find(file => {
+                                const lowerPath = file.path.toLowerCase();
+                                const lowerFilename = file.path.split('/').pop().toLowerCase();
+
+                                // Use regex with word boundaries to avoid partial matches like e1 matching e11
+                                // S07E01 should NOT match S07E11 or S07E10
+                                const patterns = [
+                                    // Standard: S08E02 (with word boundary after episode number)
+                                    new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
+                                    // New: S08EP02 (Common in Italian releases)
+                                    new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
+                                    // Compact: 8x02 (with leading zero, word boundary)
+                                    new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
+                                    // Compact: 8x2 (without leading zero, word boundary)
+                                    new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
+                                    // Dotted: s08.e02
+                                    new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
+                                    // Spaced: Season 8 Episode 2
+                                    new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
+                                    // Italian: Stagione 8 Episodio 2
+                                    new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
+                                    // Episodio: episodio.2 or episodio 2
+                                    new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
+                                    // Compact numbers: 802 (surrounded by non-digits)
+                                    new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
+                                ];
+
+                                const matches = patterns.some(pattern => pattern.test(lowerPath));
+
+                                if (matches) {
+                                    console.log(`[RealDebrid] ✅ MATCHED: ${file.path}`);
+                                }
+
+                                return matches;
+                            });
+
+                            if (targetFile) {
+                                console.log(`[RealDebrid] ✅ Selected episode file: ${targetFile.path}`);
+                            } else {
+                                console.log(`[RealDebrid] ❌ NO MATCH FOUND - Pattern matching failed for S${seasonStr}E${episodeStr}`);
+                                console.log(`[RealDebrid] ⚠️ Falling back to largest file (this is probably wrong!)`);
+
+                                // 🔥 SMART FIX: For series, if episode not found, delete torrent and re-add with all files
+                                if (type === 'series' && selectedFiles.length < 5) { // Probably only 1 episode was selected
+                                    console.log(`[RealDebrid] 🔄 Torrent has only ${selectedFiles.length} selected file(s), re-adding to select all episodes...`);
+
+                                    try {
+                                        // Delete the existing torrent
+                                        await realdebrid.deleteTorrent(torrent.id);
+                                        console.log(`[RealDebrid] 🗑️ Deleted torrent ${torrent.id}`);
+
+                                        // Re-add the magnet and force file selection
+                                        console.log(`[RealDebrid] ➕ Re-adding magnet to select all files...`);
+                                        const newTorrent = await realdebrid.addMagnet(magnetLink);
+
+                                        // Wait for magnet conversion
+                                        let retries = 0;
+                                        let convertedTorrent = newTorrent;
+                                        while (convertedTorrent.status === 'magnet_conversion' && retries < 10) {
+                                            await new Promise(resolve => setTimeout(resolve, 1000));
+                                            convertedTorrent = await realdebrid.getTorrentInfo(newTorrent.id);
+                                            retries++;
+                                        }
+
+                                        if (convertedTorrent.status === 'waiting_files_selection') {
+                                            // Select ALL video files
+                                            const allFiles = convertedTorrent.files || [];
+                                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+                                            const allVideoFiles = allFiles.filter(file => {
+                                                const lowerPath = file.path.toLowerCase();
+                                                return videoExtensions.some(ext => lowerPath.endsWith(ext));
+                                            });
+
+                                            if (allVideoFiles.length > 0) {
+                                                const allVideoIds = allVideoFiles.map(f => f.id).join(',');
+                                                console.log(`[RealDebrid] 📦 Selecting all ${allVideoFiles.length} video files`);
+                                                await realdebrid.selectFiles(convertedTorrent.id, allVideoIds);
+
+                                                // ✅ SAVE FILE INFO: Save ALL files from the pack NOW (before redirect)
+                                                if (dbEnabled && infoHash) {
+                                                    try {
+                                                        const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
+
+                                                        if (episodeImdbId) {
+                                                            console.log(`💾 [DB] Saving ALL ${allVideoFiles.length} files from re-added pack...`);
+
+                                                            for (const file of allVideoFiles) {
+                                                                const filename = file.path.split('/').pop();
+                                                                const episodeMatch = filename.match(/[se](\d{1,2})[ex](\d{1,2})|stagione[\s._-]*(\d{1,2})[\s._-]*episodio[\s._-]*(\d{1,2})|(\d{1,2})x(\d{1,2})/i);
+
+                                                                if (episodeMatch) {
+                                                                    let fileSeason, fileEpisode;
+                                                                    if (episodeMatch[1] && episodeMatch[2]) {
+                                                                        fileSeason = parseInt(episodeMatch[1]);
+                                                                        fileEpisode = parseInt(episodeMatch[2]);
+                                                                    } else if (episodeMatch[3] && episodeMatch[4]) {
+                                                                        fileSeason = parseInt(episodeMatch[3]);
+                                                                        fileEpisode = parseInt(episodeMatch[4]);
+                                                                    } else if (episodeMatch[5] && episodeMatch[6]) {
+                                                                        fileSeason = parseInt(episodeMatch[5]);
+                                                                        fileEpisode = parseInt(episodeMatch[6]);
+                                                                    }
+
+                                                                    if (fileSeason === parseInt(season)) {
+                                                                        const fileInfo = {
+                                                                            imdbId: episodeImdbId,
+                                                                            season: fileSeason,
+                                                                            episode: fileEpisode
+                                                                        };
+
+                                                                        await dbHelper.updateTorrentFileInfo(
+                                                                            infoHash,
+                                                                            file.id,
+                                                                            file.path,
+                                                                            fileInfo
+                                                                        );
+
+                                                                        console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename}`);
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            console.log(`✅ [DB] Finished saving all files from re-added pack`);
+                                                        }
+                                                    } catch (fileErr) {
+                                                        console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
+                                                    }
+                                                }
+
+                                                // Redirect to same URL to restart the flow
+                                                console.log(`[RealDebrid] 🔄 Reloading stream with all files selected...`);
+                                                return res.redirect(302, req.url);
+                                            }
+                                        }
+
+                                        console.log(`[RealDebrid] ❌ Failed to re-add torrent properly`);
+                                    } catch (error) {
+                                        console.error(`[RealDebrid] ❌ Error re-adding torrent:`, error.message);
+                                    }
+                                }
                             }
                         }
 
-                        // Apply MediaFlow proxy if configured
+                        // ✅ PRIORITY 3: Fallback - use largest file
+                        if (!targetFile) {
+                            targetFile = videos[0] || selectedFiles.sort((a, b) => b.bytes - a.bytes)[0];
+                            if (season && episode) {
+                                console.log(`[RealDebrid] ⚠️ Fallback: Using largest video file`);
+                            }
+                        }
+
+                        if (!targetFile) {
+                            console.log(`[RealDebrid] No video file found`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        // 🔥 CRITICAL FIX: Use SELECTED files to find the correct link index!
+                        // RealDebrid returns links[] array ONLY for selected files (selected=1)
+                        // We need to find which position our targetFile is AMONG SELECTED FILES
+                        const selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
+                        const fileIndex = selectedForLink.findIndex(f => f.id === targetFile.id);
+
+                        if (fileIndex === -1) {
+                            console.log(`[RealDebrid] ❌ Target file not in selected files (file.id=${targetFile.id})`);
+                            console.log(`[RealDebrid] Selected files: ${selectedForLink.map(f => `${f.id}:${f.path.split('/').pop()}`).join(', ')}`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        console.log(`[RealDebrid] 📍 File ID: ${targetFile.id}, Selected Index: ${fileIndex}/${selectedForLink.length}, Total links: ${(torrent.links || []).length}`);
+
+                        let downloadLink = torrent.links[fileIndex];
+
+                        if (!downloadLink) {
+                            console.log(`[RealDebrid] ❌ No download link at index ${fileIndex}`);
+                            console.log(`[RealDebrid] Available links: ${(torrent.links || []).length}`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        console.log(`[RealDebrid] ✅ Using link at index ${fileIndex} for file: ${targetFile.path.split('/').pop()}`);
+
+                        const unrestricted = await realdebrid.unrestrictLink(downloadLink);
+
+                        // 🔥 Torrentio-style: Check for access denied errors
+                        if (realdebrid._isAccessDeniedError(unrestricted)) {
+                            console.log(`[RealDebrid] ❌ Access denied (error ${unrestricted.error_code})`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/access_denied_v2.mp4`);
+                        }
+
+                        // 🔥 Torrentio-style: Check for infringing file errors
+                        if (realdebrid._isInfringingFileError(unrestricted)) {
+                            console.log(`[RealDebrid] ❌ Infringing file (error ${unrestricted.error_code})`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/infringing_file_v2.mp4`);
+                        }
+
+                        // 🔥 Torrentio-style: Check for limit exceeded
+                        if (realdebrid._isLimitExceededError(unrestricted)) {
+                            console.log(`[RealDebrid] ❌ Limit exceeded (error ${unrestricted.error_code})`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/limit_exceeded_v2.mp4`);
+                        }
+
+                        // 🔥 Torrentio-style: Check for torrent too big
+                        if (realdebrid._isTorrentTooBigError(unrestricted)) {
+                            console.log(`[RealDebrid] ❌ Torrent too big (error ${unrestricted.error_code})`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/torrent_too_big_v2.mp4`);
+                        }
+
+                        // 🔥 Torrentio-style: Check for failed download
+                        if (realdebrid._isFailedDownloadError(unrestricted)) {
+                            console.log(`[RealDebrid] ❌ Failed download (error ${unrestricted.error_code})`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        // ✅ CACHE SUCCESS: Refresh cache timestamp (+10 days from now)
+                        if (dbEnabled && infoHash) {
+                            try {
+                                // Refresh cache timestamp - extends validity to 10 more days
+                                await dbHelper.refreshRdCacheTimestamp(infoHash);
+                            } catch (dbErr) {
+                                console.error(`❌ [DB] Error refreshing cache: ${dbErr.message}`, dbErr);
+                            }
+
+                            // ✅ SAVE FILE INFO: Save ALL files from the pack for future lookups
+                            if (type === 'series' && season && torrent && torrent.files) {
+                                try {
+                                    // Get imdbId from DB for this torrent
+                                    const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
+
+                                    if (episodeImdbId) {
+                                        // ✅ Check if files are already saved for this pack (avoid duplicate inserts)
+                                        const existingFiles = await dbHelper.searchEpisodeFiles(episodeImdbId, parseInt(season), 1);
+                                        const packAlreadySaved = existingFiles.some(f => f.info_hash?.toLowerCase() === infoHash.toLowerCase());
+
+                                        if (packAlreadySaved) {
+                                            console.log(`💾 [DB] Pack files already saved for ${infoHash}, skipping bulk save`);
+                                        } else {
+                                            console.log(`💾 [DB] Saving ALL ${torrent.files.length} files from pack...`);
+
+                                            // Iterate through ALL files in the pack
+                                            for (const file of torrent.files) {
+                                                // Only process video files
+                                                if (!file.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i)) {
+                                                    continue;
+                                                }
+
+                                                // Try to extract episode number from filename
+                                                const filename = file.path.split('/').pop();
+                                                const episodeMatch = filename.match(/[se](\d{1,2})[ex](\d{1,2})|stagione[\s._-]*(\d{1,2})[\s._-]*episodio[\s._-]*(\d{1,2})|(\d{1,2})x(\d{1,2})/i);
+
+                                                if (episodeMatch) {
+                                                    // Extract season and episode from match
+                                                    let fileSeason, fileEpisode;
+                                                    if (episodeMatch[1] && episodeMatch[2]) {
+                                                        fileSeason = parseInt(episodeMatch[1]);
+                                                        fileEpisode = parseInt(episodeMatch[2]);
+                                                    } else if (episodeMatch[3] && episodeMatch[4]) {
+                                                        fileSeason = parseInt(episodeMatch[3]);
+                                                        fileEpisode = parseInt(episodeMatch[4]);
+                                                    } else if (episodeMatch[5] && episodeMatch[6]) {
+                                                        fileSeason = parseInt(episodeMatch[5]);
+                                                        fileEpisode = parseInt(episodeMatch[6]);
+                                                    }
+
+                                                    // Only save if it matches the current season
+                                                    if (fileSeason === parseInt(season)) {
+                                                        const fileInfo = {
+                                                            imdbId: episodeImdbId,
+                                                            season: fileSeason,
+                                                            episode: fileEpisode
+                                                        };
+
+                                                        await dbHelper.updateTorrentFileInfo(
+                                                            infoHash,
+                                                            file.id,
+                                                            file.path,
+                                                            fileInfo
+                                                        );
+
+                                                        console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename}`);
+                                                    }
+                                                }
+                                            }
+
+                                            console.log(`✅ [DB] Finished saving all files from pack`);
+                                        }
+                                    } else {
+                                        console.warn(`⚠️ [DB] No imdbId found for pack, skipping bulk save`);
+                                    }
+                                } catch (fileErr) {
+                                    console.error(`❌ [DB] Error saving pack files: ${fileErr.message}`);
+                                }
+                            }
+
+                            // ✅ SAVE PACK FILES FOR MOVIES (Trilogies, Collections, etc.)
+                            // This saves the mapping between pack hash and individual film IMDb IDs
+                            if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined && targetFile && torrent && torrent.files) {
+                                try {
+                                    // Get IMDb ID of the movie being played
+                                    const movieImdbId = await dbHelper.getImdbIdByHash(infoHash);
+
+                                    if (movieImdbId) {
+                                        console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
+
+                                        // Save this specific file mapping to pack_files table
+                                        const packFileData = [{
+                                            pack_hash: infoHash.toLowerCase(),
+                                            imdb_id: movieImdbId,
+                                            file_index: targetFile.id, // RealDebrid file.id
+                                            file_path: targetFile.path,
+                                            file_size: targetFile.bytes || 0
+                                        }];
+
+                                        await dbHelper.insertPackFiles(packFileData);
+                                        console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file ${targetFile.id} in pack ${infoHash}`);
+
+                                        // Also update the all_imdb_ids array on the torrents table
+                                        await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());
+                                    } else {
+                                        console.warn(`⚠️ [DB] No IMDb ID found for movie pack, skipping save`);
+                                    }
+                                } catch (packErr) {
+                                    console.error(`❌ [DB] Error saving pack file mapping: ${packErr.message}`);
+                                    // Don't fail the stream - this is a non-critical operation
+                                }
+                            }
+                        }
+
+                        // Check if it's a RAR archive
+                        if (unrestricted.download?.endsWith('.rar') || unrestricted.download?.endsWith('.zip')) {
+                            console.log(`[RealDebrid] Failed: RAR archive`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                        }
+
+                        let finalUrl = unrestricted.download;
+
+                        // IMPORTANT: Apply MediaFlow proxy for ALL RealDebrid streams if configured
                         if (userConfig.mediaflow_url) {
                             try {
-                                finalStreamUrl = await proxyThroughMediaFlow(unrestricted.download, { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' }, null);
-                                console.log(`🔒 Applied MediaFlow proxy to non-cached RD stream`);
+                                finalUrl = await proxyThroughMediaFlow(
+                                    unrestricted.download,
+                                    { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' },
+                                    null // filename will be extracted from URL
+                                );
+                                console.log(`[RealDebrid] MediaFlow proxy applied to all streams`);
                             } catch (mfError) {
-                                console.error(`❌ Failed to apply MediaFlow proxy: ${mfError.message}`);
+                                console.error(`❌ [RealDebrid] MediaFlow proxy failed: ${mfError.message}`);
                                 // 🛑 STOP! Do not fallback to direct link to avoid bans.
                                 return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                             }
                         }
 
-                        console.log(`🚀 Redirecting directly to stream: ${finalStreamUrl}`);
-                        res.setHeader('Location', finalStreamUrl);
-                        return res.status(302).end();
+                        // ⏩ INTROSKIP: Wrap in HLS proxy if enabled for series
+                        if (userConfig.introskip_enabled && type === 'series' && season && episode) {
+                            try {
+                                // Get imdbId for this torrent to lookup intro
+                                const episodeImdbId = dbEnabled ? await dbHelper.getImdbIdByHash(infoHash) : null;
+                                if (episodeImdbId && episodeImdbId.startsWith('tt')) {
+                                    const introDataRD = await introSkip.lookupIntro(episodeImdbId, parseInt(season), parseInt(episode));
+                                    if (introDataRD && introDataRD.end_sec > 0) {
+                                        // Wrap in HLS proxy for real intro skipping
+                                        const encodedStream = encodeURIComponent(finalUrl);
+                                        finalUrl = `${workerOrigin}/introskip/hls.m3u8?stream=${encodedStream}&start=${introDataRD.start_sec}&end=${introDataRD.end_sec}`;
+                                        console.log(`⏩ [IntroSkip] Wrapped in HLS proxy: ${introDataRD.start_sec}s - ${introDataRD.end_sec}s`);
+                                    }
+                                }
+                            } catch (introErr) {
+                                console.warn(`⏩ [IntroSkip] Error applying HLS proxy: ${introErr.message}`);
+                            }
+                        }
 
-                    } catch (redirectError) {
-                        console.error(`❌ Failed to get direct stream link, falling back to polling page. Error: ${redirectError.message}`);
+                        console.log(`[RealDebrid] Redirecting to stream`);
+                        return res.redirect(302, finalUrl);
+
+                    } else if (statusDownloading || statusOpening || statusWaitingSelection) {
+                        // ⏳ DOWNLOADING: Show placeholder video
+                        console.log(`[RealDebrid] Torrent is downloading (status: ${torrent.status})...`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+
+                    } else if (statusMagnetError) {
+                        // ❌ MAGNET ERROR: Show failed opening video
+                        console.log(`[RealDebrid] Magnet error`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_opening_v2.mp4`);
+
+                    } else if (statusError) {
+                        // ❌ ERROR: Show failed video
+                        console.log(`[RealDebrid] Torrent failed`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
+
+                    // Fallback: something went wrong
+                    console.log(`[RealDebrid] Unknown state (${torrent.status}), showing failed video`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+
+                } catch (error) {
+                    console.error('👑 ❌ RD stream error:', error);
+
+                    // 🔥 Torrentio-style: Check for specific error codes
+                    const realdebrid = new RealDebrid(userConfig.rd_key || '');
+
+                    if (realdebrid._isAccessDeniedError(error)) {
+                        console.log(`[RealDebrid] ❌ Access denied (error ${error.error_code})`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/access_denied_v2.mp4`);
+                    }
+
+                    if (realdebrid._isInfringingFileError(error)) {
+                        console.log(`[RealDebrid] ❌ Infringing file (error ${error.error_code})`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/infringing_file_v2.mp4`);
+                    }
+
+                    if (realdebrid._isLimitExceededError(error)) {
+                        console.log(`[RealDebrid] ❌ Limit exceeded (error ${error.error_code})`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/limit_exceeded_v2.mp4`);
+                    }
+
+                    if (realdebrid._isTorrentTooBigError(error)) {
+                        console.log(`[RealDebrid] ❌ Torrent too big (error ${error.error_code})`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/torrent_too_big_v2.mp4`);
+                    }
+
+                    if (realdebrid._isFailedDownloadError(error)) {
+                        console.log(`[RealDebrid] ❌ Failed download (error ${error.error_code})`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                    // Handle text-based error messages (legacy)
+                    const errorMsg = error.message?.toLowerCase() || '';
+
+                    if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+                        // Too many requests - show downloading placeholder
+                        console.log(`[RealDebrid] Rate limited, showing downloading placeholder`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+                    }
+
+                    if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
+                        // Torrent not available or invalid
+                        console.log(`[RealDebrid] Torrent not available (400/404)`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                    if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
+                        // Archive format not supported
+                        console.log(`[RealDebrid] Archive format not supported`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                    }
+
+                    if (errorMsg.includes('magnet')) {
+                        // Magnet error
+                        console.log(`[RealDebrid] Magnet conversion error`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_opening_v2.mp4`);
+                    }
+
+                    // Generic error: show failed placeholder
+                    console.log(`[RealDebrid] Generic error, showing failed video`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                }
+            }
+
+            // Endpoint to handle adding magnets to Real-Debrid for Android/Web compatibility
+            if (url.pathname.startsWith('/rd-add/')) {
+                const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-add', 'config_string', 'magnet_link']
+                const encodedConfigStr = pathParts[2];
+                const encodedMagnet = pathParts[3];
+                const workerOrigin = url.origin; // For MediaFlow proxy URL generation
+
+                const htmlResponse = (title, message, isError = false) => `
+                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
+                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
+                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+
+                let userConfig = {};
+                res.setHeader('Content-Type', 'text/html');
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
                 }
 
-                const pollingPage = `
+                if (!userConfig.rd_key) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Real-Debrid non è stata configurata. Impossibile aggiungere il torrent.', true));
+                }
+
+                if (!encodedMagnet) {
+                    return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
+                }
+
+                try {
+                    // ... (tutta la logica interna di /rd-add/ rimane invariata) ...
+                    // ...
+
+                    const magnetLink = decodeURIComponent(encodedMagnet);
+                    const infoHash = extractInfoHash(magnetLink);
+                    if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
+
+                    const realdebrid = new RealDebrid(userConfig.rd_key);
+
+                    // --- Robust Torrent Handling ---
+                    const userTorrents = await realdebrid.getTorrents();
+                    let torrent = userTorrents.find(t => t.hash.toLowerCase() === infoHash.toLowerCase());
+
+                    if (torrent) {
+                        try {
+                            const errorStates = ['error', 'magnet_error', 'virus', 'dead'];
+                            const torrentInfo = await realdebrid.getTorrentInfo(torrent.id);
+                            if (errorStates.includes(torrentInfo.status)) {
+                                console.log(`🗑️ Found stale/failed torrent (ID: ${torrent.id}, Status: ${torrentInfo.status}). Deleting it.`);
+                                await realdebrid.deleteTorrent(torrent.id);
+                                torrent = null; // Force re-adding
+                            }
+                        } catch (e) {
+                            console.warn(`⚠️ Could not get info for existing torrent ${torrent.id}. Deleting it as a precaution.`, e.message);
+                            await realdebrid.deleteTorrent(torrent.id).catch(err => console.error(`Error during precautionary delete: ${err.message}`));
+                            torrent = null; // Force re-adding
+                        }
+                    }
+
+                    let torrentId;
+                    if (!torrent) {
+                        console.log(`ℹ️ Adding new torrent with hash ${infoHash}.`);
+                        const addResponse = await realdebrid.addMagnet(magnetLink);
+                        torrentId = addResponse.id;
+                        if (!torrentId) throw new Error('Impossibile ottenere l\'ID del torrent da Real-Debrid.');
+                    } else {
+                        torrentId = torrent.id;
+                        console.log(`ℹ️ Using existing torrent. ID: ${torrentId}`);
+                    }
+
+                    let torrentInfo;
+                    let actionTaken = false;
+                    for (let i = 0; i < 15; i++) { // Poll for up to ~30 seconds
+                        if (i === 0) await new Promise(resolve => setTimeout(resolve, 1500));
+
+                        torrentInfo = await realdebrid.getTorrentInfo(torrentId);
+                        const status = torrentInfo.status;
+                        console.log(`[Attempt ${i + 1}/15] Torrent ${torrentId} status: ${status}`);
+
+                        if (status === 'waiting_files_selection') {
+                            console.log(`▶️ Torrent requires file selection. Selecting main video file...`);
+                            if (!torrentInfo.files || torrentInfo.files.length === 0) throw new Error('Torrent is empty or invalid.');
+
+                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                            const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+
+                            const videoFiles = torrentInfo.files.filter(file => {
+                                const lowerPath = file.path.toLowerCase();
+                                return videoExtensions.some(ext => lowerPath.endsWith(ext)) &&
+                                    !junkKeywords.some(junk => lowerPath.includes(junk));
+                            });
+
+                            const fileToDownload = videoFiles.length > 0
+                                ? videoFiles.reduce((max, file) => (file.bytes > max.bytes ? file : max), videoFiles[0])
+                                : torrentInfo.files.reduce((max, file) => (file.bytes > max.bytes ? file : max), torrentInfo.files[0]);
+
+                            if (!fileToDownload) throw new Error('Impossibile determinare il file da scaricare nel torrent.');
+
+                            await realdebrid.selectFiles(torrentId, fileToDownload.id);
+                            console.log(`✅ Download started for file: ${fileToDownload.path}`);
+                            actionTaken = true;
+                            break;
+                        }
+
+                        if (['queued', 'downloading', 'downloaded'].includes(status)) {
+                            console.log(`ℹ️ Torrent is already active (status: ${status}). No action needed.`);
+                            actionTaken = true;
+                            break;
+                        }
+
+                        if (status === 'magnet_conversion') {
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                            continue;
+                        }
+
+                        const errorStates = ['error', 'magnet_error', 'virus', 'dead'];
+                        if (errorStates.includes(status)) {
+                            throw new Error(`Torrent has a critical error state: ${status}`);
+                        }
+
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+
+                    if (!actionTaken) {
+                        throw new Error(`Torrent did not become active after polling. Last status: ${torrentInfo.status}`);
+                    }
+
+                    if (torrentInfo.status === 'downloaded') {
+                        console.log('✅ Torrent already downloaded. Getting stream link directly...');
+                        try {
+                            if (!torrentInfo.links || torrentInfo.links.length === 0) throw new Error('Torrent scaricato ma Real-Debrid non ha fornito un link.');
+
+                            let downloadLink;
+                            if (torrentInfo.links.length === 1) {
+                                downloadLink = torrentInfo.links[0];
+                            } else {
+                                const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                                const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+                                const selectedVideoFiles = torrentInfo.files.filter(file => file.selected === 1 && videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext)) && !junkKeywords.some(junk => file.path.toLowerCase().includes(junk)));
+                                let mainFile = selectedVideoFiles.length > 0 ? selectedVideoFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null) : torrentInfo.files.filter(f => f.selected === 1).reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
+                                if (!mainFile) throw new Error('Torrent completato ma nessun file valido risulta selezionato.');
+                                const filename = mainFile.path.split('/').pop();
+                                downloadLink = torrentInfo.links.find(link => decodeURIComponent(link).endsWith(filename));
+                                if (!downloadLink) throw new Error(`Could not match filename "${filename}" to any of the available links.`);
+                            }
+
+                            const unrestricted = await realdebrid.unrestrictLink(downloadLink);
+                            let finalStreamUrl = unrestricted.download;
+
+                            // ✅ CACHE SUCCESS: Mark torrent as cached in DB (5-day TTL)
+                            if (dbEnabled && infoHash) {
+                                try {
+                                    await dbHelper.updateRdCacheStatus([{ hash: infoHash, cached: true }], type);
+                                    console.log(`💾 [DB] Marked ${infoHash} as RD cached (5-day TTL)`);
+                                } catch (dbErr) {
+                                    console.warn(`⚠️ Failed to update DB cache status: ${dbErr.message}`);
+                                }
+                            }
+
+                            // Apply MediaFlow proxy if configured
+                            if (userConfig.mediaflow_url) {
+                                try {
+                                    finalStreamUrl = await proxyThroughMediaFlow(unrestricted.download, { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' }, null);
+                                    console.log(`🔒 Applied MediaFlow proxy to non-cached RD stream`);
+                                } catch (mfError) {
+                                    console.error(`❌ Failed to apply MediaFlow proxy: ${mfError.message}`);
+                                    // 🛑 STOP! Do not fallback to direct link to avoid bans.
+                                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                                }
+                            }
+
+                            console.log(`🚀 Redirecting directly to stream: ${finalStreamUrl}`);
+                            res.setHeader('Location', finalStreamUrl);
+                            return res.status(302).end();
+
+                        } catch (redirectError) {
+                            console.error(`❌ Failed to get direct stream link, falling back to polling page. Error: ${redirectError.message}`);
+                        }
+                    }
+
+                    const pollingPage = `
                     <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Caricamento in corso...</title>
                     <style>
                         body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;}
@@ -9722,776 +9964,776 @@ export default async function handler(req, res) {
                     </script>
                     </body></html>
                 `;
-                return res.status(200).send(pollingPage);
+                    return res.status(200).send(pollingPage);
 
-            } catch (error) {
-                console.error('❌ Error adding magnet to RD:', error);
-                return res.status(500).send(htmlResponse('Errore', `Impossibile aggiungere il torrent a Real-Debrid: ${error.message}`, true));
+                } catch (error) {
+                    console.error('❌ Error adding magnet to RD:', error);
+                    return res.status(500).send(htmlResponse('Errore', `Impossibile aggiungere il torrent a Real-Debrid: ${error.message}`, true));
+                }
             }
-        }
 
-        // Endpoint to stream from a user's personal torrents
-        if (url.pathname.startsWith('/rd-stream-personal/')) {
-            const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-stream-personal', 'config_string', 'torrent_id']
-            const encodedConfigStr = pathParts[2];
-            const torrentId = pathParts[3];
-            const workerOrigin = url.origin; // For MediaFlow proxy URL generation
+            // Endpoint to stream from a user's personal torrents
+            if (url.pathname.startsWith('/rd-stream-personal/')) {
+                const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-stream-personal', 'config_string', 'torrent_id']
+                const encodedConfigStr = pathParts[2];
+                const torrentId = pathParts[3];
+                const workerOrigin = url.origin; // For MediaFlow proxy URL generation
 
-            const htmlResponse = (title, message, isError = false) => `
+                const htmlResponse = (title, message, isError = false) => `
                 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
                 <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
                 </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 
-            res.setHeader('Content-Type', 'text/html');
-            let userConfig = {};
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
-            }
-
-            if (!torrentId) {
-                return res.status(400).send(htmlResponse('Errore', 'ID torrent non valido.', true));
-            }
-
-            try {
-                // ... (tutta la logica interna di /rd-stream-personal/ rimane invariata) ...
-                // ...
-                console.log(`👤 Streaming from personal torrent ID: ${torrentId}`);
-                const realdebrid = new RealDebrid(userConfig.rd_key);
-                const torrentInfo = await realdebrid.getTorrentInfo(torrentId);
-
-                if (torrentInfo.status !== 'downloaded') {
-                    throw new Error(`Il torrent non è ancora pronto. Stato: ${torrentInfo.status}. Riprova più tardi.`);
+                res.setHeader('Content-Type', 'text/html');
+                let userConfig = {};
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
                 }
 
-                if (!torrentInfo.links || torrentInfo.links.length === 0) {
-                    throw new Error('Torrent scaricato ma Real-Debrid non ha fornito un link.');
+                if (!torrentId) {
+                    return res.status(400).send(htmlResponse('Errore', 'ID torrent non valido.', true));
                 }
 
-                let downloadLink;
-                if (torrentInfo.links.length === 1) {
-                    downloadLink = torrentInfo.links[0];
-                } else {
-                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
-                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+                try {
+                    // ... (tutta la logica interna di /rd-stream-personal/ rimane invariata) ...
+                    // ...
+                    console.log(`👤 Streaming from personal torrent ID: ${torrentId}`);
+                    const realdebrid = new RealDebrid(userConfig.rd_key);
+                    const torrentInfo = await realdebrid.getTorrentInfo(torrentId);
 
-                    let bestFile = null;
-                    const selectedFiles = torrentInfo.files.filter(f => f.selected === 1);
-
-                    for (const file of selectedFiles) {
-                        const lowerPath = file.path.toLowerCase();
-
-                        const hasVideoExtension = videoExtensions.some(ext => lowerPath.endsWith(ext));
-                        if (!hasVideoExtension) continue;
-
-                        const isLikelyJunk = junkKeywords.some(junk => lowerPath.includes(junk)) && file.bytes < 250 * 1024 * 1024;
-                        if (isLikelyJunk) continue;
-
-                        if (!bestFile || file.bytes > bestFile.bytes) {
-                            bestFile = file;
-                        }
+                    if (torrentInfo.status !== 'downloaded') {
+                        throw new Error(`Il torrent non è ancora pronto. Stato: ${torrentInfo.status}. Riprova più tardi.`);
                     }
 
-                    if (!bestFile) {
-                        bestFile = selectedFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
+                    if (!torrentInfo.links || torrentInfo.links.length === 0) {
+                        throw new Error('Torrent scaricato ma Real-Debrid non ha fornito un link.');
                     }
 
-                    if (!bestFile) throw new Error('Impossibile determinare il file principale nel torrent.');
-
-                    const filename = bestFile.path.split('/').pop();
-                    downloadLink = torrentInfo.links.find(link => decodeURIComponent(link).endsWith(filename));
-
-                    if (!downloadLink) throw new Error(`Impossibile trovare il link per il file: ${filename}`);
-                }
-
-                const unrestricted = await realdebrid.unrestrictLink(downloadLink);
-                let finalStreamUrl = unrestricted.download;
-
-                // ✅ Proxy through MediaFlow if configured
-                if (userConfig.mediaflow_url) {
-                    const mediaflowConfig = {
-                        url: userConfig.mediaflow_url,
-                        password: userConfig.mediaflow_password || ''
-                    };
-                    // Note: If this fails, it will be caught by the outer catch block and return a 500 error.
-                    finalStreamUrl = await proxyThroughMediaFlow(finalStreamUrl, mediaflowConfig, null);
-                }
-
-                console.log(`🚀 Redirecting to personal stream`); res.setHeader('Location', finalStreamUrl);
-                return res.status(302).end();
-
-            } catch (error) {
-                console.error('❌ Error streaming from personal RD torrent:', error);
-                return res.status(500).send(htmlResponse('Errore', `Impossibile avviare lo streaming dal torrent personale: ${error.message}`, true));
-            }
-        }
-
-        // Endpoint to poll torrent status
-        if (url.pathname.startsWith('/rd-status/')) {
-            const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-status', 'config_string', 'torrent_id']
-            const encodedConfigStr = pathParts[2];
-            const torrentId = pathParts[3];
-            const workerOrigin = url.origin; // For MediaFlow proxy URL generation
-
-            res.setHeader('Content-Type', 'application/json');
-            let userConfig = {};
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(JSON.stringify({ status: 'error', message: `Configurazione non valida: ${e.message}` }));
-            }
-
-            if (!torrentId) {
-                return res.status(400).send(JSON.stringify({ status: 'error', message: 'Missing torrent ID' }));
-            }
-
-            try {
-                // ... (tutta la logica interna di /rd-status/ rimane invariata) ...
-                // ...
-                const realdebrid = new RealDebrid(userConfig.rd_key);
-                const torrentInfo = await realdebrid.getTorrentInfo(torrentId);
-
-                if (torrentInfo.links && torrentInfo.links.length > 0) {
                     let downloadLink;
-
                     if (torrentInfo.links.length === 1) {
                         downloadLink = torrentInfo.links[0];
                     } else {
                         const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
                         const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
 
-                        const selectedVideoFiles = torrentInfo.files.filter(file => {
-                            if (file.selected !== 1) return false;
+                        let bestFile = null;
+                        const selectedFiles = torrentInfo.files.filter(f => f.selected === 1);
+
+                        for (const file of selectedFiles) {
                             const lowerPath = file.path.toLowerCase();
-                            return videoExtensions.some(ext => lowerPath.endsWith(ext)) && !junkKeywords.some(junk => lowerPath.includes(junk));
-                        });
 
-                        let mainFile = selectedVideoFiles.length > 0
-                            ? selectedVideoFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null)
-                            : torrentInfo.files.filter(file => file.selected === 1).reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
+                            const hasVideoExtension = videoExtensions.some(ext => lowerPath.endsWith(ext));
+                            if (!hasVideoExtension) continue;
 
-                        if (!mainFile) throw new Error('Torrent completato ma nessun file valido risulta selezionato.');
+                            const isLikelyJunk = junkKeywords.some(junk => lowerPath.includes(junk)) && file.bytes < 250 * 1024 * 1024;
+                            if (isLikelyJunk) continue;
 
-                        const filename = mainFile.path.split('/').pop();
+                            if (!bestFile || file.bytes > bestFile.bytes) {
+                                bestFile = file;
+                            }
+                        }
+
+                        if (!bestFile) {
+                            bestFile = selectedFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
+                        }
+
+                        if (!bestFile) throw new Error('Impossibile determinare il file principale nel torrent.');
+
+                        const filename = bestFile.path.split('/').pop();
                         downloadLink = torrentInfo.links.find(link => decodeURIComponent(link).endsWith(filename));
 
-                        if (!downloadLink) throw new Error(`Could not match filename "${filename}" to any of the available links.`);
+                        if (!downloadLink) throw new Error(`Impossibile trovare il link per il file: ${filename}`);
                     }
 
                     const unrestricted = await realdebrid.unrestrictLink(downloadLink);
-
                     let finalStreamUrl = unrestricted.download;
 
-                    // Apply MediaFlow proxy if configured
+                    // ✅ Proxy through MediaFlow if configured
                     if (userConfig.mediaflow_url) {
-                        try {
-                            finalStreamUrl = await proxyThroughMediaFlow(unrestricted.download, { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' }, null);
-                            console.log(`🔒 Applied MediaFlow proxy to non-cached RD stream (status check)`);
-                        } catch (mfError) {
-                            console.error(`❌ Failed to apply MediaFlow proxy: ${mfError.message}`);
-                            return res.status(500).send(JSON.stringify({ status: 'error', message: `MediaFlow Proxy Error: ${mfError.message}` }));
-                        }
+                        const mediaflowConfig = {
+                            url: userConfig.mediaflow_url,
+                            password: userConfig.mediaflow_password || ''
+                        };
+                        // Note: If this fails, it will be caught by the outer catch block and return a 500 error.
+                        finalStreamUrl = await proxyThroughMediaFlow(finalStreamUrl, mediaflowConfig, null);
                     }
 
-                    return res.status(200).send(JSON.stringify({ status: 'ready', url: finalStreamUrl }));
+                    console.log(`🚀 Redirecting to personal stream`); res.setHeader('Location', finalStreamUrl);
+                    return res.status(302).end();
+
+                } catch (error) {
+                    console.error('❌ Error streaming from personal RD torrent:', error);
+                    return res.status(500).send(htmlResponse('Errore', `Impossibile avviare lo streaming dal torrent personale: ${error.message}`, true));
+                }
+            }
+
+            // Endpoint to poll torrent status
+            if (url.pathname.startsWith('/rd-status/')) {
+                const pathParts = url.pathname.split('/'); // e.g., ['', 'rd-status', 'config_string', 'torrent_id']
+                const encodedConfigStr = pathParts[2];
+                const torrentId = pathParts[3];
+                const workerOrigin = url.origin; // For MediaFlow proxy URL generation
+
+                res.setHeader('Content-Type', 'application/json');
+                let userConfig = {};
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(JSON.stringify({ status: 'error', message: `Configurazione non valida: ${e.message}` }));
                 }
 
-                if (['queued', 'downloading', 'magnet_conversion', 'waiting_files_selection'].includes(torrentInfo.status)) {
-                    return res.status(200).send(JSON.stringify({
-                        status: torrentInfo.status,
-                        progress: torrentInfo.progress || 0,
-                        speed: torrentInfo.speed ? Math.round(torrentInfo.speed / 1024) : 0
-                    }));
+                if (!torrentId) {
+                    return res.status(400).send(JSON.stringify({ status: 'error', message: 'Missing torrent ID' }));
                 }
 
-                if (torrentInfo.status === 'downloaded') {
-                    throw new Error('Torrent scaricato, ma Real-Debrid non ha fornito un link valido.');
-                } else {
-                    throw new Error(`Stato del torrent non gestito o in errore su Real-Debrid: ${torrentInfo.status} - ${torrentInfo.error || 'Sconosciuto'}`);
-                }
+                try {
+                    // ... (tutta la logica interna di /rd-status/ rimane invariata) ...
+                    // ...
+                    const realdebrid = new RealDebrid(userConfig.rd_key);
+                    const torrentInfo = await realdebrid.getTorrentInfo(torrentId);
 
-            } catch (error) {
-                console.error(`❌ Error checking RD status for ${torrentId}:`, error);
-                return res.status(500).send(JSON.stringify({ status: 'error', message: error.message }));
-            }
-        }
+                    if (torrentInfo.links && torrentInfo.links.length > 0) {
+                        let downloadLink;
 
-        // ✅ TORBOX ROUTES - Add torrent to Torbox
-        if (url.pathname.startsWith('/torbox-add/')) {
-            const pathParts = url.pathname.split('/');
-            const encodedConfigStr = pathParts[2];
-            const encodedMagnet = pathParts[3];
-
-            const htmlResponse = (title, message, isError = false) => `
-                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
-                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
-                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
-
-            let userConfig = {};
-            res.setHeader('Content-Type', 'text/html');
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
-            }
-
-            if (!userConfig.torbox_key) {
-                return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Torbox non è stata configurata.', true));
-            }
-
-            if (!encodedMagnet) {
-                return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
-            }
-
-            try {
-                const magnetLink = decodeURIComponent(encodedMagnet);
-                const infoHash = extractInfoHash(magnetLink);
-                if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
-
-                const torbox = new Torbox(userConfig.torbox_key);
-
-                const userTorrents = await torbox.getTorrents();
-                let torrent = userTorrents.find(t => t.hash?.toLowerCase() === infoHash.toLowerCase());
-
-                let torrentId;
-                if (!torrent) {
-                    console.log(`📦 Adding new torrent to Torbox: ${infoHash}`);
-                    const addResponse = await torbox.addTorrent(magnetLink);
-                    torrentId = addResponse.torrent_id || addResponse.id;
-                    if (!torrentId) throw new Error('Impossibile ottenere l\'ID del torrent da Torbox.');
-                } else {
-                    torrentId = torrent.id;
-                    console.log(`📦 Using existing Torbox torrent. ID: ${torrentId}`);
-                }
-
-                for (let i = 0; i < 20; i++) {
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    const torrentInfo = await torbox.getTorrentInfo(torrentId);
-                    console.log(`📦 [${i + 1}/20] Torbox ${torrentId}: ${torrentInfo.download_finished ? 'completed' : 'downloading'}`);
-
-                    if (torrentInfo.download_finished === true) {
-                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
-                        const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
-
-                        const videoFiles = (torrentInfo.files || []).filter(file => {
-                            const lowerName = file.name?.toLowerCase() || '';
-                            return videoExtensions.some(ext => lowerName.endsWith(ext)) &&
-                                !junkKeywords.some(junk => lowerName.includes(junk));
-                        });
-
-                        const bestFile = videoFiles.length > 0
-                            ? videoFiles.reduce((max, file) => (file.size > max.size ? file : max), videoFiles[0])
-                            : (torrentInfo.files || [])[0];
-
-                        if (!bestFile) throw new Error('Nessun file valido trovato nel torrent.');
-
-                        const downloadData = await torbox.createDownload(torrentId, bestFile.id);
-                        console.log(`📦 🚀 Redirecting to Torbox stream`);
-                        return res.redirect(302, downloadData);
-                    }
-                }
-
-                return res.status(200).send(htmlResponse(
-                    'Download in Corso',
-                    'Il torrent è stato aggiunto a Torbox ed è in download. Torna tra qualche minuto.',
-                    false
-                ));
-
-            } catch (error) {
-                console.error('📦 ❌ Torbox add error:', error);
-                return res.status(500).send(htmlResponse('Errore Torbox', error.message, true));
-            }
-        }
-
-        if (url.pathname.startsWith('/torbox-stream/')) {
-            const pathParts = url.pathname.split('/');
-            const encodedConfigStr = pathParts[2];
-            const encodedMagnet = pathParts[3];
-            const seasonParam = pathParts[4]; // Optional: season number for series
-            const episodeParam = pathParts[5]; // Optional: episode number for series
-            const workerOrigin = url.origin; // For placeholder video URLs
-
-            const htmlResponse = (title, message, isError = false) => `
-                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
-                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
-                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
-
-            let userConfig = {};
-            res.setHeader('Content-Type', 'text/html');
-            try {
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(htmlResponse('Errore Config', e.message, true));
-            }
-
-            if (!userConfig.torbox_key) {
-                return res.status(400).send(htmlResponse('Errore', 'Torbox API key non configurata.', true));
-            }
-
-            if (!encodedMagnet) {
-                return res.status(400).send(htmlResponse('Errore', 'Link magnet mancante.', true));
-            }
-
-            try {
-                const magnetLink = decodeURIComponent(encodedMagnet);
-                const infoHash = extractInfoHash(magnetLink)?.toLowerCase();
-                if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
-
-                const torbox = new Torbox(userConfig.torbox_key);
-
-                console.log(`📦 [Torbox] API Key: ${userConfig.torbox_key}`);
-                console.log(`[Torbox] Unrestricting ${infoHash}`);
-
-                // ========== EXACT TORRENTIO LOGIC ==========
-
-                // Helper functions (EXACT copy from Torrentio torbox.js)
-                const statusReady = (t) => t?.download_present;
-                const statusError = (t) => (!t?.active && !t?.download_finished) || t?.download_state === 'error';
-                const statusDownloading = (t) => (!statusReady(t) && !statusError(t)) || !!t?.queued_id;
-
-                // _findTorrent (EXACT Torrentio logic)
-                const _findTorrent = async () => {
-                    const torrents = await torbox.getTorrents();
-                    const foundTorrents = torrents.filter(t => t.hash?.toLowerCase() === infoHash);
-                    const nonFailedTorrent = foundTorrents.find(t => !statusError(t));
-                    const foundTorrent = nonFailedTorrent || foundTorrents[0];
-                    if (!foundTorrent) throw new Error('No recent torrent found');
-                    return foundTorrent;
-                };
-
-                // _createTorrent (EXACT Torrentio logic)
-                const _createTorrent = async () => {
-                    const data = await torbox.addTorrent(magnetLink);
-                    if (data.torrent_id) {
-                        // Like Torrentio: getTorrentList(apiKey, data.torrent_id)
-                        return await torbox.getTorrentInfo(data.torrent_id);
-                    }
-                    if (data.queued_id) {
-                        return { ...data, download_state: 'metaDL' };
-                    }
-                    throw new Error(`Unexpected create data: ${JSON.stringify(data)}`);
-                };
-
-                // _createOrFindTorrent (EXACT Torrentio logic)
-                const _createOrFindTorrent = async () => {
-                    try {
-                        return await _findTorrent();
-                    } catch {
-                        return await _createTorrent();
-                    }
-                };
-
-                // _unrestrictLink (with episode pattern matching for packs)
-                const _unrestrictLink = async (torrent) => {
-                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-                    const videos = (torrent.files || [])
-                        .filter(file => {
-                            const name = file.short_name?.toLowerCase() || file.name?.toLowerCase() || '';
-                            return videoExtensions.some(ext => name.endsWith(ext));
-                        })
-                        .sort((a, b) => b.size - a.size);
-
-                    let targetVideo;
-
-                    // If season/episode is provided, use pattern matching to find correct file
-                    if (seasonParam && episodeParam) {
-                        const season = parseInt(seasonParam, 10);
-                        const episode = parseInt(episodeParam, 10);
-                        const seasonStr = String(season).padStart(2, '0');
-                        const episodeStr = String(episode).padStart(2, '0');
-
-                        console.log(`[Torbox] 🔍 Looking for S${seasonStr}E${episodeStr} in pack (${videos.length} video files)`);
-
-                        // Log all video files
-                        videos.forEach((f, i) => {
-                            const name = f.short_name || f.name || 'unknown';
-                            console.log(`  ${i + 1}. ${name} (${(f.size / 1024 / 1024).toFixed(0)}MB)`);
-                        });
-
-                        // Use regex with word boundaries to avoid partial matches (e1 matching e11)
-                        const patterns = [
-                            new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
-                            new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
-                            new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
-                            new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
-                            new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
-                            new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
-                            new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
-                            new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
-                            new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
-                        ];
-
-                        targetVideo = videos.find(file => {
-                            const fileName = file.short_name?.toLowerCase() || file.name?.toLowerCase() || '';
-                            const matches = patterns.some(pattern => pattern.test(fileName));
-                            if (matches) {
-                                console.log(`[Torbox] ✅ MATCHED: ${file.short_name || file.name}`);
-                            }
-                            return matches;
-                        });
-
-                        if (targetVideo) {
-                            console.log(`[Torbox] ✅ Selected episode file: ${targetVideo.short_name || targetVideo.name}`);
+                        if (torrentInfo.links.length === 1) {
+                            downloadLink = torrentInfo.links[0];
                         } else {
-                            console.log(`[Torbox] ❌ NO MATCH - Pattern matching failed for S${seasonStr}E${episodeStr}`);
-                            console.log(`[Torbox] ⚠️ Falling back to largest video file`);
+                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                            const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+
+                            const selectedVideoFiles = torrentInfo.files.filter(file => {
+                                if (file.selected !== 1) return false;
+                                const lowerPath = file.path.toLowerCase();
+                                return videoExtensions.some(ext => lowerPath.endsWith(ext)) && !junkKeywords.some(junk => lowerPath.includes(junk));
+                            });
+
+                            let mainFile = selectedVideoFiles.length > 0
+                                ? selectedVideoFiles.reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null)
+                                : torrentInfo.files.filter(file => file.selected === 1).reduce((max, file) => (file.bytes > (max?.bytes || 0) ? file : max), null);
+
+                            if (!mainFile) throw new Error('Torrent completato ma nessun file valido risulta selezionato.');
+
+                            const filename = mainFile.path.split('/').pop();
+                            downloadLink = torrentInfo.links.find(link => decodeURIComponent(link).endsWith(filename));
+
+                            if (!downloadLink) throw new Error(`Could not match filename "${filename}" to any of the available links.`);
                         }
-                    }
 
-                    // Fallback: use largest video file
-                    if (!targetVideo) {
-                        targetVideo = videos[0];
-                    }
+                        const unrestricted = await realdebrid.unrestrictLink(downloadLink);
 
-                    if (!targetVideo) {
-                        if (torrent.files?.every(file => file.zipped)) {
-                            return 'FAILED_RAR';
-                        }
-                        throw new Error(`No TorBox file found in: ${JSON.stringify(torrent.files)}`);
-                    }
+                        let finalStreamUrl = unrestricted.download;
 
-                    console.log(`[Torbox] Selected file: ${targetVideo.short_name || targetVideo.name} (id=${targetVideo.id})`);
-                    return await torbox.createDownload(torrent.id, targetVideo.id);
-                };
-
-                // _retryCreateTorrent (EXACT Torrentio logic)
-                const _retryCreateTorrent = async () => {
-                    const newTorrent = await _createTorrent();
-                    if (newTorrent && statusReady(newTorrent)) {
-                        return await _unrestrictLink(newTorrent);
-                    }
-                    return 'FAILED_DOWNLOAD';
-                };
-
-                // _resolve (EXACT Torrentio logic)
-                const torrent = await _createOrFindTorrent();
-
-                console.log(`[Torbox] Torrent state: download_present=${torrent?.download_present}, active=${torrent?.active}, download_finished=${torrent?.download_finished}, download_state=${torrent?.download_state}`);
-
-                if (torrent && statusReady(torrent)) {
-                    let result = await _unrestrictLink(torrent);
-                    if (result === 'FAILED_RAR') {
-                        console.log(`[Torbox] Failed: RAR archive`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
-                    }
-
-                    // ⏩ INTROSKIP: Wrap in HLS proxy if enabled for series
-                    if (userConfig.introskip_enabled && seasonParam && episodeParam) {
-                        try {
-                            // Get imdbId for this torrent to lookup intro
-                            const episodeImdbId = dbEnabled ? await dbHelper.getImdbIdByHash(infoHash) : null;
-                            if (episodeImdbId && episodeImdbId.startsWith('tt')) {
-                                const introDataTB = await introSkip.lookupIntro(episodeImdbId, parseInt(seasonParam), parseInt(episodeParam));
-                                if (introDataTB && introDataTB.end_sec > 0) {
-                                    // Wrap in HLS proxy for real intro skipping
-                                    const encodedStream = encodeURIComponent(result);
-                                    result = `${workerOrigin}/introskip/hls.m3u8?stream=${encodedStream}&start=${introDataTB.start_sec}&end=${introDataTB.end_sec}`;
-                                    console.log(`⏩ [IntroSkip] Wrapped in HLS proxy: ${introDataTB.start_sec}s - ${introDataTB.end_sec}s`);
-                                }
+                        // Apply MediaFlow proxy if configured
+                        if (userConfig.mediaflow_url) {
+                            try {
+                                finalStreamUrl = await proxyThroughMediaFlow(unrestricted.download, { url: userConfig.mediaflow_url, password: userConfig.mediaflow_password || '' }, null);
+                                console.log(`🔒 Applied MediaFlow proxy to non-cached RD stream (status check)`);
+                            } catch (mfError) {
+                                console.error(`❌ Failed to apply MediaFlow proxy: ${mfError.message}`);
+                                return res.status(500).send(JSON.stringify({ status: 'error', message: `MediaFlow Proxy Error: ${mfError.message}` }));
                             }
-                        } catch (introErr) {
-                            console.warn(`⏩ [IntroSkip] Error applying HLS proxy: ${introErr.message}`);
+                        }
+
+                        return res.status(200).send(JSON.stringify({ status: 'ready', url: finalStreamUrl }));
+                    }
+
+                    if (['queued', 'downloading', 'magnet_conversion', 'waiting_files_selection'].includes(torrentInfo.status)) {
+                        return res.status(200).send(JSON.stringify({
+                            status: torrentInfo.status,
+                            progress: torrentInfo.progress || 0,
+                            speed: torrentInfo.speed ? Math.round(torrentInfo.speed / 1024) : 0
+                        }));
+                    }
+
+                    if (torrentInfo.status === 'downloaded') {
+                        throw new Error('Torrent scaricato, ma Real-Debrid non ha fornito un link valido.');
+                    } else {
+                        throw new Error(`Stato del torrent non gestito o in errore su Real-Debrid: ${torrentInfo.status} - ${torrentInfo.error || 'Sconosciuto'}`);
+                    }
+
+                } catch (error) {
+                    console.error(`❌ Error checking RD status for ${torrentId}:`, error);
+                    return res.status(500).send(JSON.stringify({ status: 'error', message: error.message }));
+                }
+            }
+
+            // ✅ TORBOX ROUTES - Add torrent to Torbox
+            if (url.pathname.startsWith('/torbox-add/')) {
+                const pathParts = url.pathname.split('/');
+                const encodedConfigStr = pathParts[2];
+                const encodedMagnet = pathParts[3];
+
+                const htmlResponse = (title, message, isError = false) => `
+                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
+                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
+                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+
+                let userConfig = {};
+                res.setHeader('Content-Type', 'text/html');
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
+                }
+
+                if (!userConfig.torbox_key) {
+                    return res.status(400).send(htmlResponse('Errore di Configurazione', 'La chiave API di Torbox non è stata configurata.', true));
+                }
+
+                if (!encodedMagnet) {
+                    return res.status(400).send(htmlResponse('Errore', 'Link magnet non valido.', true));
+                }
+
+                try {
+                    const magnetLink = decodeURIComponent(encodedMagnet);
+                    const infoHash = extractInfoHash(magnetLink);
+                    if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
+
+                    const torbox = new Torbox(userConfig.torbox_key);
+
+                    const userTorrents = await torbox.getTorrents();
+                    let torrent = userTorrents.find(t => t.hash?.toLowerCase() === infoHash.toLowerCase());
+
+                    let torrentId;
+                    if (!torrent) {
+                        console.log(`📦 Adding new torrent to Torbox: ${infoHash}`);
+                        const addResponse = await torbox.addTorrent(magnetLink);
+                        torrentId = addResponse.torrent_id || addResponse.id;
+                        if (!torrentId) throw new Error('Impossibile ottenere l\'ID del torrent da Torbox.');
+                    } else {
+                        torrentId = torrent.id;
+                        console.log(`📦 Using existing Torbox torrent. ID: ${torrentId}`);
+                    }
+
+                    for (let i = 0; i < 20; i++) {
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        const torrentInfo = await torbox.getTorrentInfo(torrentId);
+                        console.log(`📦 [${i + 1}/20] Torbox ${torrentId}: ${torrentInfo.download_finished ? 'completed' : 'downloading'}`);
+
+                        if (torrentInfo.download_finished === true) {
+                            const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                            const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+
+                            const videoFiles = (torrentInfo.files || []).filter(file => {
+                                const lowerName = file.name?.toLowerCase() || '';
+                                return videoExtensions.some(ext => lowerName.endsWith(ext)) &&
+                                    !junkKeywords.some(junk => lowerName.includes(junk));
+                            });
+
+                            const bestFile = videoFiles.length > 0
+                                ? videoFiles.reduce((max, file) => (file.size > max.size ? file : max), videoFiles[0])
+                                : (torrentInfo.files || [])[0];
+
+                            if (!bestFile) throw new Error('Nessun file valido trovato nel torrent.');
+
+                            const downloadData = await torbox.createDownload(torrentId, bestFile.id);
+                            console.log(`📦 🚀 Redirecting to Torbox stream`);
+                            return res.redirect(302, downloadData);
                         }
                     }
 
-                    console.log(`[Torbox] Streaming: ${result}`);
-                    return res.redirect(302, result);
+                    return res.status(200).send(htmlResponse(
+                        'Download in Corso',
+                        'Il torrent è stato aggiunto a Torbox ed è in download. Torna tra qualche minuto.',
+                        false
+                    ));
 
-                } else if (torrent && statusDownloading(torrent)) {
-                    console.log(`[Torbox] Downloading to TorBox ${infoHash}...`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
-
-                } else if (torrent && statusError(torrent)) {
-                    console.log(`[Torbox] Retry failed download in TorBox ${JSON.stringify(torrent)}...`);
-                    await torbox.deleteTorrent(torrent.id);
-                    const retryResult = await _retryCreateTorrent();
-                    if (retryResult === 'FAILED_DOWNLOAD') {
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-                    if (retryResult === 'FAILED_RAR') {
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
-                    }
-                    return res.redirect(302, retryResult);
+                } catch (error) {
+                    console.error('📦 ❌ Torbox add error:', error);
+                    return res.status(500).send(htmlResponse('Errore Torbox', error.message, true));
                 }
-
-                throw new Error(`Failed TorBox adding torrent ${JSON.stringify(torrent)}`);
-
-            } catch (error) {
-                console.error('📦 ❌ Torbox stream error:', error);
-
-                // Handle specific errors with placeholder videos (like Torrentio)
-                const errorMsg = error.message?.toLowerCase() || '';
-
-                if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
-                    // Torrent not available or invalid
-                    console.log(`[Torbox] Torrent not available (400/404)`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                }
-
-                if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
-                    // Archive format not supported
-                    console.log(`[Torbox] Archive format not supported`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
-                }
-
-                // Generic error: show failed placeholder
-                console.log(`[Torbox] Generic error, showing failed video`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-            }
-        }
-
-        // ✅ UNIFIED AllDebrid Stream Endpoint
-        if (url.pathname.startsWith('/ad-stream/')) {
-            const pathParts = url.pathname.split('/');
-            const encodedConfigStr = pathParts[2];
-            const encodedMagnet = pathParts[3];
-
-            let userConfig = {};
-            try {
-                if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                console.error(`[AllDebrid] Config error: ${e.message}`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
             }
 
-            if (!userConfig.alldebrid_key) {
-                console.error(`[AllDebrid] API key not configured`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_access_v2.mp4`);
-            }
+            if (url.pathname.startsWith('/torbox-stream/')) {
+                const pathParts = url.pathname.split('/');
+                const encodedConfigStr = pathParts[2];
+                const encodedMagnet = pathParts[3];
+                const seasonParam = pathParts[4]; // Optional: season number for series
+                const episodeParam = pathParts[5]; // Optional: episode number for series
+                const workerOrigin = url.origin; // For placeholder video URLs
 
-            if (!encodedMagnet) {
-                console.error(`[AllDebrid] Invalid magnet link`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-            }
+                const htmlResponse = (title, message, isError = false) => `
+                <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title>
+                <style>body{font-family:sans-serif;background-color:#1E1E1E;color:#E0E0E0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;text-align:center;padding:1em;} .container{max-width:90%;padding:2em;background-color:#2A2A2A;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.3);} h1{color:${isError ? '#FF6B6B' : '#4EC9B0'};}</style>
+                </head><body><div class="container"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 
-            try {
-                const magnetLink = decodeURIComponent(encodedMagnet);
-                const infoHash = extractInfoHash(magnetLink);
-                if (!infoHash) throw new Error('Invalid magnet link or missing info hash.');
-
-                const alldebrid = new AllDebrid(userConfig.alldebrid_key);
-
-                console.log(`[AllDebrid] Resolving ${infoHash}`);
-
-                // STEP 1: Upload magnet (AllDebrid will use cache if available)
-                console.log(`[AllDebrid] Uploading magnet (will use cache if available)`);
-                const uploadResponse = await alldebrid.uploadMagnet(magnetLink);
-                const magnetId = uploadResponse.id;
-
-                if (!magnetId) {
-                    throw new Error('Failed to get magnet ID from AllDebrid');
+                let userConfig = {};
+                res.setHeader('Content-Type', 'text/html');
+                try {
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(htmlResponse('Errore Config', e.message, true));
                 }
 
-                // STEP 2: Get magnet status
-                console.log(`[AllDebrid] Checking magnet status: ${magnetId}`);
-                const magnetStatus = await alldebrid.getMagnetStatus(magnetId);
+                if (!userConfig.torbox_key) {
+                    return res.status(400).send(htmlResponse('Errore', 'Torbox API key non configurata.', true));
+                }
 
-                // Extract status from response
-                const status = magnetStatus.status || magnetStatus.statusCode;
+                if (!encodedMagnet) {
+                    return res.status(400).send(htmlResponse('Errore', 'Link magnet mancante.', true));
+                }
 
-                // STEP 3: Check if ready
-                if (status === 'Ready' || status === 4) {
-                    // ✅ READY: Get files and unrestrict
-                    console.log(`[AllDebrid] Magnet ready, getting files...`);
+                try {
+                    const magnetLink = decodeURIComponent(encodedMagnet);
+                    const infoHash = extractInfoHash(magnetLink)?.toLowerCase();
+                    if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
 
-                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
-                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+                    const torbox = new Torbox(userConfig.torbox_key);
 
-                    // Extract files from magnetStatus
-                    const files = magnetStatus.links || [];
+                    console.log(`📦 [Torbox] API Key: ${userConfig.torbox_key}`);
+                    console.log(`[Torbox] Unrestricting ${infoHash}`);
 
-                    if (files.length === 0) {
-                        console.log(`[AllDebrid] No files found`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
+                    // ========== EXACT TORRENTIO LOGIC ==========
 
-                    // Find video files
-                    const videos = files
-                        .filter(file => {
-                            const filename = file.filename || file.link || '';
-                            return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
-                        })
-                        .filter(file => {
-                            const filename = file.filename || file.link || '';
-                            const lowerName = filename.toLowerCase();
-                            const size = file.size || 0;
-                            return !junkKeywords.some(junk => lowerName.includes(junk)) || size > 250 * 1024 * 1024;
-                        })
-                        .sort((a, b) => (b.size || 0) - (a.size || 0));
+                    // Helper functions (EXACT copy from Torrentio torbox.js)
+                    const statusReady = (t) => t?.download_present;
+                    const statusError = (t) => (!t?.active && !t?.download_finished) || t?.download_state === 'error';
+                    const statusDownloading = (t) => (!statusReady(t) && !statusError(t)) || !!t?.queued_id;
 
-                    const targetFile = videos[0];
+                    // _findTorrent (EXACT Torrentio logic)
+                    const _findTorrent = async () => {
+                        const torrents = await torbox.getTorrents();
+                        const foundTorrents = torrents.filter(t => t.hash?.toLowerCase() === infoHash);
+                        const nonFailedTorrent = foundTorrents.find(t => !statusError(t));
+                        const foundTorrent = nonFailedTorrent || foundTorrents[0];
+                        if (!foundTorrent) throw new Error('No recent torrent found');
+                        return foundTorrent;
+                    };
 
-                    if (!targetFile) {
-                        console.log(`[AllDebrid] No video file found`);
-                        // Check if it's a RAR archive
-                        if (files.some(f => (f.filename || '').endsWith('.rar') || (f.filename || '').endsWith('.zip'))) {
-                            console.log(`[AllDebrid] Failed: RAR archive`);
+                    // _createTorrent (EXACT Torrentio logic)
+                    const _createTorrent = async () => {
+                        const data = await torbox.addTorrent(magnetLink);
+                        if (data.torrent_id) {
+                            // Like Torrentio: getTorrentList(apiKey, data.torrent_id)
+                            return await torbox.getTorrentInfo(data.torrent_id);
+                        }
+                        if (data.queued_id) {
+                            return { ...data, download_state: 'metaDL' };
+                        }
+                        throw new Error(`Unexpected create data: ${JSON.stringify(data)}`);
+                    };
+
+                    // _createOrFindTorrent (EXACT Torrentio logic)
+                    const _createOrFindTorrent = async () => {
+                        try {
+                            return await _findTorrent();
+                        } catch {
+                            return await _createTorrent();
+                        }
+                    };
+
+                    // _unrestrictLink (with episode pattern matching for packs)
+                    const _unrestrictLink = async (torrent) => {
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+                        const videos = (torrent.files || [])
+                            .filter(file => {
+                                const name = file.short_name?.toLowerCase() || file.name?.toLowerCase() || '';
+                                return videoExtensions.some(ext => name.endsWith(ext));
+                            })
+                            .sort((a, b) => b.size - a.size);
+
+                        let targetVideo;
+
+                        // If season/episode is provided, use pattern matching to find correct file
+                        if (seasonParam && episodeParam) {
+                            const season = parseInt(seasonParam, 10);
+                            const episode = parseInt(episodeParam, 10);
+                            const seasonStr = String(season).padStart(2, '0');
+                            const episodeStr = String(episode).padStart(2, '0');
+
+                            console.log(`[Torbox] 🔍 Looking for S${seasonStr}E${episodeStr} in pack (${videos.length} video files)`);
+
+                            // Log all video files
+                            videos.forEach((f, i) => {
+                                const name = f.short_name || f.name || 'unknown';
+                                console.log(`  ${i + 1}. ${name} (${(f.size / 1024 / 1024).toFixed(0)}MB)`);
+                            });
+
+                            // Use regex with word boundaries to avoid partial matches (e1 matching e11)
+                            const patterns = [
+                                new RegExp(`s${seasonStr}e${episodeStr}(?![0-9])`, 'i'),
+                                new RegExp(`s${seasonStr}ep${episodeStr}(?![0-9])`, 'i'),
+                                new RegExp(`${season}x${episodeStr}(?![0-9])`, 'i'),
+                                new RegExp(`${season}x${episode}(?![0-9])`, 'i'),
+                                new RegExp(`s${seasonStr}\\.e${episodeStr}(?![0-9])`, 'i'),
+                                new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
+                                new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
+                                new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
+                                new RegExp(`[^0-9]${season}${episodeStr}[^0-9]`),
+                            ];
+
+                            targetVideo = videos.find(file => {
+                                const fileName = file.short_name?.toLowerCase() || file.name?.toLowerCase() || '';
+                                const matches = patterns.some(pattern => pattern.test(fileName));
+                                if (matches) {
+                                    console.log(`[Torbox] ✅ MATCHED: ${file.short_name || file.name}`);
+                                }
+                                return matches;
+                            });
+
+                            if (targetVideo) {
+                                console.log(`[Torbox] ✅ Selected episode file: ${targetVideo.short_name || targetVideo.name}`);
+                            } else {
+                                console.log(`[Torbox] ❌ NO MATCH - Pattern matching failed for S${seasonStr}E${episodeStr}`);
+                                console.log(`[Torbox] ⚠️ Falling back to largest video file`);
+                            }
+                        }
+
+                        // Fallback: use largest video file
+                        if (!targetVideo) {
+                            targetVideo = videos[0];
+                        }
+
+                        if (!targetVideo) {
+                            if (torrent.files?.every(file => file.zipped)) {
+                                return 'FAILED_RAR';
+                            }
+                            throw new Error(`No TorBox file found in: ${JSON.stringify(torrent.files)}`);
+                        }
+
+                        console.log(`[Torbox] Selected file: ${targetVideo.short_name || targetVideo.name} (id=${targetVideo.id})`);
+                        return await torbox.createDownload(torrent.id, targetVideo.id);
+                    };
+
+                    // _retryCreateTorrent (EXACT Torrentio logic)
+                    const _retryCreateTorrent = async () => {
+                        const newTorrent = await _createTorrent();
+                        if (newTorrent && statusReady(newTorrent)) {
+                            return await _unrestrictLink(newTorrent);
+                        }
+                        return 'FAILED_DOWNLOAD';
+                    };
+
+                    // _resolve (EXACT Torrentio logic)
+                    const torrent = await _createOrFindTorrent();
+
+                    console.log(`[Torbox] Torrent state: download_present=${torrent?.download_present}, active=${torrent?.active}, download_finished=${torrent?.download_finished}, download_state=${torrent?.download_state}`);
+
+                    if (torrent && statusReady(torrent)) {
+                        let result = await _unrestrictLink(torrent);
+                        if (result === 'FAILED_RAR') {
+                            console.log(`[Torbox] Failed: RAR archive`);
                             return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
                         }
+
+                        // ⏩ INTROSKIP: Wrap in HLS proxy if enabled for series
+                        if (userConfig.introskip_enabled && seasonParam && episodeParam) {
+                            try {
+                                // Get imdbId for this torrent to lookup intro
+                                const episodeImdbId = dbEnabled ? await dbHelper.getImdbIdByHash(infoHash) : null;
+                                if (episodeImdbId && episodeImdbId.startsWith('tt')) {
+                                    const introDataTB = await introSkip.lookupIntro(episodeImdbId, parseInt(seasonParam), parseInt(episodeParam));
+                                    if (introDataTB && introDataTB.end_sec > 0) {
+                                        // Wrap in HLS proxy for real intro skipping
+                                        const encodedStream = encodeURIComponent(result);
+                                        result = `${workerOrigin}/introskip/hls.m3u8?stream=${encodedStream}&start=${introDataTB.start_sec}&end=${introDataTB.end_sec}`;
+                                        console.log(`⏩ [IntroSkip] Wrapped in HLS proxy: ${introDataTB.start_sec}s - ${introDataTB.end_sec}s`);
+                                    }
+                                }
+                            } catch (introErr) {
+                                console.warn(`⏩ [IntroSkip] Error applying HLS proxy: ${introErr.message}`);
+                            }
+                        }
+
+                        console.log(`[Torbox] Streaming: ${result}`);
+                        return res.redirect(302, result);
+
+                    } else if (torrent && statusDownloading(torrent)) {
+                        console.log(`[Torbox] Downloading to TorBox ${infoHash}...`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+
+                    } else if (torrent && statusError(torrent)) {
+                        console.log(`[Torbox] Retry failed download in TorBox ${JSON.stringify(torrent)}...`);
+                        await torbox.deleteTorrent(torrent.id);
+                        const retryResult = await _retryCreateTorrent();
+                        if (retryResult === 'FAILED_DOWNLOAD') {
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+                        if (retryResult === 'FAILED_RAR') {
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                        }
+                        return res.redirect(302, retryResult);
+                    }
+
+                    throw new Error(`Failed TorBox adding torrent ${JSON.stringify(torrent)}`);
+
+                } catch (error) {
+                    console.error('📦 ❌ Torbox stream error:', error);
+
+                    // Handle specific errors with placeholder videos (like Torrentio)
+                    const errorMsg = error.message?.toLowerCase() || '';
+
+                    if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
+                        // Torrent not available or invalid
+                        console.log(`[Torbox] Torrent not available (400/404)`);
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
 
-                    // STEP 4: Unlock the link
-                    const fileLink = targetFile.link;
-                    console.log(`[AllDebrid] Unlocking link for: ${targetFile.filename}`);
-                    const unrestrictedUrl = await alldebrid.unlockLink(fileLink);
+                    if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
+                        // Archive format not supported
+                        console.log(`[Torbox] Archive format not supported`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                    }
 
-                    console.log(`[AllDebrid] Redirecting to stream (direct, no MediaFlow)`);
-                    return res.redirect(302, unrestrictedUrl);
+                    // Generic error: show failed placeholder
+                    console.log(`[Torbox] Generic error, showing failed video`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                }
+            }
 
-                } else if (status === 'Downloading' || status === 1 || status === 'Processing' || status === 2) {
-                    // ⏳ DOWNLOADING/PROCESSING: Show placeholder video
-                    console.log(`[AllDebrid] Magnet is downloading/processing (status: ${status})...`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+            // ✅ UNIFIED AllDebrid Stream Endpoint
+            if (url.pathname.startsWith('/ad-stream/')) {
+                const pathParts = url.pathname.split('/');
+                const encodedConfigStr = pathParts[2];
+                const encodedMagnet = pathParts[3];
 
-                } else {
-                    // ❌ ERROR or UNKNOWN: Show failed video
-                    console.log(`[AllDebrid] Unexpected status: ${status}`);
+                let userConfig = {};
+                try {
+                    if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    console.error(`[AllDebrid] Config error: ${e.message}`);
                     return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                 }
 
-            } catch (error) {
-                console.error('🅰️ ❌ AllDebrid stream error:', error);
+                if (!userConfig.alldebrid_key) {
+                    console.error(`[AllDebrid] API key not configured`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_access_v2.mp4`);
+                }
 
-                // Handle specific errors with placeholder videos
-                const errorMsg = error.message?.toLowerCase() || '';
-
-                if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
-                    console.log(`[AllDebrid] Torrent not available (400/404)`);
+                if (!encodedMagnet) {
+                    console.error(`[AllDebrid] Invalid magnet link`);
                     return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                 }
 
-                if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
-                    console.log(`[AllDebrid] Archive format not supported`);
-                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                try {
+                    const magnetLink = decodeURIComponent(encodedMagnet);
+                    const infoHash = extractInfoHash(magnetLink);
+                    if (!infoHash) throw new Error('Invalid magnet link or missing info hash.');
+
+                    const alldebrid = new AllDebrid(userConfig.alldebrid_key);
+
+                    console.log(`[AllDebrid] Resolving ${infoHash}`);
+
+                    // STEP 1: Upload magnet (AllDebrid will use cache if available)
+                    console.log(`[AllDebrid] Uploading magnet (will use cache if available)`);
+                    const uploadResponse = await alldebrid.uploadMagnet(magnetLink);
+                    const magnetId = uploadResponse.id;
+
+                    if (!magnetId) {
+                        throw new Error('Failed to get magnet ID from AllDebrid');
+                    }
+
+                    // STEP 2: Get magnet status
+                    console.log(`[AllDebrid] Checking magnet status: ${magnetId}`);
+                    const magnetStatus = await alldebrid.getMagnetStatus(magnetId);
+
+                    // Extract status from response
+                    const status = magnetStatus.status || magnetStatus.statusCode;
+
+                    // STEP 3: Check if ready
+                    if (status === 'Ready' || status === 4) {
+                        // ✅ READY: Get files and unrestrict
+                        console.log(`[AllDebrid] Magnet ready, getting files...`);
+
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'];
+                        const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+
+                        // Extract files from magnetStatus
+                        const files = magnetStatus.links || [];
+
+                        if (files.length === 0) {
+                            console.log(`[AllDebrid] No files found`);
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        // Find video files
+                        const videos = files
+                            .filter(file => {
+                                const filename = file.filename || file.link || '';
+                                return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+                            })
+                            .filter(file => {
+                                const filename = file.filename || file.link || '';
+                                const lowerName = filename.toLowerCase();
+                                const size = file.size || 0;
+                                return !junkKeywords.some(junk => lowerName.includes(junk)) || size > 250 * 1024 * 1024;
+                            })
+                            .sort((a, b) => (b.size || 0) - (a.size || 0));
+
+                        const targetFile = videos[0];
+
+                        if (!targetFile) {
+                            console.log(`[AllDebrid] No video file found`);
+                            // Check if it's a RAR archive
+                            if (files.some(f => (f.filename || '').endsWith('.rar') || (f.filename || '').endsWith('.zip'))) {
+                                console.log(`[AllDebrid] Failed: RAR archive`);
+                                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                            }
+                            return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                        }
+
+                        // STEP 4: Unlock the link
+                        const fileLink = targetFile.link;
+                        console.log(`[AllDebrid] Unlocking link for: ${targetFile.filename}`);
+                        const unrestrictedUrl = await alldebrid.unlockLink(fileLink);
+
+                        console.log(`[AllDebrid] Redirecting to stream (direct, no MediaFlow)`);
+                        return res.redirect(302, unrestrictedUrl);
+
+                    } else if (status === 'Downloading' || status === 1 || status === 'Processing' || status === 2) {
+                        // ⏳ DOWNLOADING/PROCESSING: Show placeholder video
+                        console.log(`[AllDebrid] Magnet is downloading/processing (status: ${status})...`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/downloading_v2.mp4`);
+
+                    } else {
+                        // ❌ ERROR or UNKNOWN: Show failed video
+                        console.log(`[AllDebrid] Unexpected status: ${status}`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                } catch (error) {
+                    console.error('🅰️ ❌ AllDebrid stream error:', error);
+
+                    // Handle specific errors with placeholder videos
+                    const errorMsg = error.message?.toLowerCase() || '';
+
+                    if (errorMsg.includes('400') || errorMsg.includes('not found') || errorMsg.includes('invalid')) {
+                        console.log(`[AllDebrid] Torrent not available (400/404)`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                    }
+
+                    if (errorMsg.includes('rar') || errorMsg.includes('zip')) {
+                        console.log(`[AllDebrid] Archive format not supported`);
+                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/failed_rar_v2.mp4`);
+                    }
+
+                    // Generic error: show failed placeholder
+                    console.log(`[AllDebrid] Generic error, showing failed video`);
+                    return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
+                }
+            }
+
+            if (url.pathname.startsWith('/torbox-stream-personal/')) {
+                const pathParts = url.pathname.split('/');
+                const encodedConfigStr = pathParts[2];
+                const torrentId = pathParts[3];
+
+                let userConfig = {};
+                res.setHeader('Content-Type', 'text/html');
+                try {
+                    userConfig = JSON.parse(atob(encodedConfigStr));
+                } catch (e) {
+                    return res.status(400).send(`<h1>Errore Config</h1><p>${e.message}</p>`);
                 }
 
-                // Generic error: show failed placeholder
-                console.log(`[AllDebrid] Generic error, showing failed video`);
-                return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-            }
-        }
-
-        if (url.pathname.startsWith('/torbox-stream-personal/')) {
-            const pathParts = url.pathname.split('/');
-            const encodedConfigStr = pathParts[2];
-            const torrentId = pathParts[3];
-
-            let userConfig = {};
-            res.setHeader('Content-Type', 'text/html');
-            try {
-                userConfig = JSON.parse(atob(encodedConfigStr));
-            } catch (e) {
-                return res.status(400).send(`<h1>Errore Config</h1><p>${e.message}</p>`);
-            }
-
-            if (!userConfig.torbox_key) {
-                return res.status(400).send('<h1>Errore</h1><p>Torbox API key non configurata.</p>');
-            }
-
-            try {
-                const torbox = new Torbox(userConfig.torbox_key);
-                const torrentInfo = await torbox.getTorrentInfo(torrentId);
-
-                if (!torrentInfo.download_finished) {
-                    throw new Error('Il torrent non è ancora completato.');
+                if (!userConfig.torbox_key) {
+                    return res.status(400).send('<h1>Errore</h1><p>Torbox API key non configurata.</p>');
                 }
 
-                const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
-                const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
+                try {
+                    const torbox = new Torbox(userConfig.torbox_key);
+                    const torrentInfo = await torbox.getTorrentInfo(torrentId);
 
-                const videoFiles = (torrentInfo.files || []).filter(file => {
-                    const lowerName = file.name?.toLowerCase() || '';
-                    return videoExtensions.some(ext => lowerName.endsWith(ext)) &&
-                        !junkKeywords.some(junk => lowerName.includes(junk));
-                });
+                    if (!torrentInfo.download_finished) {
+                        throw new Error('Il torrent non è ancora completato.');
+                    }
 
-                const bestFile = videoFiles.length > 0
-                    ? videoFiles.reduce((max, file) => (file.size > max.size ? file : max), videoFiles[0])
-                    : (torrentInfo.files || [])[0];
+                    const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv'];
+                    const junkKeywords = ['sample', 'trailer', 'extra', 'bonus', 'extras'];
 
-                if (!bestFile) throw new Error('Nessun file valido trovato.');
+                    const videoFiles = (torrentInfo.files || []).filter(file => {
+                        const lowerName = file.name?.toLowerCase() || '';
+                        return videoExtensions.some(ext => lowerName.endsWith(ext)) &&
+                            !junkKeywords.some(junk => lowerName.includes(junk));
+                    });
 
-                const downloadData = await torbox.createDownload(torrentId, bestFile.id);
-                console.log(`📦 🚀 Redirecting to personal Torbox stream`);
-                return res.redirect(302, downloadData);
+                    const bestFile = videoFiles.length > 0
+                        ? videoFiles.reduce((max, file) => (file.size > max.size ? file : max), videoFiles[0])
+                        : (torrentInfo.files || [])[0];
 
-            } catch (error) {
-                console.error('📦 ❌ Torbox personal stream error:', error);
-                return res.status(500).send(`<h1>Errore</h1><p>${error.message}</p>`);
-            }
-        }
+                    if (!bestFile) throw new Error('Nessun file valido trovato.');
 
-        if (url.pathname === '/' + atob('aGVhbHRoL3RvcmJveA==')) {
-            const data = {};
-            _k.forEach((ts, key) => { data[key] = new Date(ts).toISOString(); });
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(200).send(JSON.stringify(data, null, 2));
-        }
+                    const downloadData = await torbox.createDownload(torrentId, bestFile.id);
+                    console.log(`📦 🚀 Redirecting to personal Torbox stream`);
+                    return res.redirect(302, downloadData);
 
-        // Health check
-        if (url.pathname === '/health') {
-            const health = {
-                status: 'OK',
-                addon: 'IlCorsaroViola',
-                version: '2.0.0',
-                uptime: Date.now(),
-                cache: {
-                    entries: cache.size,
-                    maxEntries: MAX_CACHE_ENTRIES,
-                    ttl: `${CACHE_TTL / 60000} minutes`
+                } catch (error) {
+                    console.error('📦 ❌ Torbox personal stream error:', error);
+                    return res.status(500).send(`<h1>Errore</h1><p>${error.message}</p>`);
                 }
-            };
+            }
 
-            res.setHeader('Content-Type', 'application/json');
-            return res.status(200).send(JSON.stringify(health, null, 2));
-        }
-
-        // Enhanced search endpoint for testing
-        if (url.pathname === '/search') {
-            const query = url.searchParams.get('q');
-            const type = url.searchParams.get('type') || 'movie';
-
-            if (!query) {
+            if (url.pathname === '/' + atob('aGVhbHRoL3RvcmJveA==')) {
+                const data = {};
+                _k.forEach((ts, key) => { data[key] = new Date(ts).toISOString(); });
                 res.setHeader('Content-Type', 'application/json');
-                return res.status(400).send(JSON.stringify({ error: 'Missing query parameter (q)' }));
+                return res.status(200).send(JSON.stringify(data, null, 2));
             }
 
-            const searchConfig = {
-                tmdb_key: env.TMDB_KEY,
-                rd_key: env.RD_KEY,
-                jackett_url: env.JACKETT_URL,
-                jackett_api_key: env.JACKETT_API_KEY,
-                jackett_password: env.JACKETT_PASSWORD
-            };
+            // Health check
+            if (url.pathname === '/health') {
+                const health = {
+                    status: 'OK',
+                    addon: 'IlCorsaroViola',
+                    version: '2.0.0',
+                    uptime: Date.now(),
+                    cache: {
+                        entries: cache.size,
+                        maxEntries: MAX_CACHE_ENTRIES,
+                        ttl: `${CACHE_TTL / 60000} minutes`
+                    }
+                };
 
-            const result = await handleSearch({ query, type }, searchConfig);
+                res.setHeader('Content-Type', 'application/json');
+                return res.status(200).send(JSON.stringify(health, null, 2));
+            }
+
+            // Enhanced search endpoint for testing
+            if (url.pathname === '/search') {
+                const query = url.searchParams.get('q');
+                const type = url.searchParams.get('type') || 'movie';
+
+                if (!query) {
+                    res.setHeader('Content-Type', 'application/json');
+                    return res.status(400).send(JSON.stringify({ error: 'Missing query parameter (q)' }));
+                }
+
+                const searchConfig = {
+                    tmdb_key: env.TMDB_KEY,
+                    rd_key: env.RD_KEY,
+                    jackett_url: env.JACKETT_URL,
+                    jackett_api_key: env.JACKETT_API_KEY,
+                    jackett_password: env.JACKETT_PASSWORD
+                };
+
+                const result = await handleSearch({ query, type }, searchConfig);
+                const responseTime = Date.now() - startTime;
+
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('X-Response-Time', `${responseTime}ms`);
+                return res.status(200).send(JSON.stringify({ ...result, responseTimeMs: responseTime }, null, 2));
+            }
+
+            // 404 for unknown paths
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(404).send(JSON.stringify({ error: 'Not Found' }));
+
+        } catch (error) {
             const responseTime = Date.now() - startTime;
+            console.error(`❌ Worker error after ${responseTime}ms:`, error);
 
             res.setHeader('Content-Type', 'application/json');
-            res.setHeader('X-Response-Time', `${responseTime}ms`);
-            return res.status(200).send(JSON.stringify({ ...result, responseTimeMs: responseTime }, null, 2));
+            return res.status(500).send(JSON.stringify({
+                error: 'Internal Server Error',
+                message: error.message,
+                path: url.pathname,
+                responseTimeMs: responseTime
+            }));
         }
-
-        // 404 for unknown paths
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(404).send(JSON.stringify({ error: 'Not Found' }));
-
-    } catch (error) {
-        const responseTime = Date.now() - startTime;
-        console.error(`❌ Worker error after ${responseTime}ms:`, error);
-
-        res.setHeader('Content-Type', 'application/json');
-        return res.status(500).send(JSON.stringify({
-            error: 'Internal Server Error',
-            message: error.message,
-            path: url.pathname,
-            responseTimeMs: responseTime
-        }));
     }
-}

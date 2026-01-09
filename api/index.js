@@ -6316,73 +6316,74 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Combine results: nonPacks + verifiedPacks + newlyVerified
                 // SKIPPED ARE EXCLUDED
                 filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
+            } // ✅ END PACK VERIFICATION BLOCK
 
-                // Convert filtered DB results to scraper format
-                for (const dbResult of filteredDbResults) {
-                    // 🔥 FILTER: Respect user configuration for DB results
-                    // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
-                    const providerName = dbResult.provider || 'Database';
+            // Convert filtered DB results to scraper format
+            for (const dbResult of filteredDbResults) {
+                // 🔥 FILTER: Respect user configuration for DB results
+                // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
+                const providerName = dbResult.provider || 'Database';
 
-                    if (!config.db_only) {
-                        // Normal mode: respect individual provider toggles
-                        if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                            console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
-                        if (providerName === 'UIndex' && config.use_uindex === false) {
-                            console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
-                        if (providerName === 'Knaben' && config.use_knaben === false) {
-                            console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                            continue;
-                        }
+                if (!config.db_only) {
+                    // Normal mode: respect individual provider toggles
+                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                        continue;
                     }
-                    // In db_only mode: show ALL providers without filtering
-
-                    // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
-                    const torrentTitle = dbResult.torrent_title || dbResult.title;
-                    const torrentSize = dbResult.torrent_size || dbResult.size;
-                    // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
-                    const displaySize = dbResult.file_size || torrentSize;
-                    // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
-                    // This ensures we only show the actual filename for the SPECIFIC episode
-                    const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
-
-                    // Build magnet link
-                    const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
-
-                    // DEBUG: Log what we're adding
-                    console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
-
-                    // Add to raw results with high priority
-                    allRawResults.push({
-                        title: torrentTitle,
-                        infoHash: dbResult.info_hash.toUpperCase(),
-                        magnetLink: magnetLink,
-                        seeders: dbResult.seeders || 0,
-                        leechers: 0,
-                        size: displaySize ? formatBytes(displaySize) : 'Unknown',
-                        sizeInBytes: displaySize || 0,
-                        // ✅ Pack size for pack/episode display
-                        packSize: dbResult.packSize || torrentSize || 0,
-                        file_size: dbResult.file_size || 0,
-                        quality: extractQuality(torrentTitle),
-                        filename: fileName || torrentTitle,
-                        source: `💾 ${dbResult.provider || 'Database'}`,
-                        fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
-                        file_title: fileName || undefined // Real filename from DB (only for specific episode)
-                    });
-
-                    // DEBUG: Log file info from DB
-                    if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
-                        console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
+                    if (providerName === 'UIndex' && config.use_uindex === false) {
+                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'Knaben' && config.use_knaben === false) {
+                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                        continue;
                     }
                 }
+                // In db_only mode: show ALL providers without filtering
 
-                console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
+                // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
+                const torrentTitle = dbResult.torrent_title || dbResult.title;
+                const torrentSize = dbResult.torrent_size || dbResult.size;
+                // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
+                const displaySize = dbResult.file_size || torrentSize;
+                // Only use file_title if it came from searchEpisodeFiles (has torrent_title field)
+                // This ensures we only show the actual filename for the SPECIFIC episode
+                const fileName = dbResult.torrent_title ? dbResult.file_title : undefined;
+
+                // Build magnet link
+                const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
+
+                // DEBUG: Log what we're adding
+                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${dbResult.file_size ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
+
+                // Add to raw results with high priority
+                allRawResults.push({
+                    title: torrentTitle,
+                    infoHash: dbResult.info_hash.toUpperCase(),
+                    magnetLink: magnetLink,
+                    seeders: dbResult.seeders || 0,
+                    leechers: 0,
+                    size: displaySize ? formatBytes(displaySize) : 'Unknown',
+                    sizeInBytes: displaySize || 0,
+                    // ✅ Pack size for pack/episode display
+                    packSize: dbResult.packSize || torrentSize || 0,
+                    file_size: dbResult.file_size || 0,
+                    quality: extractQuality(torrentTitle),
+                    filename: fileName || torrentTitle,
+                    source: `💾 ${dbResult.provider || 'Database'}`,
+                    fileIndex: dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined, // For series episodes and pack movies
+                    file_title: fileName || undefined // Real filename from DB (only for specific episode)
+                });
+
+                // DEBUG: Log file info from DB
+                if (dbResult.file_index !== null && dbResult.file_index !== undefined) {
+                    console.log(`   📁 Has file: fileIndex=${dbResult.file_index}, file_title=${fileName}`);
+                }
             }
-        } // ✅ Close filteredDbResults loop
+
+            console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
+        }
+
 
         // 🎯 Helper: Calculate similarity between two strings (0-1)
         // Uses multiple strategies: Levenshtein, word overlap, containment

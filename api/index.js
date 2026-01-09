@@ -5680,17 +5680,19 @@ async function handleStream(type, id, config, workerOrigin) {
                 // 🔥 FILTER: Respect user configuration even for DB results
                 const providerName = dbResult.provider || 'Database';
 
-                if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                    console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                    continue;
-                }
-                if (providerName === 'UIndex' && config.use_uindex === false) {
-                    console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                    continue;
-                }
-                if (providerName === 'Knaben' && config.use_knaben === false) {
-                    console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                    continue;
+                if (!config.db_only) {
+                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'UIndex' && config.use_uindex === false) {
+                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
+                    if (providerName === 'Knaben' && config.use_knaben === false) {
+                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                        continue;
+                    }
                 }
 
                 // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title

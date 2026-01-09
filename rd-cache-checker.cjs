@@ -151,15 +151,6 @@ async function checkSingleHash(infoHash, magnet, token) {
             }
         }
 
-        // ✅ FALLBACK: If no video file found (e.g. RAR archive or unparsed structure), use torrent name
-        if (!mainFileName && info && info.filename) {
-            mainFileName = info.filename;
-            if (info.bytes) {
-                mainFileSize = info.bytes;
-            }
-            console.log(`📄 [RD Cache] Using torrent name as fallback: ${mainFileName} (${(mainFileSize / 1024 / 1024).toFixed(2)} MB)`);
-        }
-
         // 6. Clean up - Always delete the torrent we just added
         await deleteTorrent(token, torrentId);
 

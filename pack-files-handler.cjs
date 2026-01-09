@@ -13,13 +13,6 @@
 
 const axios = require('axios');
 
-// 🔥 VERSION CHECK - Verify HF is using updated code
-console.log('═══════════════════════════════════════════════════');
-console.log('📦 PACK-FILES-HANDLER v2.1 - STRICT SAMPLE FILTER');
-console.log('🎯 Filter: No "sample" in name, Min Size 10MB');
-console.log('📅 Build: 2026-01-09T13:05 - OFF-BY-ONE FIX APPLIED');
-console.log('═══════════════════════════════════════════════════');
-
 // Video file extensions
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
@@ -187,50 +180,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             if (cacheData && typeof cacheData === 'object') {
                 const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
                 if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
-                    // CRITICAL: Filter VIDEO files only, then sort by path BEFORE assigning index!
-                    // Stremio/MediaFusion skip non-video files (.nfo, .txt, .jpg, samples)
-                    const VIDEO_EXTENSIONS = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg'];
-
-                    console.log(`🔍 [PACK-DEBUG] Raw files from Torbox CACHE (count=${cacheData[hashKey].files.length}):`);
-                    cacheData[hashKey].files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
-
-                    // Filter only video files AND exclude samples/small files
-                    const MIN_SIZE_BYTES = 10 * 1024 * 1024; // 10MB min size for video files
-
-                    const videoFiles = cacheData[hashKey].files.filter(f => {
-                        const name = (f.name || f.path || '').toLowerCase();
-                        const ext = name.match(/\.\w+$/)?.[0];
-                        const size = f.size || 0;
-
-                        // Check extension
-                        if (!ext || !VIDEO_EXTENSIONS.includes(ext)) return false;
-
-                        // Exclude samples explicitly
-                        if (name.includes('sample')) return false;
-
-                        // Exclude tiny files (often fake samples or intros)
-                        if (size < MIN_SIZE_BYTES) return false;
-
-                        return true;
-                    });
-
-                    // Sort video files alphabetically by path
-                    const sortedFiles = [...videoFiles].sort((a, b) => {
-                        const pathA = (a.name || a.path || '').toLowerCase();
-                        const pathB = (b.name || b.path || '').toLowerCase();
-                        return pathA.localeCompare(pathB);
-                    });
-
-                    console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VALID VIDEO files (no samples), sorted:`);
-                    sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)`));
-
-                    const files = sortedFiles.map((f, idx) => ({
-                        id: idx,  // Index AFTER filtering+sorting - matches Stremio/MediaFusion
+                    const files = cacheData[hashKey].files.map((f, idx) => ({
+                        id: idx,
                         path: f.name || f.path || `file_${idx}`,
                         bytes: f.size || 0,
                         selected: 1
                     }));
-                    console.log(`📊 [PACK-HANDLER] Torbox cache files (sorted by path): ${files.map(f => `${f.id}:${f.path.substring(0, 30)}`).join(', ')}`);
                     console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path)`);
                     return { torrentId: 'cached', files };
                 }
@@ -271,50 +226,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             throw new Error('No files in Torbox torrent info');
         }
 
-        // CRITICAL: Filter VIDEO files only, then sort by path BEFORE assigning index!
-        // Stremio/MediaFusion skip non-video files (.nfo, .txt, .jpg, samples)
-        const VIDEO_EXTENSIONS = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg'];
-
-        console.log(`🔍 [PACK-DEBUG] Raw files from Torbox SLOW PATH (count=${torrent.files.length}):`);
-        torrent.files.forEach((f, i) => console.log(`   [${i}] ${f.name} (${f.size})`));
-
-        // Filter only video files AND exclude samples/small files
-        const MIN_SIZE_BYTES = 10 * 1024 * 1024; // 10MB min size for video files
-
-        const videoFiles = torrent.files.filter(f => {
-            const name = (f.name || '').toLowerCase();
-            const ext = name.match(/\.\w+$/)?.[0];
-            const size = f.size || 0;
-
-            // Check extension
-            if (!ext || !VIDEO_EXTENSIONS.includes(ext)) return false;
-
-            // Exclude samples explicitly
-            if (name.includes('sample')) return false;
-
-            // Exclude tiny files (often fake samples or intros)
-            if (size < MIN_SIZE_BYTES) return false;
-
-            return true;
-        });
-
-        // Sort video files alphabetically by path
-        const sortedFiles = [...videoFiles].sort((a, b) => {
-            const pathA = (a.name || '').toLowerCase();
-            const pathB = (b.name || '').toLowerCase();
-            return pathA.localeCompare(pathB);
-        });
-
-        console.log(`🔍 [PACK-DEBUG] Filtered to ${sortedFiles.length} VALID VIDEO files (no samples), sorted:`);
-        sortedFiles.forEach((f, i) => console.log(`   [${i}] ${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)`));
-
-        const files = sortedFiles.map((f, idx) => ({
-            id: idx,  // Index AFTER filtering+sorting - matches Stremio/MediaFusion
+        const files = torrent.files.map((f, idx) => ({
+            id: idx,
             path: f.name,
             bytes: f.size,
             selected: 1
         }));
-        console.log(`📊 [PACK-HANDLER] Torbox slow path files (sorted): ${files.map(f => `${f.id}:${f.path.substring(0, 30)}`).join(', ')}`);
 
         console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
         await axios.get(`${baseUrl}/torrents/controltorrent`, {
@@ -430,10 +347,7 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
 
     // 1️⃣ CHECK DB CACHE for Index (Fastest, FREE)
     // Check if we already have the file structure for this pack in local DB
-    // 🔥 DEBUG: Skip DB for Stranger Things hash to force re-index with new filters
-    if (infoHash.toLowerCase().startsWith('74a22624')) {
-        console.log(`🔧 [DEBUG] Skipping DB Cache for Stranger Things... forcing clean re-index`);
-    } else if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
+    if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
         try {
             const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
             if (cachedFiles && cachedFiles.length > 0) {

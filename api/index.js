@@ -8166,6 +8166,13 @@ async function handleStream(type, id, config, workerOrigin) {
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
                         folderSize: Number(result.packSize || result.sizeInBytes || 0),
 
+                        // 🔥 Required for Stremio P2P playback
+                        sources: [
+                            'tracker:udp://tracker.opentrackr.org:1337/announce',
+                            'tracker:udp://open.tracker.cl:1337/announce',
+                            'dht:' + result.infoHash
+                        ],
+
                         behaviorHints: {
                             bingeGroup: 'uindex-p2p',
                             notWebReady: true,

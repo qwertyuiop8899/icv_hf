@@ -6350,7 +6350,10 @@ async function handleStream(type, id, config, workerOrigin) {
                 let resolvedFileTitle = null;
                 let resolvedFileSize = null;
 
-                if (season && episode && !dbResult.torrent_title) {
+                // Check if existing DB file match is valid (Sanity Check)
+                const isDbFileValid = dbResult.torrent_title && dbResult.file_title && isExactEpisodeMatch(dbResult.file_title, mediaDetails.name || '', season, episode, mediaDetails.isAnime || false, null, true);
+
+                if (season && episode && (!dbResult.torrent_title || !isDbFileValid)) {
                     // Only try to resolve if we have season/episode info (series)
                     if (season && episode) {
                         try {

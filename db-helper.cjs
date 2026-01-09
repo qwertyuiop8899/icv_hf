@@ -595,7 +595,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, episodeInfo 
           episodeInfo.episode
         ]);
 
-        console.log(`✅ [DB] Upserted file into 'files' table: ${fileName}`);
+        console.log(`✅ [DB LEARNED] Saved mapping: S${episodeInfo.season}E${episodeInfo.episode} -> Index ${fileIndex} (File: ${fileName})`);
         return true;
       }
     } else {

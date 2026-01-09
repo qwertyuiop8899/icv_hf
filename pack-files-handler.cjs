@@ -123,7 +123,7 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         }
 
         const files = infoResponse.data.files.map(f => ({
-            id: f.id,
+            id: f.id - 1, // RD uses 1-based indexing, convert to 0-based for P2P/WebTorrent compatibility
             path: f.path,
             bytes: f.bytes,
             selected: f.selected

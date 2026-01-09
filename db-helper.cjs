@@ -307,23 +307,26 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
           last_cached_check = NOW(),
           file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title),
           size = COALESCE(EXCLUDED.size, torrents.size),
-          title = CASE WHEN torrents.provider = 'rd_cache' AND EXCLUDED.file_title IS NOT NULL THEN EXCLUDED.file_title ELSE torrents.title END,
+          title = CASE WHEN torrents.provider = 'rd_cache' THEN COALESCE(EXCLUDED.title, torrents.title) ELSE torrents.title END,
           type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
-      // Use file_title as fallback title, or generate one from hash
-      const fallbackTitle = result.file_title || `RD-${hashLower.substring(0, 8)}`;
+      // Use torrent_title from RD as primary title, then file_title, then fallback
+      const fallbackTitle = result.torrent_title || result.file_title || `RD-${hashLower.substring(0, 8)}`;
 
       // ✅ FIX: Force cached_rd to true (we only call this for cached items)
       // Previously result.cached could be undefined which would insert NULL
       const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+
+      // ✅ Use torrent total size primarily, then file size
+      const torrentSize = result.size || result.file_size || null;
 
       const params = [
         hashLower,                           // $1 info_hash
         fallbackTitle,                       // $2 title  
         cachedValue,                         // $3 cached_rd (forced to true if undefined)
         result.file_title || null,           // $4 file_title
-        result.size || null,                 // $5 size
+        torrentSize,                         // $5 size (updated to use total size)
         mediaType || 'unknown'               // $6 type
       ];
 

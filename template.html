@@ -599,8 +599,6 @@
                         <ul>
                             <li><strong>Debrid:</strong> Real-Debrid e/o Torbox per streaming istantaneo</li>
                             <li><strong>MediaFlow Proxy:</strong> Condividi Real-Debrid in sicurezza (opzionale)</li>
-                            <li><strong>IntroSkip:</strong> Salta automaticamente le intro (opzionale)</li>
-                            <li><strong>Formatter:</strong> Rinomina i file per una visualizzazione pulita</li>
                             <li><strong>P2P Fallback:</strong> Senza debrid usa streaming P2P diretto</li>
                         </ul>
                     </div>
@@ -648,10 +646,6 @@
                 <div class="section-title">🔎 Siti di Ricerca Torrent</div>
                 <small>Seleziona su quali siti cercare i torrent:</small>
                 <div class="search-sites">
-                    <label style="border-color: #4CAF50; background: rgba(76, 175, 80, 0.1);">
-                        <input type="checkbox" id="use_db_only">
-                        <span>🗄️ Ricerca Solo DB (Nessuna ricerca live)</span>
-                    </label>
                     <label>
                         <input type="checkbox" id="use_corsaronero" checked>
                         <span>🏴‍☠️ Il Corsaro Nero (Italiano)</span>
@@ -683,6 +677,14 @@
                     <label>
                         <input type="checkbox" id="use_rarbg" checked>
                         <span>🏴 RARBG (Proxy)</span>
+                    </label>
+                    <label style="background: rgba(0, 100, 200, 0.15); border-color: rgba(100, 150, 255, 0.4);">
+                        <input type="checkbox" id="db_only">
+                        <span>💾 Ricerca Solo DB (Ultra-veloce, no live search)</span>
+                    </label>
+                    <label style="background: rgba(0, 128, 0, 0.15); border-color: rgba(0, 200, 83, 0.4);">
+                        <input type="checkbox" id="full_ita">
+                        <span>🇮🇹 FULL ITA (Solo risultati con "ITA" nel nome)</span>
                     </label>
                     <label>
                         <input type="checkbox" id="use_max_res_limit">
@@ -727,22 +729,6 @@
                 <input id="jackett_password" placeholder="Jackett Password (opzionale)" type="password">
             </div>
 
-            <div class="service-card">
-                <div class="service-header">
-                    <div class="service-title">⚡ Funzioni Avanzate</div>
-                </div>
-                <div class="search-sites">
-                    <label>
-                        <input type="checkbox" id="use_introskip">
-                        <span>⏩ IntroSkip (Salta intro serie TV)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_formatter">
-                        <span>✨ Formatter (Nomi file puliti)</span>
-                    </label>
-                </div>
-            </div>
-
             <div class="action-section full-width">
                 <div
                     style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
@@ -750,6 +736,77 @@
                         <input type="checkbox" id="aiostreams_mode">
                         <span>🔄 Modalità AIOStreams</span>
                         <small style="margin-left: auto; color: #9ca3af;">Compatibile con AIOStreams addon</small>
+                    </label>
+                </div>
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <span>🎨 Formatter</span>
+                        <select id="formatter_preset"
+                            style="padding: 6px 12px; background: rgba(30, 30, 50, 0.8); border: 1px solid rgba(147, 51, 234, 0.4); border-radius: 6px; color: white; font-size: 12px; cursor: pointer;">
+                            <option value="default">Default</option>
+                            <option value="torrentio">Torrentio</option>
+                            <option value="minimal">Minimal</option>
+                            <option value="verbose">Verbose</option>
+                            <option value="italiano">Italiano</option>
+                            <option value="fra">Fra</option>
+                            <option value="dav">Dav</option>
+                            <option value="and">And</option>
+                            <option value="lad">Lad</option>
+                            <option value="pri">Pri</option>
+                            <option value="custom">Custom...</option>
+                        </select>
+                        <a href="/formatter.html" target="_blank" id="formatter_preview_link"
+                            style="font-size: 11px; color: #a78bfa; text-decoration: underline; cursor: pointer;">📋
+                            Anteprima & Variabili</a>
+                        <small id="formatter_status" style="margin-left: auto; color: #9ca3af;"></small>
+                    </div>
+                    <!-- Custom formatter textarea (hidden by default) -->
+                    <div id="custom_formatter_container" style="display: none; margin-top: 10px;">
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #9ca3af;">Name Template:</label>
+                            <textarea id="formatter_custom_name" rows="2"
+                                style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
+                                placeholder="Es: {stream.resolution} {stream.quality}"></textarea>
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #9ca3af;">Description Template:</label>
+                            <textarea id="formatter_custom_desc" rows="3"
+                                style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
+                                placeholder="Es: {stream.filename}\n{stream.size::bytes}"></textarea>
+                        </div>
+                        <details style="font-size: 10px; color: #9ca3af;">
+                            <summary style="cursor: pointer; color: #a78bfa;">📖 Variabili disponibili</summary>
+                            <div
+                                style="margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-family: monospace;">
+                                <strong>Stream:</strong> {stream.quality}, {stream.resolution}, {stream.filename},
+                                {stream.size::bytes}, {stream.seeders}, {stream.codec}, {stream.encode},
+                                {stream.languageEmojis::join(' ')}, {stream.audioTags::join(' ')},
+                                {stream.visualTags::join(' ')}, {stream.releaseGroup}<br>
+                                <strong>Service:</strong> {service.name}, {service.shortName},
+                                {service.cached::istrue["⚡"||"❌"]}<br>
+                                <strong>Addon:</strong> {addon.name}<br>
+                                <strong>Syntax:</strong> {field::exists["show"||"hide"]}, {field::&gt;0["yes"||"no"]},
+                                {field::~pattern["match"||"no"]}, {text::small}
+                            </div>
+                        </details>
+                        <div style="margin-top: 10px; display: flex; gap: 10px;">
+                            <button type="button" id="formatter_save_btn"
+                                style="padding: 8px 16px; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer; font-weight: bold;">
+                                💾 SALVA Template
+                            </button>
+                            <span id="formatter_save_status"
+                                style="color: #10b981; font-size: 11px; align-self: center;"></span>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="introskip_enabled">
+                        <span>⏩ IntroSkip (Salta Intro Serie TV)</span>
+                        <small style="margin-left: auto; color: #9ca3af;">*Funziona solo con VIMU Player su Android e
+                            Stremio app su iOS</small>
                     </label>
                 </div>
                 <div class="button-group">
@@ -786,12 +843,15 @@
         const useMediaFusionCheckbox = document.getElementById("use_mediafusion");
         const useCometCheckbox = document.getElementById("use_comet");
         const useRarbgCheckbox = document.getElementById("use_rarbg");
+        const fullItaCheckbox = document.getElementById("full_ita");
+        const dbOnlyCheckbox = document.getElementById("db_only");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
+
+        // Feature toggles
         const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
-        const useDbOnlyCheckbox = document.getElementById("use_db_only");
-        const useFormatterCheckbox = document.getElementById("use_formatter");
-        const useIntroSkipCheckbox = document.getElementById("use_introskip");
+        const introSkipEnabledCheckbox = document.getElementById("introskip_enabled");
+
 
         // Buttons
         const installButton = document.getElementById("install_button");
@@ -817,23 +877,6 @@
         // Enable/disable Max Resolution Limit select based on checkbox
         useMaxResLimitCheckbox.addEventListener('change', () => {
             maxResLimitSelect.disabled = !useMaxResLimitCheckbox.checked;
-            updateInstallLink();
-        });
-
-        // DB Only logic
-        const providerCheckboxes = [
-            useCorsaroNeroCheckbox, useUIndexCheckbox, useKnabenCheckbox,
-            useTorrentGalaxyCheckbox, useTorrentioCheckbox, useMediaFusionCheckbox,
-            useCometCheckbox, useRarbgCheckbox
-        ];
-
-        useDbOnlyCheckbox.addEventListener('change', () => {
-            const isDbOnly = useDbOnlyCheckbox.checked;
-            providerCheckboxes.forEach(cb => {
-                cb.disabled = isDbOnly;
-                if (isDbOnly) cb.parentElement.style.opacity = '0.5';
-                else cb.parentElement.style.opacity = '1';
-            });
             updateInstallLink();
         });
 
@@ -904,6 +947,8 @@
             config.use_mediafusion = useMediaFusionCheckbox.checked;
             config.use_comet = useCometCheckbox.checked;
             config.use_rarbg = useRarbgCheckbox.checked;
+            config.full_ita = fullItaCheckbox.checked;
+            config.db_only = dbOnlyCheckbox.checked;
 
             // Max Resolution Limit (only if checkbox is checked)
             if (useMaxResLimitCheckbox.checked) {
@@ -913,19 +958,27 @@
                 }
             }
 
-            // AIOStreams compatibility mode
+            // Feature toggles
             if (aioStreamsModeCheckbox.checked) {
                 config.aiostreams_mode = true;
             }
-
-            // DB Only mode
-            if (useDbOnlyCheckbox.checked) {
-                config.db_only = true;
+            if (introSkipEnabledCheckbox.checked) {
+                config.introskip_enabled = true;
             }
 
-            // Formatter & IntroSkip
-            if (useFormatterCheckbox.checked) config.use_formatter = true;
-            if (useIntroSkipCheckbox.checked) config.use_introskip = true;
+            // Custom Formatter
+            const formatterPreset = document.getElementById('formatter_preset').value;
+            if (formatterPreset && formatterPreset !== 'default') {
+                config.formatter_preset = formatterPreset;
+                if (formatterPreset === 'custom') {
+                    const customName = document.getElementById('formatter_custom_name').value;
+                    const customDesc = document.getElementById('formatter_custom_desc').value;
+                    console.log('🎨 [Formatter Save] name:', customName ? customName.substring(0, 30) + '...' : '(empty)');
+                    console.log('🎨 [Formatter Save] desc:', customDesc ? customDesc.substring(0, 30) + '...' : '(empty)');
+                    if (customName) config.formatter_custom_name = customName;
+                    if (customDesc) config.formatter_custom_desc = customDesc;
+                }
+            }
 
             // Check if at least one search site is selected
             let searchSites = [];
@@ -939,8 +992,8 @@
             if (config.use_rarbg) searchSites.push("RARBG");
 
             if (searchSites.length === 0 && !config.db_only) {
-                // No search sites selected - show error
-                statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o usa Solo DB)";
+                // No search sites selected and not in DB Only mode - show error
+                statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o abilita 'Ricerca Solo DB')";
                 statusEl.style.color = '#FF6B6B';
                 linkContainer.classList.remove('show');
                 installButton.disabled = true;
@@ -949,7 +1002,12 @@
             }
 
             // Generate install URL
-            const encodedConfig = btoa(JSON.stringify(config));
+            // Fix for Unicode/Emoji in btoa: https://developer.mozilla.org/en-US/docs/Glossary/Base64#the_unicode_problem
+            const jsonConfig = JSON.stringify(config);
+            const encodedConfig = btoa(encodeURIComponent(jsonConfig).replace(/%([0-9A-F]{2})/g,
+                function toSolidBytes(match, p1) {
+                    return String.fromCharCode('0x' + p1);
+                }));
             const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
 
             installLinkDisplay.value = installUrl;
@@ -957,7 +1015,26 @@
             installButton.disabled = false;
             copyButton.disabled = false;
 
-            // Status message
+            // Status message with emoji indicators
+            // Debrid icons (with + separator)
+            let debridEmojis = [];
+            if (config.use_rd) debridEmojis.push('👑');
+            if (config.use_torbox) debridEmojis.push('📦');
+
+            // Feature icons (no separator)
+            let featureEmojis = '';
+            if (config.db_only) featureEmojis += '⚡';
+            if (config.full_ita) featureEmojis += '🇮🇹';
+            if (config.introskip_enabled) featureEmojis += '⏩';
+
+            // Build status emoji string
+            let statusEmojis = '';
+            if (debridEmojis.length > 0) {
+                statusEmojis = debridEmojis.join('+') + featureEmojis;
+            } else {
+                statusEmojis = '🔗' + featureEmojis; // P2P + features
+            }
+
             let services = [];
             if (config.use_rd) services.push("Real-Debrid");
             if (config.use_torbox) services.push("Torbox");
@@ -965,9 +1042,10 @@
             if (config.mediaflow_url) services.push("MediaFlow");
             if (config.jackett_url) services.push("Jackettio");
 
+            const dbOnlyText = config.db_only ? ' [DB Only]' : '';
             const serviceText = services.length > 0 ? ` (${services.join(', ')})` : ' (Solo P2P)';
-            const searchText = ` | Siti: ${searchSites.join(', ')}`;
-            statusEl.textContent = `✓ Configurazione pronta${serviceText}${searchText}`;
+            const searchText = searchSites.length > 0 ? ` | Siti: ${searchSites.join(', ')}` : '';
+            statusEl.textContent = `✓ ${statusEmojis} Configurazione pronta${dbOnlyText}${serviceText}${searchText}`;
             statusEl.style.color = '#4EC9B0';
         }
 
@@ -1092,6 +1170,14 @@
                     const el = document.getElementById('use_rarbg');
                     if (el) el.checked = cfg.use_rarbg;
                 }
+                if (cfg.full_ita !== undefined) {
+                    const el = document.getElementById('full_ita');
+                    if (el) el.checked = cfg.full_ita;
+                }
+                if (cfg.db_only !== undefined) {
+                    const el = document.getElementById('db_only');
+                    if (el) el.checked = cfg.db_only;
+                }
 
                 // Max Resolution Limit
                 if (cfg.max_res_limit) {
@@ -1105,37 +1191,65 @@
                     }
                 }
 
-                // AIOStreams mode
+                // Feature toggles
                 if (cfg.aiostreams_mode) {
-                    const aioStreamsCheckbox = document.getElementById('aiostreams_mode');
-                    if (aioStreamsCheckbox) {
-                        aioStreamsCheckbox.checked = true;
-                        console.log('✅ Loaded aiostreams_mode:', cfg.aiostreams_mode);
+                    const el = document.getElementById('aiostreams_mode');
+                    if (el) {
+                        el.checked = true;
+                        console.log('✅ Loaded aiostreams_mode');
+                        // ✅ Disable formatter UI when AIOStreams is loaded as active
+                        setTimeout(() => { if (typeof updateFormatterState === 'function') updateFormatterState(); }, 100);
+                    }
+                }
+                if (cfg.introskip_enabled) {
+                    const el = document.getElementById('introskip_enabled');
+                    if (el) {
+                        el.checked = true;
+                        console.log('✅ Loaded introskip_enabled');
                     }
                 }
 
-                // DB Only
-                if (cfg.db_only) {
-                    const dbOnlyCheckbox = document.getElementById('use_db_only');
-                    if (dbOnlyCheckbox) {
-                        dbOnlyCheckbox.checked = true;
-                        // Trigger change event to disable others
-                        dbOnlyCheckbox.dispatchEvent(new Event('change'));
-                        console.log('✅ Loaded db_only:', cfg.db_only);
+                // Custom Formatter settings
+                if (cfg.formatter_preset) {
+                    const formatterPresetEl = document.getElementById('formatter_preset');
+                    const formatterStatusEl = document.getElementById('formatter_status');
+                    if (formatterPresetEl) {
+                        formatterPresetEl.value = cfg.formatter_preset;
+                        console.log('✅ Loaded formatter_preset:', cfg.formatter_preset);
+
+                        // Update status display
+                        const presetNames = {
+                            default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                            verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                            dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+                        };
+                        if (formatterStatusEl) {
+                            formatterStatusEl.textContent = 'Preset: ' + (presetNames[cfg.formatter_preset] || cfg.formatter_preset);
+                        }
+                        // Show custom container if preset is custom
+                        const customContainer = document.getElementById('custom_formatter_container');
+                        if (customContainer && cfg.formatter_preset === 'custom') {
+                            customContainer.style.display = 'block';
+                        }
                     }
                 }
-
-                // Formatter & IntroSkip
-                if (cfg.use_formatter !== undefined) {
-                    const el = document.getElementById('use_formatter');
-                    if (el) el.checked = cfg.use_formatter;
+                if (cfg.formatter_custom_name) {
+                    const el = document.getElementById('formatter_custom_name');
+                    if (el) {
+                        el.value = cfg.formatter_custom_name;
+                        console.log('✅ Loaded formatter_custom_name');
+                    }
                 }
-                if (cfg.use_introskip !== undefined) {
-                    const el = document.getElementById('use_introskip');
-                    if (el) el.checked = cfg.use_introskip;
+                if (cfg.formatter_custom_desc) {
+                    const el = document.getElementById('formatter_custom_desc');
+                    if (el) {
+                        el.value = cfg.formatter_custom_desc;
+                        console.log('✅ Loaded formatter_custom_desc');
+                    }
                 }
 
                 console.log('✅ Configuration preloaded successfully');
+
 
                 // Trigger updateInstallLink to refresh the UI
                 updateInstallLink();
@@ -1163,14 +1277,89 @@
         useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
         useCometCheckbox.addEventListener('change', updateInstallLink);
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
+        fullItaCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
-        useFormatterCheckbox.addEventListener('change', updateInstallLink);
-        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
+
+        // Event listeners for feature toggles
         aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
-        useDbOnlyCheckbox.addEventListener('change', updateInstallLink);
-        useFormatterCheckbox.addEventListener('change', updateInstallLink);
-        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
+        introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
+
+        // Formatter dropdown handler (inline - no popup needed)
+        const formatterPresetSelect = document.getElementById('formatter_preset');
+        const customFormatterContainer = document.getElementById('custom_formatter_container');
+        const formatterCustomName = document.getElementById('formatter_custom_name');
+        const formatterCustomDesc = document.getElementById('formatter_custom_desc');
+        const formatterPreviewLink = document.getElementById('formatter_preview_link');
+        const formatterStatus = document.getElementById('formatter_status');
+
+        // ✅ Helper: Toggle formatter based on AIOStreams mode
+        function updateFormatterState() {
+            const aioActive = aioStreamsModeCheckbox.checked;
+            formatterPresetSelect.disabled = aioActive;
+            formatterPresetSelect.style.opacity = aioActive ? '0.5' : '1';
+            formatterPresetSelect.style.cursor = aioActive ? 'not-allowed' : 'pointer';
+            formatterPreviewLink.style.opacity = aioActive ? '0.5' : '1';
+            formatterPreviewLink.style.pointerEvents = aioActive ? 'none' : 'auto';
+
+            if (aioActive) {
+                formatterStatus.textContent = '⚠️ Disabilitato in modalità AIOStreams';
+                formatterStatus.style.color = '#f59e0b';
+                customFormatterContainer.style.display = 'none';
+            } else {
+                formatterStatus.textContent = '';
+            }
+            updateInstallLink();
+        }
+
+        // AIOStreams mode toggle
+        aioStreamsModeCheckbox.addEventListener('change', updateFormatterState);
+
+        formatterPresetSelect.addEventListener('change', () => {
+            const preset = formatterPresetSelect.value;
+            // Show/hide custom fields
+            if (preset === 'custom') {
+                customFormatterContainer.style.display = 'block';
+            } else {
+                customFormatterContainer.style.display = 'none';
+            }
+            updateInstallLink();
+        });
+
+        // Update link when custom templates change
+        formatterCustomName.addEventListener('input', updateInstallLink);
+        formatterCustomDesc.addEventListener('input', updateInstallLink);
+
+        // Preview link opens popup with current templates
+        formatterPreviewLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            const currentPreset = formatterPresetSelect.value;
+            const customName = encodeURIComponent(formatterCustomName.value || '');
+            const customDesc = encodeURIComponent(formatterCustomDesc.value || '');
+            window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1100,height=750');
+        });
+
+        // Save button explicitly updates install link with current formatter values
+        const formatterSaveBtn = document.getElementById('formatter_save_btn');
+        const formatterSaveStatus = document.getElementById('formatter_save_status');
+
+        formatterSaveBtn.addEventListener('click', () => {
+            // Force read the values from textareas
+            const nameVal = formatterCustomName.value;
+            const descVal = formatterCustomDesc.value;
+
+            console.log('💾 [SAVE] Name template:', nameVal);
+            console.log('💾 [SAVE] Desc template:', descVal);
+
+            // Trigger updateInstallLink to regenerate the URL
+            updateInstallLink();
+
+            // Show confirmation
+            formatterSaveStatus.textContent = '✅ Template salvato!';
+            setTimeout(() => {
+                formatterSaveStatus.textContent = '';
+            }, 3000);
+        });
 
         // Initial call to enable buttons
         updateInstallLink();

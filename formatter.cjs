@@ -1,521 +1,1371 @@
-/**
- * ICV Custom Formatter Module
- * 
- * Template parser per personalizzare nome e descrizione degli stream.
- * 
- * ============================================================================
- * CREDITS & LICENSE
- * ============================================================================
- * 
- * The custom formatter code in this file was adapted from:
- * https://github.com/Viren070/AIOStreams
- * 
- * AIOStreams - One addon to rule them all
- * Copyright (c) 2024 Viren070
- * Licensed under the MIT License
- * 
- * The original template parsing logic was adapted from:
- * https://github.com/diced/zipline/blob/trunk/src/lib/parser/index.ts
- * 
- * Copyright (c) 2023 dicedtomato
- * Licensed under the MIT License
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- * 
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- * ============================================================================
- */
+<!DOCTYPE html>
+<html lang="it">
 
-// ============================================
-// UTILITY FUNCTIONS
-// ============================================
-
-function formatBytes(bytes, base = 1000, round = false) {
-    if (!bytes || bytes === 0) return '0 B';
-    const sizes = base === 1024 ? ['B', 'KiB', 'MiB', 'GiB', 'TiB'] : ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(base));
-    const value = bytes / Math.pow(base, i);
-    return (round ? Math.round(value) : value.toFixed(2)) + ' ' + sizes[i];
-}
-
-function formatDuration(seconds) {
-    if (!seconds || seconds <= 0) return '0:00';
-    seconds = Math.floor(seconds);
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function formatHours(hours) {
-    if (!hours) return null;
-    if (hours < 1) return `${Math.round(hours * 60)}m`;
-    if (hours < 24) return `${Math.round(hours)}h`;
-    if (hours < 24 * 7) return `${Math.round(hours / 24)}d`;
-    if (hours < 24 * 30) return `${Math.round(hours / (24 * 7))}w`;
-    if (hours < 24 * 365) return `${Math.round(hours / (24 * 30))}mo`;
-    return `${Math.round(hours / (24 * 365))}y`;
-}
-
-// Small caps mapping (from AIOStreams) - Uses mathematical monospace digits
-const SMALL_CAPS_MAP = {
-    A: 'ᴀ', B: 'ʙ', C: 'ᴄ', D: 'ᴅ', E: 'ᴇ', F: 'ꜰ', G: 'ɢ', H: 'ʜ', I: 'ɪ',
-    J: 'ᴊ', K: 'ᴋ', L: 'ʟ', M: 'ᴍ', N: 'ɴ', O: 'ᴏ', P: 'ᴘ', Q: 'ǫ', R: 'ʀ',
-    S: 'ꜱ', T: 'ᴛ', U: 'ᴜ', V: 'ᴠ', W: 'ᴡ', X: '𝘅', Y: 'ʏ', Z: 'ᴢ',
-    // Mathematical Monospace Digits (same as AIOStreams)
-    '0': '𝟢', '1': '𝟣', '2': '𝟤', '3': '𝟥', '4': '𝟦',
-    '5': '𝟧', '6': '𝟨', '7': '𝟩', '8': '𝟪', '9': '𝟫'
-};
-
-function makeSmall(str) {
-    return String(str).split('').map(char => SMALL_CAPS_MAP[char.toUpperCase()] || char).join('');
-}
-
-// Language to emoji mapping (from AIOStreams, adapted from g0ldy/comet)
-const languageEmojiMap = {
-    multi: '🌎', english: '🇬🇧', japanese: '🇯🇵', chinese: '🇨🇳', russian: '🇷🇺',
-    arabic: '🇸🇦', portuguese: '🇵🇹', spanish: '🇪🇸', french: '🇫🇷', german: '🇩🇪',
-    italian: '🇮🇹', korean: '🇰🇷', hindi: '🇮🇳', bengali: '🇧🇩', punjabi: '🇵🇰',
-    marathi: '🇮🇳', gujarati: '🇮🇳', tamil: '🇮🇳', telugu: '🇮🇳', kannada: '🇮🇳',
-    malayalam: '🇮🇳', thai: '🇹🇭', vietnamese: '🇻🇳', indonesian: '🇮🇩', turkish: '🇹🇷',
-    hebrew: '🇮🇱', persian: '🇮🇷', ukrainian: '🇺🇦', greek: '🇬🇷', lithuanian: '🇱🇹',
-    latvian: '🇱🇻', estonian: '🇪🇪', polish: '🇵🇱', czech: '🇨🇿', slovak: '🇸🇰',
-    hungarian: '🇭🇺', romanian: '🇷🇴', bulgarian: '🇧🇬', serbian: '🇷🇸', croatian: '🇭🇷',
-    slovenian: '🇸🇮', dutch: '🇳🇱', danish: '🇩🇰', finnish: '🇫🇮', swedish: '🇸🇪',
-    norwegian: '🇳🇴', malay: '🇲🇾', latino: '💃🏻', Latino: '🇲🇽',
-    // Common abbreviations
-    ita: '🇮🇹', eng: '🇬🇧', spa: '🇪🇸', fre: '🇫🇷', ger: '🇩🇪', rus: '🇷🇺',
-    por: '🇵🇹', jpn: '🇯🇵', kor: '🇰🇷', chi: '🇨🇳', ara: '🇸🇦', hin: '🇮🇳'
-};
-
-function languageToEmoji(language) {
-    if (!language) return undefined;
-    return languageEmojiMap[language.toLowerCase()];
-}
-
-// ============================================
-// STRING MODIFIERS (from AIOStreams)
-// ============================================
-
-const stringModifiers = {
-    upper: (value) => String(value).toUpperCase(),
-    lower: (value) => String(value).toLowerCase(),
-    title: (value) => String(value).split(' ')
-        .map(word => word.toLowerCase())
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' '),
-    small: (value) => makeSmall(String(value)),
-    length: (value) => String(value).length.toString(),
-    reverse: (value) => String(value).split('').reverse().join(''),
-    base64: (value) => Buffer.from(String(value)).toString('base64'),
-    string: (value) => String(value),
-};
-
-// ============================================
-// ARRAY MODIFIERS (from AIOStreams)
-// ============================================
-
-const arrayModifiers = {
-    join: (value) => Array.isArray(value) ? value.join(', ') : value,
-    length: (value) => Array.isArray(value) ? value.length.toString() : '0',
-    first: (value) => Array.isArray(value) && value.length > 0 ? String(value[0]) : '',
-    last: (value) => Array.isArray(value) && value.length > 0 ? String(value[value.length - 1]) : '',
-    random: (value) => Array.isArray(value) && value.length > 0 ? String(value[Math.floor(Math.random() * value.length)]) : '',
-    sort: (value) => Array.isArray(value) ? [...value].sort() : value,
-    reverse: (value) => Array.isArray(value) ? [...value].reverse() : value,
-};
-
-// ============================================
-// NUMBER MODIFIERS (from AIOStreams)
-// ============================================
-
-const numberModifiers = {
-    comma: (value) => Number(value).toLocaleString(),
-    hex: (value) => Number(value).toString(16),
-    octal: (value) => Number(value).toString(8),
-    binary: (value) => Number(value).toString(2),
-    bytes: (value) => formatBytes(Number(value), 1000, false),
-    rbytes: (value) => formatBytes(Number(value), 1000, true),
-    bytes10: (value) => formatBytes(Number(value), 1000, false),
-    rbytes10: (value) => formatBytes(Number(value), 1000, true),
-    bytes2: (value) => formatBytes(Number(value), 1024, false),
-    rbytes2: (value) => formatBytes(Number(value), 1024, true),
-    string: (value) => String(value),
-    time: (value) => formatDuration(Number(value)),
-};
-
-// ============================================
-// CONDITIONAL MODIFIERS (from AIOStreams)
-// ============================================
-
-const conditionalModifiers = {
-    exact: {
-        istrue: (value) => value === true,
-        isfalse: (value) => value === false,
-        exists: (value) => {
-            if (value === undefined || value === null) return false;
-            if (typeof value === 'string') return /\S/.test(value);
-            if (Array.isArray(value)) return value.length > 0;
-            return true;
-        },
-    },
-    prefix: {
-        '$': (value, check) => String(value).toLowerCase().startsWith(check.toLowerCase()),
-        '^': (value, check) => String(value).toLowerCase().endsWith(check.toLowerCase()),
-        '~': (value, check) => String(value).toLowerCase().includes(check.toLowerCase()),
-        '=': (value, check) => String(value).toLowerCase() === check.toLowerCase(),
-        '>=': (value, check) => Number(value) >= Number(check),
-        '>': (value, check) => Number(value) > Number(check),
-        '<=': (value, check) => Number(value) <= Number(check),
-        '<': (value, check) => Number(value) < Number(check),
-    },
-};
-
-// ============================================
-// COMPARATORS (from AIOStreams)
-// ============================================
-
-const comparatorFuncs = {
-    and: (v1, v2) => v1 && v2,
-    or: (v1, v2) => v1 || v2,
-    xor: (v1, v2) => (v1 || v2) && !(v1 && v2),
-    neq: (v1, v2) => v1 !== v2,
-    equal: (v1, v2) => v1 === v2,
-    left: (v1, _) => v1,
-    right: (_, v2) => v2,
-};
-
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-
-function getNestedValue(data, path) {
-    if (!path) return undefined;
-    const [namespace, property] = path.split('.');
-    if (!namespace || !property) return undefined;
-    const section = data[namespace];
-    if (!section || typeof section !== 'object') return undefined;
-    return section[property];
-}
-
-function applySingleModifier(value, mod, originalMod) {
-    if (value === undefined || value === null) return undefined;
-
-    const modLower = mod.toLowerCase();
-
-    // Check conditional modifiers first
-    const isExact = Object.keys(conditionalModifiers.exact).includes(modLower);
-    const prefixMatch = Object.keys(conditionalModifiers.prefix)
-        .sort((a, b) => b.length - a.length)
-        .find(key => modLower.startsWith(key));
-
-    if (isExact) {
-        if (!conditionalModifiers.exact.exists(value)) return false;
-        return conditionalModifiers.exact[modLower](value);
-    }
-
-    if (prefixMatch) {
-        if (!conditionalModifiers.exact.exists(value)) return false;
-        const checkValue = mod.substring(prefixMatch.length);
-        const stringValue = String(value).toLowerCase();
-        let stringCheck = checkValue.toLowerCase();
-        if (!/\s/.test(stringValue)) stringCheck = stringCheck.replace(/\s/g, '');
-
-        // Numeric comparison for >, <, >=, <=, =
-        if (['<', '<=', '>', '>=', '='].includes(prefixMatch)) {
-            const numValue = Number(String(value).replace(/,\s/g, ''));
-            const numCheck = Number(stringCheck.replace(/,\s/g, ''));
-            if (!isNaN(numValue) && !isNaN(numCheck)) {
-                return conditionalModifiers.prefix[prefixMatch](numValue, numCheck);
-            }
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="icon" type="image/png" href="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true">
+    <link rel="shortcut icon" type="image/png"
+        href="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true">
+    <title>IlCorsaroViola | Configurazione</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
-        return conditionalModifiers.prefix[prefixMatch](stringValue, stringCheck);
-    }
 
-    // String modifiers
-    if (typeof value === 'string') {
-        if (modLower in stringModifiers) return stringModifiers[modLower](value);
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow-x: hidden;
+            background: #0a0515;
+            position: relative;
+            margin: 0;
+            padding: 0;
+        }
 
-        // replace('find', 'replace')
-        if (modLower.startsWith('replace(') && modLower.endsWith(')')) {
-            const content = originalMod.substring(8, originalMod.length - 1);
-            const quoteChar = content.charAt(0);
-            const parts = content.split(new RegExp(`${quoteChar}\\s*,\\s*${quoteChar}`));
-            if (parts.length === 2) {
-                const find = parts[0].substring(1);
-                const replace = parts[1].substring(0, parts[1].length - 1);
-                return value.split(find).join(replace);
+        /* Three.js container */
+        #container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            min-height: 100vh;
+            min-height: -webkit-fill-available;
+            z-index: 0;
+            touch-action: none;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        #container canvas {
+            pointer-events: none;
+        }
+
+        /* Remove old elements */
+        #canvas-bg,
+        #stars-container {
+            display: none;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #ffffff;
+            min-height: 100vh;
+            min-height: -webkit-fill-available;
+            padding: clamp(10px, 2vw, 20px);
+            position: relative;
+            background: #0a0515;
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 10px;
             }
         }
 
-        // truncate(N)
-        if (modLower.startsWith('truncate(') && modLower.endsWith(')')) {
-            const n = parseInt(originalMod.substring(9, originalMod.length - 1));
-            if (!isNaN(n) && n >= 0) {
-                if (value.length > n) return value.slice(0, n).replace(/\s+$/, '') + '…';
-                return value;
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 10;
+            pointer-events: auto;
+        }
+
+        /* Make all interactive elements clickable */
+        input,
+        button,
+        a,
+        label {
+            pointer-events: auto;
+        }
+
+        /* Header Section */
+        .header {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 40px;
+            gap: 30px;
+        }
+
+        .logo {
+            width: clamp(60px, 15vw, 100px);
+            height: clamp(60px, 15vw, 100px);
+            border-radius: 50%;
+            box-shadow: 0 8px 32px rgba(138, 43, 226, 0.4);
+        }
+
+        .brand h1 {
+            font-size: clamp(1.8rem, 8vw, 4.5em);
+            font-weight: 700;
+            background: linear-gradient(90deg,
+                    #ffffff 0%,
+                    #e0b3ff 20%,
+                    #9333ea 40%,
+                    #9333ea 60%,
+                    #e0b3ff 80%,
+                    #ffffff 100%);
+            background-size: 200% 100%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 5px;
+            text-align: center;
+            animation: waveColor 3s ease-in-out infinite;
+            word-break: break-word;
+            hyphens: auto;
+        }
+
+        @keyframes waveColor {
+            0% {
+                background-position: 0% 0%;
             }
-        }
-    }
 
-    // Array modifiers
-    if (Array.isArray(value)) {
-        if (modLower in arrayModifiers) return arrayModifiers[modLower](value);
+            50% {
+                background-position: 100% 0%;
+            }
 
-        // join('separator')
-        if (modLower.startsWith('join(') && modLower.endsWith(')')) {
-            const separator = originalMod.substring(6, originalMod.length - 2);
-            return value.join(separator);
-        }
-    }
-
-    // Number modifiers
-    if (typeof value === 'number') {
-        if (modLower in numberModifiers) return numberModifiers[modLower](value);
-    }
-
-    return undefined;
-}
-
-// ============================================
-// MAIN PARSER (AIOStreams-compatible)
-// ============================================
-
-function parseTemplate(template, data, maxDepth = 10) {
-    if (!template || maxDepth <= 0) return template || '';
-
-    // Handle {tools.*}
-    template = template.replace(/\{tools\.newLine\}/g, '\n');
-
-    let result = template;
-    let lastResult = null;
-    let iterations = 0;
-
-    while (result !== lastResult && iterations < maxDepth) {
-        lastResult = result;
-        iterations++;
-
-        // Match: {var.prop::mod1::mod2...["true"||"false"]}
-        const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)([^[\]{}]*?)(?:\["([^"]*)"\|\|"([^"]*)"\])?\}/g;
-
-        let match;
-        const replacements = [];
-
-        while ((match = regex.exec(result)) !== null) {
-            const fullMatch = match[0];
-            const varPath = match[1];
-            const modifierString = match[2] || '';
-            const trueValue = match[3];
-            const falseValue = match[4];
-
-            const replacement = resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth - 1);
-            replacements.push({ fullMatch, replacement, index: match.index });
-        }
-
-        // Apply replacements in reverse order
-        for (let i = replacements.length - 1; i >= 0; i--) {
-            const { fullMatch, replacement, index } = replacements[i];
-            result = result.slice(0, index) + replacement + result.slice(index + fullMatch.length);
-        }
-    }
-
-    // Final cleanup
-    result = result.split('\n')
-        .filter(line => line.trim() !== '' && !line.includes('{tools.removeLine}'))
-        .join('\n')
-        .replace(/\n\s*\n\s*\n/g, '\n\n')
-        .trim();
-
-    return result;
-}
-
-function resolveVariable(varPath, modifierString, trueValue, falseValue, data, maxDepth) {
-    // Split modifiers, handling comparators (::and::, ::or::, etc.)
-    const comparatorRegex = /::(and|or|xor|neq|equal|left|right)::/gi;
-    const segments = modifierString.split(comparatorRegex).filter(s => s);
-
-    // Build list of variable+modifiers and comparators
-    const variableExpressions = [];
-    const comparators = [];
-
-    for (let i = 0; i < segments.length; i++) {
-        const seg = segments[i].toLowerCase();
-        if (Object.keys(comparatorFuncs).includes(seg)) {
-            comparators.push(seg);
-        } else {
-            variableExpressions.push(segments[i]);
-        }
-    }
-
-    // If no expressions, use the main variable path
-    if (variableExpressions.length === 0) {
-        variableExpressions.push('');
-    }
-
-    // Resolve each variable expression
-    const resolvedValues = variableExpressions.map((expr, idx) => {
-        let currentVarPath = varPath;
-        let mods = expr;
-
-        // Check if expression starts with a new variable path
-        if (idx > 0 && expr.match(/^[a-zA-Z_]+\.[a-zA-Z_]+/)) {
-            const pathMatch = expr.match(/^([a-zA-Z_]+\.[a-zA-Z_]+)(.*)/);
-            if (pathMatch) {
-                currentVarPath = pathMatch[1];
-                mods = pathMatch[2];
+            100% {
+                background-position: 0% 0%;
             }
         }
 
-        let value = getNestedValue(data, currentVarPath);
+        .header-left {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: clamp(10px, 3vw, 30px);
+            justify-content: center;
+            width: 100%;
+            padding: 0 10px;
+        }
 
-        // Apply modifiers
-        const modList = mods.split('::').filter(m => m);
-        for (const mod of modList) {
-            const newValue = applySingleModifier(value, mod, mod);
-            if (newValue === undefined) {
-                // If modifier failed but we need a boolean, treat as error
-                if (typeof value === 'boolean') return value;
-                return undefined;
+        @media (max-width: 640px) {
+            .header-left {
+                gap: 8px;
+                flex-wrap: wrap;
             }
-            value = newValue;
         }
 
-        return value;
-    });
-
-    // Apply comparators between resolved values
-    let finalResult = resolvedValues[0];
-    for (let i = 0; i < comparators.length; i++) {
-        const comparator = comparators[i];
-        const nextValue = resolvedValues[i + 1];
-
-        if (comparatorFuncs[comparator]) {
-            finalResult = comparatorFuncs[comparator](finalResult, nextValue);
+        .header-left .logo-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
         }
-    }
 
-    // Handle check ["true"||"false"]
-    if (trueValue !== undefined) {
-        const boolResult = Boolean(finalResult);
-        const output = boolResult ? trueValue : (falseValue || '');
-        return parseTemplate(output, data, maxDepth);
-    }
+        .prisonmike-img {
+            width: clamp(40px, 8vw, 60px);
+            height: auto;
+            opacity: 0.9;
+            transition: transform 0.3s ease;
+            align-self: center;
+        }
 
-    // Return value as string
-    if (Array.isArray(finalResult)) return finalResult.join(', ');
-    return finalResult ?? '';
-}
+        .prisonmike-img:hover {
+            transform: scale(1.1);
+        }
 
-// ============================================
-// PRESET TEMPLATES
-// ============================================
+        @media (max-width: 640px) {
+            .prisonmike-img {
+                width: clamp(30px, 10vw, 50px);
+            }
+        }
 
-const PRESET_TEMPLATES = {
-    default: {
-        name: `{service.shortName::exists["[{service.shortName}] "||""]}📺 {stream.title}`,
-        description: `{stream.quality} | 💾 {stream.size::bytes} | 👤 {stream.seeders} seeders`
-    },
-    torrentio: {
-        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["+]"||"]"]} ICV {stream.quality}`,
-        description: `{stream.filename}
-💾 {stream.size::bytes} {stream.packSize::>0["/ 📦 {stream.packSize::bytes}"||""]} 👤 {stream.seeders}
-{stream.languageEmojis::join(' ')}`
-    },
-    minimal: {
-        name: `{stream.quality} {stream.codec}`,
-        description: `{stream.size::bytes} • {stream.seeders} seeds`
-    },
-    verbose: {
-        name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
-        description: `📁 {stream.filename}
-💾 Ep: {stream.size::bytes}{stream.packSize::>0[" / Pack: {stream.packSize::bytes}"||""]}
-👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}
-🌍 {stream.languages::join(' | ')}`
-    },
-    italiano: {
-        name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
-        description: `📺 {stream.title}
-📁 {stream.filename}
-💾 {stream.size::bytes}{stream.isPack::istrue[" (Pack: {stream.packSize::bytes})"||""]}
-🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}
-🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
-    },
-    fra: {
-        name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.resolution::exists["{stream.resolution::replace('2160p','UHD')::replace('4k','UHD')::replace('2160','UHD')::replace('1080p','FHD')::replace('1080','FHD')::replace('720p','HD')::replace('720','HD')}"||"UNK"]}`,
-        description: `{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}
-✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}{stream.indexer::exists[" • {stream.indexer}"||""]}
-{stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}
-{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{stream.seeders::>0[" 👥 ❯ {stream.seeders}"||""]}
-{stream.audioTags::exists["🔉 ❯ {stream.audioTags::join(' • ')}"||""]}
-{stream.folderName::exists["📂 ❯ {stream.folderName}"||""]}
-{stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
-    },
-    dav: {
-        name: `{stream.resolution::=2160p["🎥4K UHD"]||""}{stream.resolution::=1440p["🎬 QHD"]||""}{stream.resolution::=1080p["📀 FHD"]||""}{stream.resolution::=720p["💿 HD"]||""}{stream.resolution::=480p["💩 SD"]||""}{stream.resolution::exists[""||"❓ Unknown"]}`,
-        description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}
-"||""]}{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}
-{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}
-{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}
-{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}
-{service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]}{stream.type::=p2p["⚠️ P2P "||""]}{stream.type::=http["💻 Web Link "||""]}{stream.type::=youtube["▶️ Youtube "||""]}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}
-{stream.folderName::exists["📂 {stream.folderName}"||""]}
-{stream.filename::exists["📄 {stream.filename}"||""]}`
-    },
-    and: {
-        name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
-        description: `{stream.quality} {service.cached::istrue["/⚡"||"/⏳"]}
-─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}
-Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}
-─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
-    },
-    lad: {
-        name: `{stream.resolution::=2160p["🖥️ 4K"||""]}{stream.resolution::=1080p["🖥️ 1080p"||""]}{stream.resolution::=720p["🖥️ 720p"||""]}{stream.resolution::exists::isfalse["🖥️ Unknown"||""]}`,
-        description: `{stream.title::exists["🎟️ {stream.title}"||""]}
-📜 S{stream.season}E{stream.episode}
-{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.codec::exists["🎞️ {stream.codec} "||""]}{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}
-{stream.size::>0["📦 {stream.size::bytes}"||""]}
-🔗 {addon.name}
-{stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
-    },
-    pri: {
-        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}
-{stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]}
-[{addon.name}]`,
-        description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}
-{stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.quality::~DVDRip["💿 ᴅᴠᴅʀɪᴘ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}
-{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}
-{stream.size::>0["📁 {stream.size::bytes}"||""]}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"||""]}{stream.duration::>0[" | ⏱️ {stream.duration::time}"||""]}
-📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
-    }
-};
+        .header-right {
+            width: 100%;
+            max-width: 1200px;
+        }
 
-// ============================================
-// EXPORTS
-// ============================================
+        .features-box {
+            background: rgba(20, 20, 40, 0.25);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 12px;
+            padding: clamp(12px, 3vw, 20px);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: clamp(10px, 2vw, 20px);
+        }
 
-module.exports = {
-    parseTemplate,
-    formatBytes,
-    formatDuration,
-    formatHours,
-    makeSmall,
-    languageToEmoji,
-    languageEmojiMap,
-    SMALL_CAPS_MAP,
-    PRESET_TEMPLATES,
-    // Export for testing/advanced use
-    stringModifiers,
-    arrayModifiers,
-    numberModifiers,
-    conditionalModifiers,
-    comparatorFuncs,
-};
+        @media (max-width: 640px) {
+            .features-box {
+                grid-template-columns: 1fr;
+                padding: 15px;
+            }
+        }
+
+        .features-box h4 {
+            color: #c084fc;
+            margin-bottom: 8px;
+            font-size: clamp(0.9em, 2vw, 1em);
+            grid-column: span 1;
+        }
+
+        @media (max-width: 640px) {
+            .features-box h4 {
+                grid-column: span 1;
+            }
+        }
+
+        .features-box ul {
+            list-style: none;
+            padding: 0;
+            grid-column: span 1;
+        }
+
+        .features-box li {
+            color: #d1d5db;
+            margin-bottom: 6px;
+            font-size: 0.9em;
+            padding-left: 18px;
+            position: relative;
+        }
+
+        .features-box li::before {
+            content: '✦';
+            position: absolute;
+            left: 0;
+            color: #9333ea;
+        }
+
+        .config-info {
+            background: rgba(147, 51, 234, 0.2);
+            border: 1px solid rgba(147, 51, 234, 0.4);
+            border-radius: 8px;
+            padding: 15px;
+            grid-column: span 1;
+        }
+
+        .config-info p {
+            margin: 0;
+            font-size: 0.9em;
+            color: #e5e7eb;
+        }
+
+        #status {
+            font-weight: 600;
+            margin-top: 8px;
+            font-size: 1em;
+        }
+
+        /* Main Grid Layout */
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        @media (min-width: 1024px) {
+            .config-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+
+            .config-grid .full-width {
+                grid-column: span 3;
+            }
+
+            .config-grid .half-width {
+                grid-column: span 2;
+            }
+
+            .config-grid .two-rows {
+                grid-row: span 2;
+            }
+        }
+
+        @media (min-width: 768px) and (max-width: 1023px) {
+            .config-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .config-grid .full-width {
+                grid-column: span 2;
+            }
+        }
+
+        /* Service Cards */
+        .service-card {
+            background: rgba(20, 20, 40, 0.25);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            pointer-events: auto;
+        }
+
+        .service-card:hover {
+            border-color: rgba(147, 51, 234, 0.6);
+            box-shadow: 0 8px 32px rgba(147, 51, 234, 0.2);
+        }
+
+        .service-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .service-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #c084fc;
+        }
+
+        .service-title a {
+            color: #9333ea;
+            text-decoration: none;
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }
+
+        .service-title a:hover {
+            opacity: 1;
+        }
+
+        .key-icon {
+            font-size: 1em;
+        }
+
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            accent-color: #9333ea;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        textarea {
+            width: 100%;
+            padding: 12px 15px;
+            background: rgba(10, 10, 26, 0.6);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 0.95em;
+            transition: all 0.3s ease;
+            margin-top: 8px;
+        }
+
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #9333ea;
+            box-shadow: 0 0 0 3px rgba(147, 51, 234, 0.2);
+        }
+
+        input:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .search-sites {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .search-sites label {
+            background: rgba(10, 10, 26, 0.4);
+            padding: 12px 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(147, 51, 234, 0.2);
+            transition: all 0.3s;
+        }
+
+        .search-sites label:hover {
+            border-color: rgba(147, 51, 234, 0.5);
+            background: rgba(10, 10, 26, 0.6);
+        }
+
+        /* Action Section */
+        .action-section {
+            background: rgba(20, 20, 40, 0.25);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 12px;
+            padding: 35px;
+            pointer-events: auto;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            flex: 1;
+            min-width: 200px;
+            padding: 18px 35px;
+            background: linear-gradient(135deg, #9333ea 0%, #7c3aed 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 16px rgba(147, 51, 234, 0.3);
+        }
+
+        button:hover:not(:disabled) {
+            background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(147, 51, 234, 0.4);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: rgba(100, 100, 120, 0.3);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        #link-container {
+            display: none;
+        }
+
+        #link-container.show {
+            display: block;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            resize: vertical;
+            font-family: monospace;
+            font-size: 1em;
+            padding: 15px;
+            background: rgba(10, 10, 26, 0.6);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 8px;
+            color: #ffffff;
+        }
+
+        .section-title {
+            color: #c084fc;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        small {
+            color: #9ca3af;
+            font-size: clamp(0.7rem, 1.5vw, 0.875rem);
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/88/three.min.js"></script>
+    <script id="vertexShader" type="x-shader/x-vertex">
+        void main() {
+            gl_Position = vec4( position, 1.0 );
+        }
+    </script>
+    <script id="fragmentShader" type="x-shader/x-fragment">
+        uniform vec2 u_resolution;
+        uniform vec2 u_mouse;
+        uniform float u_time;
+        uniform sampler2D u_noise;
+        
+        #define PI 3.141592653589793
+        #define TAU 6.283185307179586
+        
+        const float multiplier = 20.0;
+        const float zoomSpeed = 15.;
+        const float mouseRadius = 0.25;
+        const float mouseStrength = 0.3;
+        
+        vec2 hash2(vec2 p) {
+            vec2 o = texture2D(u_noise, (p+0.5)/256.0, -100.0).xy;
+            return o;
+        }
+        
+        void main() {
+            vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+            uv = uv * 2. - 1.;
+            uv.x *= u_resolution.x / u_resolution.y;
+            
+            vec3 color = vec3(0.05, 0.02, 0.1);
+            
+            float t = u_time * 0.1;
+            
+            // Convert mouse to same coordinate system as uv
+            vec2 mouse = u_mouse * 2.0 - 1.0;
+            mouse.x *= u_resolution.x / u_resolution.y;
+            
+            for(float i = 0.; i < 3.; i++) {
+                vec2 uv2 = uv * (1.0 + i * 0.5);
+                vec2 uv2_animated = uv2;
+                uv2_animated.y += t * (0.3 + i * 0.1);
+                
+                vec2 hash = hash2(floor(uv2_animated * multiplier));
+                vec2 offset = fract(uv2_animated * multiplier);
+                
+                // Mouse interaction using screen-space distance
+                float distToMouse = length(uv - mouse);
+                
+                // Base particle color (purple)
+                vec3 particleColor = vec3(0.5, 0.2, 0.8);
+                
+                if(distToMouse < mouseRadius) {
+                    // Push AWAY from mouse (repel)
+                    vec2 pushDir = normalize(uv - mouse);
+                    float pushForce = (1.0 - distToMouse / mouseRadius) * mouseStrength;
+                    offset += pushDir * pushForce * 3.0;
+                    
+                    // Change to yellow when near mouse
+                    float colorMix = 1.0 - (distToMouse / mouseRadius);
+                    particleColor = mix(vec3(0.5, 0.2, 0.8), vec3(1.0, 0.9, 0.2), colorMix);
+                }
+                
+                float d = length(offset - hash);
+                // Particles size: smaller but sharper
+                float brightness = smoothstep(0.15, 0.0, d);
+                
+                // Add glow effect
+                float glow = smoothstep(0.3, 0.0, d) * 0.3;
+                
+                color += particleColor * (brightness + glow) * (1.0 - i * 0.2);
+            }
+            
+            gl_FragColor = vec4(color, 1.0);
+        }
+    </script>
+</head>
+
+<body>
+    <div id="container"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <img src="/prisonmike.png" alt="Prison Mike" class="prisonmike-img">
+
+                <div class="logo-container">
+                    <img src="https://github.com/qwertyuiop8899/logo/blob/main/logo.png?raw=true" alt="Logo"
+                        class="logo">
+                    <div class="brand" style="text-align: center;">
+                        <h1 style="margin-bottom: 5px;">IlCorsaroViola</h1>
+                        <small style="font-size: 14px; color: #9ca3af; display: block; line-height: 1.5;">
+                            Addon creato partendo da <a href="https://stremizio.vercel.app/" target="_blank"
+                                style="color: #9333ea; text-decoration: none;">Stremizio 2.0</a>, grazie a
+                            <a href="https://github.com/StremioItalia/stremizio" target="_blank"
+                                style="color: #9333ea; text-decoration: none;">Steve Celticus</a>
+                        </small>
+                    </div>
+                </div>
+
+                <img src="/prisonmike.png" alt="Prison Mike" class="prisonmike-img">
+            </div>
+
+            <div class="header-right">
+                <div class="features-box">
+                    <div style="grid-column: span 1;">
+                        <h4>Caratteristiche principali:</h4>
+                        <ul>
+                            <li><strong>Multi-sorgente:</strong> Il Corsaro Nero (DB locale incrementale con Cache RD
+                                reale), UIndex, Knaben e Jackett (opzionale)</li>
+                            <li><strong>Ottimizzato per l'Italia:</strong> Priorità ai contenuti in italiano 🇮🇹</li>
+                        </ul>
+                    </div>
+                    <div style="grid-column: span 1;">
+                        <h4 style="visibility: hidden;">Placeholder</h4>
+                        <ul>
+                            <li><strong>Debrid:</strong> Real-Debrid e/o Torbox per streaming istantaneo</li>
+                            <li><strong>MediaFlow Proxy:</strong> Condividi Real-Debrid in sicurezza (opzionale)</li>
+                            <li><strong>IntroSkip:</strong> Salta automaticamente le intro (opzionale)</li>
+                            <li><strong>Formatter:</strong> Rinomina i file per una visualizzazione pulita</li>
+                            <li><strong>P2P Fallback:</strong> Senza debrid usa streaming P2P diretto</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="config-info">
+                    <p style="text-align: center;">Configura i servizi che vuoi utilizzare:</p>
+                    <div id="status" style="text-align: center;">✓ Configurazione pronta (Solo P2P) | Siti: CorsaroNero,
+                        UIndex, Knaben</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration Grid -->
+        <div class="config-grid">
+            <!-- Debrid Services Row -->
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">
+                        👑 Real-Debrid (Opzionale)
+                        <a href="https://real-debrid.com/apitoken" target="_blank" title="Ottieni API Key">
+                            <span class="key-icon">🔑</span>
+                        </a>
+                    </div>
+                    <input type="checkbox" id="use_rd">
+                </div>
+                <input id="rd_key" placeholder="Real-Debrid API Key" type="password" disabled>
+            </div>
+
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">
+                        📦 Torbox (Opzionale)
+                        <a href="https://torbox.app/settings" target="_blank" title="Ottieni API Key">
+                            <span class="key-icon">🔑</span>
+                        </a>
+                    </div>
+                    <input type="checkbox" id="use_torbox">
+                </div>
+                <input id="torbox_key" placeholder="Torbox API Key" type="password" disabled>
+            </div>
+
+            <!-- Siti di Ricerca Torrent (occupa 2 righe) -->
+            <div class="service-card two-rows">
+                <div class="section-title">🔎 Siti di Ricerca Torrent</div>
+                <small>Seleziona su quali siti cercare i torrent:</small>
+                <div class="search-sites">
+                    <label style="border-color: #4CAF50; background: rgba(76, 175, 80, 0.1);">
+                        <input type="checkbox" id="use_db_only">
+                        <span>🗄️ Ricerca Solo DB (Nessuna ricerca live)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_corsaronero" checked>
+                        <span>🏴‍☠️ Il Corsaro Nero (Italiano)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_uindex" checked>
+                        <span>📚 UIndex (Internazionale)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_knaben" checked>
+                        <span>🦉 Knaben (Internazionale)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_torrentgalaxy">
+                        <span>🌌 TorrentGalaxy (Internazionale)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_torrentio" checked>
+                        <span>🅣 Torrentio (Esterno)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_mediafusion" checked>
+                        <span>🅜 MediaFusion (Esterno)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_comet" checked>
+                        <span>🅒 Comet (Esterno)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_rarbg" checked>
+                        <span>🏴 RARBG (Proxy)</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="use_max_res_limit">
+                        <span>✂️ Limita Risultati per Risoluzione</span>
+                        <select id="max_res_limit"
+                            style="margin-left: auto; width: 50px; background: rgba(10, 10, 26, 0.6); color: white; border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; padding: 4px; cursor: pointer;"
+                            disabled>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3" selected>3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="10">10</option>
+                            <option value="15">15</option>
+                            <option value="20">20</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <!-- MediaFlow and Jackett Row -->
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">🔀 EasyProxy o Mediaflow (Opzionale - Solo per RD)</div>
+                </div>
+                <small>Per condividere Real-Debrid tra più utenti</small>
+                <input id="mediaflow_url" placeholder="Proxy URL (es: https://your-proxy.com)" type="text">
+                <input id="mediaflow_password" placeholder="Password (opzionale)" type="password">
+                <div id="proxy_no_password_warning"
+                    style="display: none; background: rgba(255, 100, 100, 0.15); border: 1px solid #FF6B6B; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 0.85em; color: #FF6B6B;">
+                    ⚠️ Proxy senza Password - Connessione non protetta!
+                </div>
+            </div>
+
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">🔍 Jackett Configuration (Opzionale - Solo Italiani)</div>
+                </div>
+                <small>Cerca su indexer configurati (solo risultati italiani 🇮🇹)</small>
+                <input id="jackett_url" placeholder="Jackett URL (es: https://jackett.your-domain.com)" type="text">
+                <input id="jackett_api_key" placeholder="Jackett API Key" type="password">
+                <input id="jackett_password" placeholder="Jackett Password (opzionale)" type="password">
+            </div>
+
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-title">⚡ Funzioni Avanzate</div>
+                </div>
+                <div class="search-sites">
+                    <label>
+                        <input type="checkbox" id="use_introskip">
+                        <span>⏩ IntroSkip (Salta intro serie TV)</span>
+                    </label>
+                    <label style="display:flex; align-items:center; flex-wrap:wrap;">
+                        <input type="checkbox" id="use_formatter">
+                        <span>✨ Formatter (Nomi file puliti)</span>
+                        <button id="configure_formatter_btn" type="button"
+                            style="margin-left:10px; padding:4px 8px; background:#9333ea; border:none; border-radius:4px; color:white; cursor:pointer; display:none;">⚙️
+                            Configura</button>
+                        <input type="hidden" id="formatter_config">
+                        <span id="formatter_status"
+                            style="margin-left:5px; font-size:0.8em; color:#4EC9B0; display:none;">(Configurato)</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="action-section full-width">
+                <div
+                    style="margin-bottom: 15px; padding: 12px 15px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="aiostreams_mode">
+                        <span>🔄 Modalità AIOStreams</span>
+                        <small style="margin-left: auto; color: #9ca3af;">Compatibile con AIOStreams addon</small>
+                    </label>
+                </div>
+                <div class="button-group">
+                    <button id="install_button" disabled>Installa Addon</button>
+                    <button id="copy_button" disabled>Copia Link</button>
+                </div>
+
+                <div id="link-container">
+                    <p class="section-title"><small>Link di installazione generato:</small></p>
+                    <textarea id="install_link_display" rows="3" readonly></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Input fields
+        const useRdCheckbox = document.getElementById("use_rd");
+        const rdKeyInput = document.getElementById("rd_key");
+        const useTorboxCheckbox = document.getElementById("use_torbox");
+        const torboxKeyInput = document.getElementById("torbox_key");
+
+        const mediaflowUrlInput = document.getElementById("mediaflow_url");
+        const mediaflowPasswordInput = document.getElementById("mediaflow_password");
+        const jackettUrlInput = document.getElementById("jackett_url");
+        const jackettApiKeyInput = document.getElementById("jackett_api_key");
+        const jackettPasswordInput = document.getElementById("jackett_password");
+
+        // Checkboxes for search sites
+        const useCorsaroNeroCheckbox = document.getElementById("use_corsaronero");
+        const useUIndexCheckbox = document.getElementById("use_uindex");
+        const useKnabenCheckbox = document.getElementById("use_knaben");
+        const useTorrentGalaxyCheckbox = document.getElementById("use_torrentgalaxy");
+        const useTorrentioCheckbox = document.getElementById("use_torrentio");
+        const useMediaFusionCheckbox = document.getElementById("use_mediafusion");
+        const useCometCheckbox = document.getElementById("use_comet");
+        const useRarbgCheckbox = document.getElementById("use_rarbg");
+        const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
+        const maxResLimitSelect = document.getElementById("max_res_limit");
+        const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
+        const useDbOnlyCheckbox = document.getElementById("use_db_only");
+        const useFormatterCheckbox = document.getElementById("use_formatter");
+        const useIntroSkipCheckbox = document.getElementById("use_introskip");
+
+        // Formatter UI elements
+        const configureFormatterBtn = document.getElementById("configure_formatter_btn");
+        const formatterConfigInput = document.getElementById("formatter_config");
+        const formatterStatusSpan = document.getElementById("formatter_status");
+
+        // Buttons
+        const installButton = document.getElementById("install_button");
+        const copyButton = document.getElementById("copy_button");
+        const statusEl = document.getElementById("status");
+        const linkContainer = document.getElementById("link-container");
+        const installLinkDisplay = document.getElementById("install_link_display");
+
+        // Enable/disable RD input based on checkbox
+        useRdCheckbox.addEventListener('change', () => {
+            rdKeyInput.disabled = !useRdCheckbox.checked;
+            if (!useRdCheckbox.checked) rdKeyInput.value = '';
+            updateInstallLink();
+        });
+
+        // Enable/disable Torbox input based on checkbox
+        useTorboxCheckbox.addEventListener('change', () => {
+            torboxKeyInput.disabled = !useTorboxCheckbox.checked;
+            if (!useTorboxCheckbox.checked) torboxKeyInput.value = '';
+            updateInstallLink();
+        });
+
+        // Enable/disable Max Resolution Limit select based on checkbox
+        useMaxResLimitCheckbox.addEventListener('change', () => {
+            maxResLimitSelect.disabled = !useMaxResLimitCheckbox.checked;
+            updateInstallLink();
+        });
+
+        // DB Only logic
+        const providerCheckboxes = [
+            useCorsaroNeroCheckbox, useUIndexCheckbox, useKnabenCheckbox,
+            useTorrentGalaxyCheckbox, useTorrentioCheckbox, useMediaFusionCheckbox,
+            useCometCheckbox, useRarbgCheckbox
+        ];
+
+        useDbOnlyCheckbox.addEventListener('change', () => {
+            const isDbOnly = useDbOnlyCheckbox.checked;
+            providerCheckboxes.forEach(cb => {
+                cb.disabled = isDbOnly;
+                if (isDbOnly) cb.parentElement.style.opacity = '0.5';
+                else cb.parentElement.style.opacity = '1';
+            });
+            updateInstallLink();
+        });
+
+        // Formatter Logic
+        useFormatterCheckbox.addEventListener('change', () => {
+            const isChecked = useFormatterCheckbox.checked;
+            configureFormatterBtn.style.display = isChecked ? 'inline-block' : 'none';
+            if (!isChecked) {
+                formatterConfigInput.value = '';
+                formatterStatusSpan.style.display = 'none';
+            }
+            updateInstallLink();
+        });
+
+        configureFormatterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            // Open popup
+            const width = 800;
+            const height = 900;
+            const left = (screen.width - width) / 2;
+            const top = (screen.height - height) / 2;
+            const win = window.open('/formatter.html', 'FormatterConfig', `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`);
+
+            // Check if we have existing config to send
+            if (formatterConfigInput.value) {
+                // Wait for it to load then send
+                // Note: Cross-origin might block this if not same origin, but it is same origin here.
+                // We use a simple interval to try sending config
+                const interval = setInterval(() => {
+                    if (win.closed) {
+                        clearInterval(interval);
+                    } else {
+                        try {
+                            win.postMessage({ type: 'loadConfig', config: JSON.parse(formatterConfigInput.value) }, '*');
+                        } catch (e) { }
+                    }
+                }, 1000);
+
+                // Clear interval after 5s
+                setTimeout(() => clearInterval(interval), 5000);
+            }
+        });
+
+        // Listen for messages from Formatter Popup
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'saveFormatterConfig') {
+                console.log("Received formatter config:", event.data.config);
+                const config = event.data.config;
+                formatterConfigInput.value = JSON.stringify(config);
+                formatterStatusSpan.style.display = 'inline';
+                configureFormatterBtn.textContent = '⚙️ Modifica';
+                // Force update install link
+                updateInstallLink();
+            }
+        });
+
+
+
+        function updateInstallLink() {
+            // TMDB is now hardcoded, no validation needed
+            const tmdbKey = '5462f78469f3d80bf5201645294c16e4';
+
+            // Build config object (TMDB always included)
+            const config = { tmdb_key: tmdbKey };
+
+            // Real-Debrid
+            if (useRdCheckbox.checked) {
+                const rdKey = rdKeyInput.value.trim();
+                if (rdKey) {
+                    config.use_rd = true;
+                    config.rd_key = rdKey;
+                }
+            }
+
+            // Torbox
+            if (useTorboxCheckbox.checked) {
+                const torboxKey = torboxKeyInput.value.trim();
+                if (torboxKey) {
+                    config.use_torbox = true;
+                    config.torbox_key = torboxKey;
+                }
+            }
+
+            // MediaFlow Proxy / EasyProxy
+            const mediaflowUrl = mediaflowUrlInput.value.trim();
+            const mediaflowPassword = mediaflowPasswordInput.value.trim();
+            const proxyWarning = document.getElementById('proxy_no_password_warning');
+            if (mediaflowUrl) {
+                config.mediaflow_url = mediaflowUrl;
+                if (mediaflowPassword) {
+                    config.mediaflow_password = mediaflowPassword;
+                    proxyWarning.style.display = 'none';
+                } else {
+                    // No password - show warning but still allow
+                    config.mediaflow_password = '';
+                    proxyWarning.style.display = 'block';
+                }
+            } else {
+                proxyWarning.style.display = 'none';
+            }
+
+            // Jackettio
+            const jackettUrl = jackettUrlInput.value.trim();
+            const jackettApiKey = jackettApiKeyInput.value.trim();
+            if (jackettUrl && jackettApiKey) {
+                config.jackett_url = jackettUrl;
+                config.jackett_api_key = jackettApiKey;
+
+                const jackettPassword = jackettPasswordInput.value.trim();
+                if (jackettPassword) {
+                    config.jackett_password = jackettPassword;
+                }
+            }
+
+            // Search sites selection
+            config.use_corsaronero = useCorsaroNeroCheckbox.checked;
+            config.use_uindex = useUIndexCheckbox.checked;
+            config.use_knaben = useKnabenCheckbox.checked;
+            config.use_torrentgalaxy = useTorrentGalaxyCheckbox.checked;
+            config.use_torrentio = useTorrentioCheckbox.checked;
+            config.use_mediafusion = useMediaFusionCheckbox.checked;
+            config.use_comet = useCometCheckbox.checked;
+            config.use_rarbg = useRarbgCheckbox.checked;
+
+            // Max Resolution Limit (only if checkbox is checked)
+            if (useMaxResLimitCheckbox.checked) {
+                const maxResLimit = maxResLimitSelect.value;
+                if (maxResLimit) {
+                    config.max_res_limit = parseInt(maxResLimit);
+                }
+            }
+
+            // AIOStreams compatibility mode
+            if (aioStreamsModeCheckbox.checked) {
+                config.aiostreams_mode = true;
+            }
+
+            // DB Only mode
+            if (useDbOnlyCheckbox.checked) {
+                config.db_only = true;
+            }
+
+            // Formatter & IntroSkip
+            // Formatter & IntroSkip
+            if (useFormatterCheckbox.checked) {
+                config.use_formatter = true;
+                // Add extended formatter config if present
+                if (formatterConfigInput.value) {
+                    try {
+                        const fmtConfig = JSON.parse(formatterConfigInput.value);
+                        // Merge relevant fields
+                        if (fmtConfig.formatter_preset) config.formatter_preset = fmtConfig.formatter_preset;
+                        if (fmtConfig.formatter_custom_name) config.formatter_custom_name = fmtConfig.formatter_custom_name;
+                        if (fmtConfig.formatter_custom_desc) config.formatter_custom_desc = fmtConfig.formatter_custom_desc;
+                    } catch (e) {
+                        console.error("Invalid formatter config JSON", e);
+                    }
+                }
+            }
+            if (useIntroSkipCheckbox.checked) config.use_introskip = true;
+
+            // Check if at least one search site is selected
+            let searchSites = [];
+            if (config.use_corsaronero) searchSites.push("CorsaroNero");
+            if (config.use_uindex) searchSites.push("UIndex");
+            if (config.use_knaben) searchSites.push("Knaben");
+            if (config.use_torrentgalaxy) searchSites.push("TorrentGalaxy");
+            if (config.use_torrentio) searchSites.push("Torrentio");
+            if (config.use_mediafusion) searchSites.push("MediaFusion");
+            if (config.use_comet) searchSites.push("Comet");
+            if (config.use_rarbg) searchSites.push("RARBG");
+
+            if (searchSites.length === 0 && !config.db_only) {
+                // No search sites selected - show error
+                statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o usa Solo DB)";
+                statusEl.style.color = '#FF6B6B';
+                linkContainer.classList.remove('show');
+                installButton.disabled = true;
+                copyButton.disabled = true;
+                return;
+            }
+
+            // Generate install URL
+            const encodedConfig = btoa(JSON.stringify(config));
+            const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
+
+            installLinkDisplay.value = installUrl;
+            linkContainer.classList.add('show');
+            installButton.disabled = false;
+            copyButton.disabled = false;
+
+            // Status message
+            let services = [];
+            if (config.use_rd) services.push("Real-Debrid");
+            if (config.use_torbox) services.push("Torbox");
+
+            if (config.mediaflow_url) services.push("MediaFlow");
+            if (config.jackett_url) services.push("Jackettio");
+
+            const serviceText = services.length > 0 ? ` (${services.join(', ')})` : ' (Solo P2P)';
+            const searchText = ` | Siti: ${searchSites.join(', ')}`;
+            statusEl.textContent = `✓ Configurazione pronta${serviceText}${searchText}`;
+            statusEl.style.color = '#4EC9B0';
+        }
+
+        // ✅ Load existing configuration if present (from /configure endpoint)
+        // Wrap in setTimeout to ensure DOM is ready
+        setTimeout(() => {
+            if (window.EXISTING_CONFIG) {
+                console.log('📝 Preloading existing configuration...', window.EXISTING_CONFIG);
+                const cfg = window.EXISTING_CONFIG;
+
+                // TMDb API Key (required) - Not visible in UI, hardcoded
+
+                // Debrid services - Real-Debrid
+                if (cfg.use_rd) {
+                    const useRdCheckbox = document.getElementById('use_rd');
+                    const rdKeyInput = document.getElementById('rd_key');
+                    if (useRdCheckbox && rdKeyInput) {
+                        useRdCheckbox.checked = true;
+                        rdKeyInput.disabled = false;
+                        if (cfg.rd_key) {
+                            rdKeyInput.value = cfg.rd_key;
+                            console.log('✅ Loaded rd_key');
+                        }
+                    }
+                }
+
+                // Torbox
+                if (cfg.use_torbox) {
+                    const useTorboxCheckbox = document.getElementById('use_torbox');
+                    const torboxKeyInput = document.getElementById('torbox_key');
+                    if (useTorboxCheckbox && torboxKeyInput) {
+                        useTorboxCheckbox.checked = true;
+                        torboxKeyInput.disabled = false;
+                        if (cfg.torbox_key) {
+                            torboxKeyInput.value = cfg.torbox_key;
+                            console.log('✅ Loaded torbox_key');
+                        }
+                    }
+                }
+
+                // MediaFlow Proxy
+                if (cfg.mediaflow_url) {
+                    const mediaflowUrlInput = document.getElementById('mediaflow_url');
+                    if (mediaflowUrlInput) {
+                        mediaflowUrlInput.value = cfg.mediaflow_url;
+                        console.log('✅ Loaded mediaflow_url');
+                    }
+                }
+                if (cfg.mediaflow_password) {
+                    const mediaflowPasswordInput = document.getElementById('mediaflow_password');
+                    if (mediaflowPasswordInput) {
+                        mediaflowPasswordInput.value = cfg.mediaflow_password;
+                        console.log('✅ Loaded mediaflow_password');
+                    }
+                }
+
+                // Jackettio
+                if (cfg.jackett_url) {
+                    const jackettUrlInput = document.getElementById('jackett_url');
+                    if (jackettUrlInput) {
+                        jackettUrlInput.value = cfg.jackett_url;
+                        console.log('✅ Loaded jackett_url');
+                    }
+                }
+                if (cfg.jackett_api_key) {
+                    const jackettApiKeyInput = document.getElementById('jackett_api_key');
+                    if (jackettApiKeyInput) {
+                        jackettApiKeyInput.value = cfg.jackett_api_key;
+                        console.log('✅ Loaded jackett_api_key');
+                    }
+                }
+                if (cfg.jackett_password) {
+                    const jackettPasswordInput = document.getElementById('jackett_password');
+                    if (jackettPasswordInput) {
+                        jackettPasswordInput.value = cfg.jackett_password;
+                        console.log('✅ Loaded jackett_password');
+                    }
+                }
+
+                // Search sites checkboxes
+                if (cfg.use_corsaronero !== undefined) {
+                    const useCorsaroNeroCheckbox = document.getElementById('use_corsaronero');
+                    if (useCorsaroNeroCheckbox) {
+                        useCorsaroNeroCheckbox.checked = cfg.use_corsaronero;
+                        console.log('✅ Loaded use_corsaronero:', cfg.use_corsaronero);
+                    }
+                }
+                if (cfg.use_uindex !== undefined) {
+                    const useUIndexCheckbox = document.getElementById('use_uindex');
+                    if (useUIndexCheckbox) {
+                        useUIndexCheckbox.checked = cfg.use_uindex;
+                        console.log('✅ Loaded use_uindex:', cfg.use_uindex);
+                    }
+                }
+                if (cfg.use_knaben !== undefined) {
+                    const useKnabenCheckbox = document.getElementById('use_knaben');
+                    if (useKnabenCheckbox) {
+                        useKnabenCheckbox.checked = cfg.use_knaben;
+                        console.log('✅ Loaded use_knaben:', cfg.use_knaben);
+                    }
+                }
+                if (cfg.use_torrentgalaxy !== undefined) {
+                    const useTorrentGalaxyCheckbox = document.getElementById('use_torrentgalaxy');
+                    if (useTorrentGalaxyCheckbox) {
+                        useTorrentGalaxyCheckbox.checked = cfg.use_torrentgalaxy;
+                        console.log('✅ Loaded use_torrentgalaxy:', cfg.use_torrentgalaxy);
+                    }
+                }
+                if (cfg.use_torrentio !== undefined) {
+                    const el = document.getElementById('use_torrentio');
+                    if (el) el.checked = cfg.use_torrentio;
+                }
+                if (cfg.use_mediafusion !== undefined) {
+                    const el = document.getElementById('use_mediafusion');
+                    if (el) el.checked = cfg.use_mediafusion;
+                }
+                if (cfg.use_comet !== undefined) {
+                    const el = document.getElementById('use_comet');
+                    if (el) el.checked = cfg.use_comet;
+                }
+                if (cfg.use_rarbg !== undefined) {
+                    const el = document.getElementById('use_rarbg');
+                    if (el) el.checked = cfg.use_rarbg;
+                }
+
+                // Max Resolution Limit
+                if (cfg.max_res_limit) {
+                    const useMaxResLimitCheckbox = document.getElementById('use_max_res_limit');
+                    const maxResLimitSelect = document.getElementById('max_res_limit');
+                    if (useMaxResLimitCheckbox && maxResLimitSelect) {
+                        useMaxResLimitCheckbox.checked = true;
+                        maxResLimitSelect.disabled = false;
+                        maxResLimitSelect.value = cfg.max_res_limit;
+                        console.log('✅ Loaded max_res_limit:', cfg.max_res_limit);
+                    }
+                }
+
+                // AIOStreams mode
+                if (cfg.aiostreams_mode) {
+                    const aioStreamsCheckbox = document.getElementById('aiostreams_mode');
+                    if (aioStreamsCheckbox) {
+                        aioStreamsCheckbox.checked = true;
+                        console.log('✅ Loaded aiostreams_mode:', cfg.aiostreams_mode);
+                    }
+                }
+
+                // DB Only
+                if (cfg.db_only) {
+                    const dbOnlyCheckbox = document.getElementById('use_db_only');
+                    if (dbOnlyCheckbox) {
+                        dbOnlyCheckbox.checked = true;
+                        // Trigger change event to disable others
+                        dbOnlyCheckbox.dispatchEvent(new Event('change'));
+                        console.log('✅ Loaded db_only:', cfg.db_only);
+                    }
+                }
+
+                // Formatter
+                if (cfg.use_formatter) {
+                    const useFormatterCheckbox = document.getElementById('use_formatter');
+                    const configureFormatterBtn = document.getElementById("configure_formatter_btn");
+                    const formatterConfigInput = document.getElementById("formatter_config");
+                    const formatterStatusSpan = document.getElementById("formatter_status");
+
+                    if (useFormatterCheckbox) {
+                        useFormatterCheckbox.checked = true;
+                        configureFormatterBtn.style.display = 'inline-block';
+
+                        // Try to reconstruct formatter config from cfg
+                        const fmtConfig = {};
+                        if (cfg.formatter_preset) fmtConfig.formatter_preset = cfg.formatter_preset;
+                        if (cfg.formatter_custom_name) fmtConfig.formatter_custom_name = cfg.formatter_custom_name;
+                        if (cfg.formatter_custom_desc) fmtConfig.formatter_custom_desc = cfg.formatter_custom_desc;
+
+                        if (Object.keys(fmtConfig).length > 0) {
+                            formatterConfigInput.value = JSON.stringify(fmtConfig);
+                            formatterStatusSpan.style.display = 'inline';
+                            configureFormatterBtn.textContent = '⚙️ Modifica';
+                        }
+                    }
+                }
+                if (cfg.use_introskip !== undefined) {
+                    const el = document.getElementById('use_introskip');
+                    if (el) el.checked = cfg.use_introskip;
+                }
+
+                console.log('✅ Configuration preloaded successfully');
+
+                // Trigger updateInstallLink to refresh the UI
+                updateInstallLink();
+            } else {
+                console.log('ℹ️ No EXISTING_CONFIG found in window');
+            }
+        }, 100);
+
+        // Event listeners for all inputs
+        rdKeyInput.addEventListener('input', updateInstallLink);
+        torboxKeyInput.addEventListener('input', updateInstallLink);
+
+        mediaflowUrlInput.addEventListener('input', updateInstallLink);
+        mediaflowPasswordInput.addEventListener('input', updateInstallLink);
+        jackettUrlInput.addEventListener('input', updateInstallLink);
+        jackettApiKeyInput.addEventListener('input', updateInstallLink);
+        jackettPasswordInput.addEventListener('input', updateInstallLink);
+
+        // Event listeners for search site checkboxes
+        useCorsaroNeroCheckbox.addEventListener('change', updateInstallLink);
+        useUIndexCheckbox.addEventListener('change', updateInstallLink);
+        useKnabenCheckbox.addEventListener('change', updateInstallLink);
+        useTorrentGalaxyCheckbox.addEventListener('change', updateInstallLink);
+        useTorrentioCheckbox.addEventListener('change', updateInstallLink);
+        useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
+        useCometCheckbox.addEventListener('change', updateInstallLink);
+        useRarbgCheckbox.addEventListener('change', updateInstallLink);
+        useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
+        useFormatterCheckbox.addEventListener('change', updateInstallLink);
+        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
+        maxResLimitSelect.addEventListener('change', updateInstallLink);
+        aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
+        useDbOnlyCheckbox.addEventListener('change', updateInstallLink);
+        useFormatterCheckbox.addEventListener('change', updateInstallLink);
+        useIntroSkipCheckbox.addEventListener('change', updateInstallLink);
+
+        // Initial call to enable buttons
+        updateInstallLink();
+
+        installButton.addEventListener('click', () => {
+            if (installLinkDisplay.value) window.location.href = installLinkDisplay.value;
+        });
+
+        copyButton.addEventListener('click', () => {
+            if (installLinkDisplay.value) {
+                navigator.clipboard.writeText(installLinkDisplay.value).then(() => {
+                    const originalText = statusEl.textContent;
+                    statusEl.textContent = "✓ Link copiato negli appunti!";
+                    statusEl.style.color = '#4EC9B0';
+                    const btnText = copyButton.textContent;
+                    copyButton.textContent = "Copiato!";
+                    setTimeout(() => {
+                        copyButton.textContent = btnText;
+                        statusEl.textContent = originalText;
+                    }, 2000);
+                });
+            }
+        });
+    </script>
+    <script>
+        // Ashfall Three.js effect
+        let container;
+        let camera, scene, renderer;
+        let uniforms;
+        let loader = new THREE.TextureLoader();
+        let texture;
+
+        loader.setCrossOrigin("anonymous");
+        loader.load(
+            'https://s3-us-west-2.amazonaws.com/s.cdpn.io/982762/noise.png',
+            function (tex) {
+                texture = tex;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.minFilter = THREE.LinearFilter;
+                init();
+                animate();
+            }
+        );
+
+        function init() {
+            container = document.getElementById('container');
+
+            camera = new THREE.Camera();
+            camera.position.z = 1;
+
+            scene = new THREE.Scene();
+
+            var geometry = new THREE.PlaneBufferGeometry(2, 2);
+
+            uniforms = {
+                u_time: { type: "f", value: 1.0 },
+                u_resolution: { type: "v2", value: new THREE.Vector2() },
+                u_noise: { type: "t", value: texture },
+                u_mouse: { type: "v2", value: new THREE.Vector2() }
+            };
+
+            var material = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexShader: document.getElementById('vertexShader').textContent,
+                fragmentShader: document.getElementById('fragmentShader').textContent
+            });
+
+            var mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+
+            renderer = new THREE.WebGLRenderer();
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            container.appendChild(renderer.domElement);
+
+            onWindowResize();
+            window.addEventListener('resize', onWindowResize, false);
+
+            document.addEventListener('mousemove', function (e) {
+                uniforms.u_mouse.value.x = e.clientX / window.innerWidth;
+                uniforms.u_mouse.value.y = 1.0 - (e.clientY / window.innerHeight);
+            });
+        }
+
+        function onWindowResize() {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            uniforms.u_resolution.value.x = renderer.domElement.width;
+            uniforms.u_resolution.value.y = renderer.domElement.height;
+        }
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+            uniforms.u_time.value = time * 0.001;
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+
+</html>

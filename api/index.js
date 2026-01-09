@@ -6350,7 +6350,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 let resolvedFileTitle = null;
                 let resolvedFileSize = null;
 
-                if (dbResult.provider === 'Database' && season && episode && !dbResult.torrent_title) {
+                if (season && episode && !dbResult.torrent_title) {
                     // Only try to resolve if we have season/episode info (series)
                     if (season && episode) {
                         try {

@@ -8631,6 +8631,21 @@ export default async function handler(req, res) {
     }
 
 
+    // Serve Formatter UI (Restored)
+    if (url.pathname === '/formatter' || url.pathname === '/formatter.html') {
+        const templatePath = path.join(process.cwd(), 'public', 'formatter.html');
+        let html;
+        try {
+            html = await fs.readFile(templatePath, 'utf-8');
+        } catch (e) {
+            const rootPath = path.join(process.cwd(), 'formatter.html');
+            html = await fs.readFile(rootPath, 'utf-8');
+        }
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.status(200).send(html);
+    }
+
+
     // ✅ Serve la pagina di configurazione alla root
     if (url.pathname === '/') {
         try {

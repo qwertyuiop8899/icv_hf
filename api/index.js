@@ -6403,8 +6403,14 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Determine final values
                 const finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
                 // ✅ FIX: Use file_title directly if available (from searchPacksByImdbId or searchFilesByTitle)
-                const finalFileTitle = resolvedFileTitle || dbResult.file_title || undefined;
+                // Also check file_path as fallback (searchPacksByImdbId returns both)
+                const finalFileTitle = resolvedFileTitle || dbResult.file_title || dbResult.file_path || undefined;
                 const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
+
+                // DEBUG: Log raw dbResult file fields
+                if (finalFileIndex !== undefined) {
+                    console.log(`   🔍 [DB RAW] file_title=${dbResult.file_title}, file_path=${dbResult.file_path}, file_index=${dbResult.file_index}`);
+                }
 
                 // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
                 const displaySize = finalFileSize;

@@ -505,9 +505,9 @@ function extractQuality(title) {
         if (match) {
             let quality = match[1].toLowerCase();
 
-            // Normalize resolutions: always add 'p' suffix (except 4k/uhd)
+            // Normalize resolutions: always add 'p' suffix
             if (quality === '2160' || quality === '2160p' || quality === 'uhd' || quality === '4k') {
-                return '4K';  // Normalize to 4K
+                return '2160p';  // ✅ Sempre 2160p (unificato)
             }
             if (quality === '1080') return '1080p';
             if (quality === '720') return '720p';
@@ -5336,11 +5336,11 @@ async function handleStream(type, id, config, workerOrigin) {
                 // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
                 // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
                 // 🎬 FILTRO DOPPIO: excludeSeries=true + movieImdbId per evitare risultati di serie TV con parole simili nel titolo episodio
-                const fileSearchOptions = { 
-                    movieImdbId: mediaDetails.imdbId, 
-                    excludeSeries: true 
+                const fileSearchOptions = {
+                    movieImdbId: mediaDetails.imdbId,
+                    excludeSeries: true
                 };
-                
+
                 if (mediaDetails.title) {
                     const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders, fileSearchOptions);
                     if (titleMatches && titleMatches.length > 0) {

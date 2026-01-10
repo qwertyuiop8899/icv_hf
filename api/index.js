@@ -479,7 +479,7 @@ function cleanSearchQuery(query) {
 
 // ✅ Enhanced Quality Extraction
 function extractQuality(title) {
-    if (!title) return '';
+    if (!title) return 'Unknown';
 
     // More comprehensive quality patterns
     // Resolution numbers are unique enough to match without strict boundaries
@@ -493,7 +493,11 @@ function extractQuality(title) {
         /\b(bluray|blu-ray|bdremux)\b/i,
         /\b(remux)\b/i,
         /\b(hdrip)\b/i,
-        /\b(cam|ts|tc)\b/i
+        /\b(cam|ts|tc)\b/i,
+        // ✅ DVD/DivX quality patterns (fallback when no resolution found)
+        /\b(dvd[ .\-_]?rip|dvdrip)\b/i,
+        /\b(dvd)\b/i,
+        /\b(divx|dvix)\b/i
     ];
 
     for (const pattern of qualityPatterns) {
@@ -508,12 +512,19 @@ function extractQuality(title) {
             if (quality === '1080') return '1080p';
             if (quality === '720') return '720p';
             if (quality === '480') return '480p';
+            
+            // ✅ Normalize DVD/DivX qualities
+            if (quality.includes('dvdrip') || quality.includes('dvd rip') || quality.includes('dvd-rip') || quality.includes('dvd_rip')) {
+                return 'DVDRip';
+            }
+            if (quality === 'dvd') return 'DVD';
+            if (quality === 'divx' || quality === 'dvix') return 'DivX';
 
             return quality;
         }
     }
 
-    return '';
+    return 'Unknown';
 }
 
 // ✅ Improved Info Hash Extraction
@@ -6391,7 +6402,8 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // Determine final values
                 const finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
-                const finalFileTitle = resolvedFileTitle || (dbResult.torrent_title ? dbResult.file_title : undefined);
+                // ✅ FIX: Use file_title directly if available (from searchPacksByImdbId or searchFilesByTitle)
+                const finalFileTitle = resolvedFileTitle || dbResult.file_title || undefined;
                 const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
 
                 // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
@@ -7695,9 +7707,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
-                    // Relaxed check: valid if we have specific file_title differing from torrent title
+                    // For movies: isPack if we have fileIndex (pack with specific file selected)
+                    // For series: isPack if title matches season pack pattern
                     const isPack = type === 'movie'
-                        ? (result.file_title && result.file_title !== result.title)
+                        ? (result.fileIndex !== undefined && result.fileIndex !== null)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
@@ -7711,12 +7724,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (type === 'movie') {
                         if (isPack) {
+                            // ✅ FIX: Show file_title if available, otherwise indicate pack fileIndex
+                            const fileTitleDisplay = cleanFileTitle ? cleanFileTitle : (result.fileIndex !== undefined ? `File #${result.fileIndex}` : 'Pack File');
                             if (config.aiostreams_mode) {
                                 titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine2 = `📂 ${fileTitleDisplay}`;
                             } else {
                                 titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine2 = `📂 ${fileTitleDisplay}`;
                             }
                         } else {
                             titleLine1 = `🎬 ${cleanMainFilename}`;
@@ -7910,9 +7925,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
-                    // Relaxed check: valid if we have specific file_title differing from torrent title
+                    // For movies: isPack if we have fileIndex (pack with specific file selected)
+                    // For series: isPack if title matches season pack pattern
                     const isPack = type === 'movie'
-                        ? (result.file_title && result.file_title !== result.title)
+                        ? (result.fileIndex !== undefined && result.fileIndex !== null)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
@@ -7922,15 +7938,17 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (type === 'movie') {
                         if (isPack) {
+                            // ✅ FIX: Show file_title if available, otherwise indicate pack fileIndex
+                            const fileTitleDisplay = cleanFileTitle ? cleanFileTitle : (result.fileIndex !== undefined ? `File #${result.fileIndex}` : 'Pack File');
                             // Movie collection: show BOTH pack and file (pack first, file second for consistency)
                             if (config.aiostreams_mode) {
                                 // AIOStreams: pack on line 1, file on line 2 (matches RD format)
                                 titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine2 = `📂 ${fileTitleDisplay}`;
                             } else {
                                 // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine2 = `📂 ${fileTitleDisplay}`;
                             }
                         } else {
                             // Single movie: show ONLY the filename (not the torrent name)
@@ -8097,8 +8115,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
+                    // For movies: isPack if we have fileIndex (pack with specific file selected)
+                    // For series: isPack if title matches season pack pattern
                     const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        ? (result.fileIndex !== undefined && result.fileIndex !== null)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
@@ -8108,15 +8128,17 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (type === 'movie') {
                         if (isPack) {
+                            // ✅ FIX: Show file_title if available, otherwise indicate pack fileIndex
+                            const fileTitleDisplay = cleanFileTitle ? cleanFileTitle : (result.fileIndex !== undefined ? `File #${result.fileIndex}` : 'Pack File');
                             // Movie collection: show BOTH pack and file
                             if (config.aiostreams_mode) {
                                 // AIO mode: file first, then pack
-                                titleLine1 = `📂 ${cleanFileTitle}`;
+                                titleLine1 = `📂 ${fileTitleDisplay}`;
                                 titleLine2 = `🗳️ ${result.title}`;
                             } else {
                                 // Normal mode: pack first, then file
                                 titleLine1 = `🗳️ ${result.title}`;
-                                titleLine2 = `📂 ${cleanFileTitle}`;
+                                titleLine2 = `📂 ${fileTitleDisplay}`;
                             }
                         } else {
                             // Single movie: show ONLY the filename (not the torrent name)
@@ -8255,8 +8277,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     let titleLine2 = '';
 
                     // ✅ Define isPack at top level for size calculation
+                    // For movies: isPack if we have fileIndex (pack with specific file selected)
+                    // For series: isPack if title matches season pack pattern
                     const isPack = type === 'movie'
-                        ? (result.fileIndex !== undefined && result.file_title && result.file_title !== result.title)
+                        ? (result.fileIndex !== undefined && result.fileIndex !== null)
                         : packFilesHandler.isSeasonPack(result.title);
 
                     // ✅ MOVIE/SERIES TITLE DISPLAY
@@ -8268,7 +8292,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (isPack) {
                             // Movie collection: show BOTH pack and file
                             titleLine1 = `🗳️ ${result.title}`;
-                            titleLine2 = `📂 ${cleanFileTitle}`;
+                            // ✅ FIX: Show file_title if available, otherwise indicate pack fileIndex
+                            titleLine2 = cleanFileTitle ? `📂 ${cleanFileTitle}` : `📂 File #${result.fileIndex}`;
                         } else {
                             // Single movie: show ONLY the filename (not the torrent name)
                             titleLine1 = `🎬 ${cleanMainFilename}`;

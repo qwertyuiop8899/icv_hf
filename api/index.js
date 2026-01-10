@@ -9658,18 +9658,14 @@ export default async function handler(req, res) {
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
 
-                    // 🔥 CRITICAL FIX: Use SELECTED files to find the correct link index!
-                    // RealDebrid returns links[] array ONLY for selected files (selected=1)
-                    // BUT the links are ordered by SIZE DESCENDING (largest first)
-                    // So we need to sort selectedForLink the same way to match link positions
+                    // 🔥 HYBRID APPROACH: Try size-descending guess first (1 call), fallback to loop if wrong
                     let selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
+                    const targetFilename = targetFile.path.split('/').pop().toLowerCase();
                     
-                    // 🔥 Sort by size descending to match RealDebrid's link order
-                    const selectedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
-                    let fileIndex = selectedBySize.findIndex(f => f.id === targetFile.id);
+                    console.log(`[RealDebrid] 🔍 Target: ${targetFilename} (${torrent.links.length} links)`);
 
                     // 🔥 FIX: For movie packs, if target file is not selected, select it now
-                    if (fileIndex === -1 && type === 'movie' && packFileIdx !== null) {
+                    if (!selectedForLink.some(f => f.id === targetFile.id) && type === 'movie' && packFileIdx !== null) {
                         console.log(`[RealDebrid] ⚠️ Pack movie file not selected, selecting now...`);
 
                         // Select the target file
@@ -9678,32 +9674,68 @@ export default async function handler(req, res) {
                         // Re-fetch torrent info
                         torrent = await realdebrid.getTorrentInfo(torrent.id);
                         selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
-                        // 🔥 Sort by size descending to match RealDebrid's link order
-                        const newSelectedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
-                        fileIndex = newSelectedBySize.findIndex(f => f.id === targetFile.id);
-
-                        console.log(`[RealDebrid] ✅ File selected, new index: ${fileIndex}`);
+                        console.log(`[RealDebrid] ✅ File selected, now ${torrent.links.length} links available`);
                     }
 
-                    if (fileIndex === -1) {
-                        console.log(`[RealDebrid] ❌ Target file not in selected files (file.id=${targetFile.id})`);
-                        console.log(`[RealDebrid] Selected files: ${selectedForLink.map(f => `${f.id}:${f.path.split('/').pop()}`).join(', ')}`);
+                    // 🚀 STEP 1: Calculate predicted index using Size-Descending sort
+                    const sortedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                    const predictedIndex = sortedBySize.findIndex(f => f.id === targetFile.id);
+                    
+                    let unrestricted = null;
+                    let matchedIndex = -1;
+                    
+                    // 🚀 STEP 2: Try predicted index first (1 API call in 99% of cases)
+                    if (predictedIndex >= 0 && predictedIndex < torrent.links.length) {
+                        console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (size-descending)...`);
+                        try {
+                            const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[predictedIndex]);
+                            if (testUnrestricted && testUnrestricted.filename) {
+                                const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
+                                console.log(`[RealDebrid] 📂 Predicted[${predictedIndex}]: ${testUnrestricted.filename}`);
+                                
+                                if (unrestrictedFilename === targetFilename) {
+                                    console.log(`[RealDebrid] ✅ PREDICTED HIT! Using index ${predictedIndex}`);
+                                    unrestricted = testUnrestricted;
+                                    matchedIndex = predictedIndex;
+                                } else {
+                                    console.log(`[RealDebrid] ⚠️ Predicted miss, falling back to loop...`);
+                                }
+                            }
+                        } catch (err) {
+                            console.log(`[RealDebrid] ⚠️ Predicted index error: ${err.message}`);
+                        }
+                    }
+                    
+                    // 🔄 STEP 3: Fallback - loop through all links if prediction failed
+                    if (!unrestricted) {
+                        console.log(`[RealDebrid] 🔄 Fallback: scanning all ${torrent.links.length} links...`);
+                        for (let i = 0; i < torrent.links.length; i++) {
+                            if (i === predictedIndex) continue; // Already tried this one
+                            try {
+                                const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[i]);
+                                if (testUnrestricted && testUnrestricted.filename) {
+                                    const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
+                                    console.log(`[RealDebrid] 📂 Link[${i}]: ${testUnrestricted.filename}`);
+                                    
+                                    if (unrestrictedFilename === targetFilename) {
+                                        console.log(`[RealDebrid] ✅ FALLBACK MATCH at index ${i}!`);
+                                        unrestricted = testUnrestricted;
+                                        matchedIndex = i;
+                                        break;
+                                    }
+                                }
+                            } catch (linkErr) {
+                                console.log(`[RealDebrid] ⚠️ Link[${i}] error: ${linkErr.message}`);
+                            }
+                        }
+                    }
+                    
+                    if (!unrestricted) {
+                        console.log(`[RealDebrid] ❌ No matching link found for: ${targetFilename}`);
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
-
-                    console.log(`[RealDebrid] 📍 File ID: ${targetFile.id}, Size-sorted Index: ${fileIndex}/${selectedForLink.length}, Total links: ${(torrent.links || []).length}`);
-
-                    let downloadLink = torrent.links[fileIndex];
-
-                    if (!downloadLink) {
-                        console.log(`[RealDebrid] ❌ No download link at index ${fileIndex}`);
-                        console.log(`[RealDebrid] Available links: ${(torrent.links || []).length}`);
-                        return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
-                    }
-
-                    console.log(`[RealDebrid] ✅ Using link at index ${fileIndex} for file: ${targetFile.path.split('/').pop()}`);
-
-                    const unrestricted = await realdebrid.unrestrictLink(downloadLink);
+                    
+                    console.log(`[RealDebrid] ✅ Final: link[${matchedIndex}] -> ${unrestricted.filename}`);
 
                     // 🔥 Torrentio-style: Check for access denied errors
                     if (realdebrid._isAccessDeniedError(unrestricted)) {

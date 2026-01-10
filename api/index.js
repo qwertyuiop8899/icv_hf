@@ -7235,11 +7235,22 @@ async function handleStream(type, id, config, workerOrigin) {
                     console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
 
                     try {
+                        // Construct array of ALL possible titles to match against
+                        const candidateTitles = [
+                            mediaDetails.title,
+                            mediaDetails.originalName,
+                            ...(mediaDetails.titles || [])
+                        ].filter(Boolean);
+                        // Dedup
+                        const uniqueTitles = [...new Set(candidateTitles)];
+
+                        console.log(`🎬 [MOVIE VERIFY] Resolving pack using titles: ${JSON.stringify(uniqueTitles)}`);
+
                         const fileInfo = await packFilesHandler.resolveMoviePackFile(
                             infoHash,
                             config,
                             mediaDetails.imdbId,
-                            mediaDetails.title,
+                            uniqueTitles, // ✅ Pass Array of Titles
                             mediaDetails.year,
                             dbHelper
                         );

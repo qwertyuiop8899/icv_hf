@@ -1036,6 +1036,7 @@ async function getSeriesPackFiles(infoHash) {
 /**
  * Search for specific files inside packs by title (FTS)
  * Used for Movie Packs where we indexed all files
+ * [Updated] Added for P2P Pack Support
  * @param {string} titleQuery - Title to search for
  * @param {Array<string>} providers - Optional providers
  */

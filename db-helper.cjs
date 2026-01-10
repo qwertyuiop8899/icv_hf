@@ -288,14 +288,52 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
 
   try {
     let updated = 0;
+    let skipped = 0;
 
     for (const result of cacheResults) {
       if (!result.hash) continue;
 
       const hashLower = result.hash.toLowerCase();
+      
+      // ✅ Get real title (not placeholder)
+      const realTitle = result.torrent_title || result.file_title || null;
+      const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+      const torrentSize = result.size || result.file_size || null;
+
+      // ✅ SMART SAVE: Check if hash already exists in DB
+      const existsCheck = await pool.query(
+        'SELECT info_hash, provider FROM torrents WHERE info_hash = $1',
+        [hashLower]
+      );
+      const existsInDb = existsCheck.rows.length > 0;
+      const existingProvider = existsInDb ? existsCheck.rows[0].provider : null;
+
+      // ✅ SKIP useless placeholders:
+      // - Hash NOT in DB (orphan from user's RD library)
+      // - cached = false (not useful)
+      // - No real title or file_title
+      if (!existsInDb && cachedValue === false) {
+        skipped++;
+        continue; // Don't create garbage record
+      }
+      
+      if (!existsInDb && !realTitle) {
+        // Only create new record if cached=true (might be useful later)
+        if (cachedValue !== true) {
+          skipped++;
+          continue;
+        }
+        // Even if cached=true, skip if no useful info at all
+        if (!torrentSize) {
+          skipped++;
+          continue;
+        }
+      }
+
+      // Use real title or minimal fallback (only for truly cached items)
+      const titleToSave = realTitle || `RD-${hashLower.substring(0, 8)}`;
 
       // ✅ UPSERT: Insert if not exists, then update cache status and size
-      // Required NOT NULL columns: info_hash, provider, title, type, upload_date
       const upsertQuery = `
         INSERT INTO torrents (
           info_hash, provider, title, type, upload_date, 
@@ -311,22 +349,12 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
           type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
-      // Use torrent_title from RD as primary title, then file_title, then fallback
-      const fallbackTitle = result.torrent_title || result.file_title || `RD-${hashLower.substring(0, 8)}`;
-
-      // ✅ FIX: Force cached_rd to true (we only call this for cached items)
-      // Previously result.cached could be undefined which would insert NULL
-      const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
-
-      // ✅ Use torrent total size primarily, then file size
-      const torrentSize = result.size || result.file_size || null;
-
       const params = [
         hashLower,                           // $1 info_hash
-        fallbackTitle,                       // $2 title  
-        cachedValue,                         // $3 cached_rd (forced to true if undefined)
+        titleToSave,                         // $2 title  
+        cachedValue,                         // $3 cached_rd
         result.file_title || null,           // $4 file_title
-        torrentSize,                         // $5 size (updated to use total size)
+        torrentSize,                         // $5 size
         mediaType || 'unknown'               // $6 type
       ];
 
@@ -334,6 +362,9 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
       updated += res.rowCount;
     }
 
+    if (skipped > 0) {
+      console.log(`⏭️  [DB] Skipped ${skipped} useless placeholder(s)`);
+    }
     console.log(`✅ [DB] Updated RD cache status for ${updated} torrents`);
     return updated;
 

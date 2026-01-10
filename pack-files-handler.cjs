@@ -599,15 +599,21 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, 
 
         // Save to DB
         if (dbHelper && movieImdbId) {
-            await dbHelper.insertEpisodeFiles([{
+            // ✅ INDEX ALL FILES IN PACK (for P2P reverse search)
+            // Even if we only matched one movie now, we save ALL files so they are searchable by title later.
+            const allFilesToSave = videoFiles.map(f => ({
                 info_hash: infoHash,
-                file_index: match.id,
-                title: match.path.split('/').pop(),
-                size: match.bytes,
-                imdb_id: movieImdbId,
+                file_index: f.id,
+                title: f.path.split('/').pop(),
+                size: f.bytes,
+                imdb_id: (f.id === match.id) ? movieImdbId : null, // Only tag the matched one with THIS ID
                 imdb_season: null,
                 imdb_episode: null
-            }]);
+            }));
+
+            // Async save (don't await strictly if performance matters, but it's okay here)
+            await dbHelper.insertEpisodeFiles(allFilesToSave);
+            console.log(`💾 [PACK-HANDLER] Indexed ${allFilesToSave.length} files from movie pack.`);
         }
 
         return {

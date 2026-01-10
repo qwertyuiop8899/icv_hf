@@ -452,6 +452,7 @@ function isSeasonPack(torrentTitle) {
         /[sS]\d{1,2}(?![eExX])/,                    // S05 senza E
         /[sS]eason\s*\d+(?!\s*[eE]pisode)/i,        // Season 5 senza Episode
         /[sS]tagione\s*\d+(?!\s*[eE]pisodio)/i,     // Stagione 5 senza Episodio
+        /\b(?:part|parte|vol|volume)\s*\d+/i,       // Part 1, Parte 2, Vol 1
         /\b(?:complete|completa|full)\b/i,          // Complete, Full
         /\[?(?:S\d+)?\s*(?:E\d+-E?\d+|\d+-\d+)\]?/, // Range episodi: E01-E08, 01-08
     ];

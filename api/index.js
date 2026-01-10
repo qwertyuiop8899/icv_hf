@@ -4744,6 +4744,25 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
 
     const seasonPackMatch = seasonPackPatterns.some(pattern => pattern.test(normalizedTorrentTitle));
     if (seasonPackMatch) {
+        // ✅ PARTE/PART/VOLUME CHECK: Exclude "Parte 2" packs when looking for early episodes
+        // Pattern: "Parte 01/02", "Part 1/2", "Volume 1/2", "Vol.1/2"
+        const parteMatch = torrentTitle.match(/(?:parte|part|volume|vol)[.\s]*0*([12])/i);
+        if (parteMatch) {
+            const partNum = parseInt(parteMatch[1]);
+            // Assume Part 1 = episodes 1-4, Part 2 = episodes 5+
+            // This is a common pattern for Netflix/streaming releases
+            const isFirstHalf = episodeNum <= 4;
+            const isSecondHalf = episodeNum >= 5;
+            
+            if (partNum === 1 && isSecondHalf) {
+                console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 1 doesn't contain E${episodeNum})`);
+                return false;
+            }
+            if (partNum === 2 && isFirstHalf) {
+                console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 2 doesn't contain E${episodeNum})`);
+                return false;
+            }
+        }
         console.log(`✅ [SEASON PACK] Match for "${torrentTitle}" contains Season ${seasonNum}`);
         return true;
     }
@@ -5318,8 +5337,17 @@ async function handleStream(type, id, config, workerOrigin) {
                     const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
                     console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
 
-                    // Merge: episode files + packs
-                    dbResults = [...dbResults, ...packResults];
+                    // ✅ FIX: Remove file_index from pack results!
+                    // The file_index in torrents table is from the LAST played episode, not the current one.
+                    // This prevents showing wrong episodes when user requests E1 but pack has E6 file_index saved.
+                    const cleanedPackResults = packResults.map(pack => ({
+                        ...pack,
+                        file_index: null,       // ❌ Remove - it's wrong for this episode
+                        file_title: null        // ❌ Remove - it's wrong for this episode
+                    }));
+
+                    // Merge: episode files + packs (packs need dynamic resolution)
+                    dbResults = [...dbResults, ...cleanedPackResults];
                 } else {
                     // No season/episode available (Kitsu without TMDb conversion fallback)
                     console.log(`🎌 [Anime] No season mapping available, fetching all packs`);

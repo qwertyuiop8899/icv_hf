@@ -6435,10 +6435,25 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 // Determine final values
-                const finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
+                let finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
                 // ✅ FIX: Use file_title directly if available, with file_path as fallback (searchPacksByImdbId returns file_path)
-                const finalFileTitle = resolvedFileTitle || dbResult.file_title || dbResult.file_path || undefined;
+                let finalFileTitle = resolvedFileTitle || dbResult.file_title || dbResult.file_path || undefined;
                 const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
+
+                // ✅ SANITY CHECK: Verify that file_title matches the requested episode!
+                // This catches corrupted DB entries where file_index=4 but imdb_episode=1
+                if (type === 'series' && season && episode && finalFileTitle && finalFileIndex !== undefined) {
+                    const episodeNum = parseInt(episode);
+                    const seasonNum = parseInt(season);
+                    const parsed = packFilesHandler.parseSeasonEpisode(finalFileTitle, seasonNum);
+                    
+                    if (parsed && parsed.episode !== episodeNum) {
+                        console.warn(`⚠️ [DB SANITY] Corrupted entry! file_title="${finalFileTitle}" parsed as E${parsed.episode} but expected E${episodeNum}. Discarding file_index=${finalFileIndex}`);
+                        finalFileIndex = undefined;
+                        finalFileTitle = undefined;
+                        // Keep the torrent but without the wrong file mapping
+                    }
+                }
 
                 // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
                 const displaySize = finalFileSize;

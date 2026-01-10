@@ -9284,14 +9284,14 @@ export default async function handler(req, res) {
                         })
                         .sort((a, b) => b.bytes - a.bytes);
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in alphabetically sorted list)
+                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in SIZE DESCENDING list)
                     if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
-                        // 🔥 FIX: Sort files ALPHABETICALLY to match how pack-files-handler saves indices
-                        // pack-files-handler.cjs saves file_index as position in alphabetically sorted list (0-based)
-                        const sortedVideoFiles = [...videoFilesForPack].sort((a, b) => a.path.localeCompare(b.path));
+                        // 🔥 FIX: Sort files BY SIZE DESCENDING to match torrent file order
+                        // This matches how we save indices in pack-files-handler.cjs and api/index.js
+                        const sortedVideoFiles = [...videoFilesForPack].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
 
                         console.log(`[RealDebrid] 🎬 Pack movie - looking for file at sorted index ${packFileIdx}`);
-                        console.log(`[RealDebrid] 📂 Sorted files (alphabetically):`);
+                        console.log(`[RealDebrid] 📂 Sorted files (by size descending):`);
                         sortedVideoFiles.forEach((f, i) => {
                             const marker = i === packFileIdx ? '👉' : '  ';
                             console.log(`${marker} [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB, id=${f.id})`);
@@ -9456,14 +9456,14 @@ export default async function handler(req, res) {
 
                     let targetFile = null;
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in alphabetically sorted list)
+                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in SIZE DESCENDING list)
                     if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
-                        // 🔥 FIX: Sort files ALPHABETICALLY to match how pack-files-handler saves indices
-                        // Use allVideoFilesForPack which has SAME filter as pack-files-handler.cjs
-                        const sortedAllVideoFiles = [...allVideoFilesForPack].sort((a, b) => a.path.localeCompare(b.path));
+                        // 🔥 FIX: Sort files BY SIZE DESCENDING to match torrent file order
+                        // This matches how we save indices in pack-files-handler.cjs and api/index.js
+                        const sortedAllVideoFiles = [...allVideoFilesForPack].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
 
                         console.log(`[RealDebrid] 🎬 Pack movie (ready) - looking for file at sorted index ${packFileIdx}`);
-                        console.log(`[RealDebrid] 📂 Sorted files (alphabetically):`);;
+                        console.log(`[RealDebrid] 📂 Sorted files (by size descending):`);;
                         sortedAllVideoFiles.forEach((f, i) => {
                             const marker = i === packFileIdx ? '👉' : '  ';
                             console.log(`${marker} [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB, id=${f.id})`);
@@ -9576,6 +9576,14 @@ export default async function handler(req, res) {
                                                     if (episodeImdbId) {
                                                         console.log(`💾 [DB] Saving ALL ${allVideoFiles.length} files from re-added pack...`);
 
+                                                        // ✅ FIX: Calculate correct torrent file index
+                                                        // RealDebrid's file.id does NOT match torrent index!
+                                                        const sortedBySize = [...allVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                                        const fileIdToTorrentIndex = new Map();
+                                                        sortedBySize.forEach((file, index) => {
+                                                            fileIdToTorrentIndex.set(file.id, index);
+                                                        });
+
                                                         for (const file of allVideoFiles) {
                                                             const filename = file.path.split('/').pop();
                                                             const episodeMatch = filename.match(/[se](\d{1,2})[ex](\d{1,2})|stagione[\s._-]*(\d{1,2})[\s._-]*episodio[\s._-]*(\d{1,2})|(\d{1,2})x(\d{1,2})/i);
@@ -9600,15 +9608,18 @@ export default async function handler(req, res) {
                                                                         episode: fileEpisode
                                                                     };
 
+                                                                    // ✅ Use correct torrent index
+                                                                    const correctTorrentIndex = fileIdToTorrentIndex.get(file.id) ?? file.id;
+                                                                    
                                                                     await dbHelper.updateTorrentFileInfo(
                                                                         infoHash,
-                                                                        file.id,
+                                                                        correctTorrentIndex,
                                                                         file.path,
                                                                         file.bytes || 0,
                                                                         fileInfo
                                                                     );
 
-                                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename} (${formatBytes(file.bytes || 0)})`);
+                                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename} (idx=${correctTorrentIndex}, ${formatBytes(file.bytes || 0)})`);
                                                                 }
                                                             }
                                                         }
@@ -9743,6 +9754,19 @@ export default async function handler(req, res) {
                                     } else {
                                         console.log(`💾 [DB] Saving ALL ${torrent.files.length} files from pack...`);
 
+                                        // ✅ FIX: Calculate correct torrent file index
+                                        // RealDebrid's file.id does NOT match torrent index!
+                                        // Torrent files are typically ordered by size (descending)
+                                        const allVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
+                                        const sortedBySize = [...allVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                        
+                                        // Create a map: file.id -> correct torrent index
+                                        const fileIdToTorrentIndex = new Map();
+                                        sortedBySize.forEach((file, index) => {
+                                            fileIdToTorrentIndex.set(file.id, index);
+                                        });
+                                        console.log(`📊 [DB] File order map (by size desc):`, [...fileIdToTorrentIndex.entries()].map(([id, idx]) => `id=${id}->idx=${idx}`).join(', '));
+
                                         // Iterate through ALL files in the pack
                                         for (const file of torrent.files) {
                                             // Only process video files
@@ -9776,15 +9800,18 @@ export default async function handler(req, res) {
                                                         episode: fileEpisode
                                                     };
 
+                                                    // ✅ Use correct torrent index, not RealDebrid's file.id
+                                                    const correctTorrentIndex = fileIdToTorrentIndex.get(file.id) ?? file.id;
+                                                    
                                                     await dbHelper.updateTorrentFileInfo(
                                                         infoHash,
-                                                        file.id,
+                                                        correctTorrentIndex,
                                                         file.path,
                                                         file.bytes || 0,
                                                         fileInfo
                                                     );
 
-                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename} (${formatBytes(file.bytes || 0)})`);
+                                                    console.log(`💾 [DB] Saved S${String(fileSeason).padStart(2, '0')}E${String(fileEpisode).padStart(2, '0')}: ${filename} (idx=${correctTorrentIndex}, ${formatBytes(file.bytes || 0)})`);
                                                 }
                                             }
                                         }
@@ -9809,17 +9836,27 @@ export default async function handler(req, res) {
                                 if (movieImdbId) {
                                     console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
 
+                                    // ✅ FIX: Calculate correct torrent file index
+                                    // RealDebrid's file.id does NOT match torrent index!
+                                    const allPackVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
+                                    const sortedBySize = [...allPackVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                    const movieFileIdToTorrentIndex = new Map();
+                                    sortedBySize.forEach((file, index) => {
+                                        movieFileIdToTorrentIndex.set(file.id, index);
+                                    });
+                                    const correctMovieFileIndex = movieFileIdToTorrentIndex.get(targetFile.id) ?? targetFile.id;
+
                                     // Save this specific file mapping to pack_files table
                                     const packFileData = [{
                                         pack_hash: infoHash.toLowerCase(),
                                         imdb_id: movieImdbId,
-                                        file_index: targetFile.id, // RealDebrid file.id
+                                        file_index: correctMovieFileIndex, // ✅ Use correct torrent index, not RealDebrid file.id
                                         file_path: targetFile.path,
                                         file_size: targetFile.bytes || 0
                                     }];
 
                                     await dbHelper.insertPackFiles(packFileData);
-                                    console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file ${targetFile.id} in pack ${infoHash}`);
+                                    console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file idx=${correctMovieFileIndex} in pack ${infoHash}`);
 
                                     // Also update the all_imdb_ids array on the torrents table
                                     await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());

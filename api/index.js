@@ -5322,6 +5322,23 @@ async function handleStream(type, id, config, workerOrigin) {
                     console.log(`💾 [DB] Found ${packResults.length} pack(s) containing film ${mediaDetails.imdbId}`);
                 }
 
+                // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
+                // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
+                if (mediaDetails.title) {
+                    const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders);
+                    if (titleMatches && titleMatches.length > 0) {
+                        console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}"`);
+                        packResults.push(...titleMatches);
+                    }
+                }
+                if (mediaDetails.originalName && mediaDetails.originalName !== mediaDetails.title) {
+                    const origMatches = await dbHelper.searchFilesByTitle(mediaDetails.originalName, selectedProviders);
+                    if (origMatches && origMatches.length > 0) {
+                        console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}"`);
+                        packResults.push(...origMatches);
+                    }
+                }
+
                 // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
                 const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
 
@@ -7111,9 +7128,25 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 for (const res of filteredResults) {
                     // If it already has fileIndex, it's a known pack file from DB
-                    if (res.fileIndex !== undefined && res.fileIndex !== null) {
+                    // 🚨 SANITY CHECK: Verify file_title matches the REQUESTED movie!
+                    let isClean = false;
+                    if (res.fileIndex !== undefined && res.fileIndex !== null && res.file_title) {
+                        // Check if cached file title matches requested movie
+                        const similarity = calculateSimilarity(res.file_title, mediaDetails.title);
+                        // Also check Original Title if available
+                        const similarityOrig = mediaDetails.originalName ? calculateSimilarity(res.file_title, mediaDetails.originalName) : 0;
+
+                        if (similarity > 0.4 || similarityOrig > 0.4) { // 40% threshold for "Same Movie"
+                            isClean = true;
+                        } else {
+                            console.log(`⚠️ [MOVIE SANITY] Cached file "${res.file_title}" does NOT match requested "${mediaDetails.title}" (Sim: ${similarity.toFixed(2)}). Re-verifying pack.`);
+                        }
+                    }
+
+                    if (isClean) {
                         verifiedMovies.push(res);
                     } else {
+                        // Force re-verification
                         unverifiedMovies.push(res);
                     }
                 }

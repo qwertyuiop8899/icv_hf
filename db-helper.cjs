@@ -180,6 +180,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
         f.file_index,
         f.title as file_title,
         f.size as file_size,
+        f.rd_link_index,
         t.info_hash,
         t.provider,
         t.title as torrent_title,
@@ -667,6 +668,38 @@ async function deleteFileInfo(infoHash) {
   } catch (error) {
     console.error(`❌ [DB] Error deleting file info:`, error.message);
     return 0;
+  }
+}
+
+/**
+ * Update rd_link_index for a specific file
+ * This saves the verified RD link index to avoid repeated API calls
+ * @param {string} infoHash - Torrent info hash
+ * @param {number} fileIndex - File index in the pack (alphabetical order)
+ * @param {number} rdLinkIndex - Verified RD unrestrict link index
+ * @returns {Promise<boolean>} Success status
+ */
+async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
+  if (!pool) throw new Error('Database not initialized');
+  
+  try {
+    const query = `
+      UPDATE files 
+      SET rd_link_index = $3
+      WHERE info_hash = $1 AND file_index = $2
+    `;
+    const res = await pool.query(query, [infoHash.toLowerCase(), fileIndex, rdLinkIndex]);
+    
+    if (res.rowCount > 0) {
+      console.log(`✅ [DB] Saved rd_link_index=${rdLinkIndex} for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      return true;
+    } else {
+      console.warn(`⚠️ [DB] No file found to update rd_link_index for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      return false;
+    }
+  } catch (error) {
+    console.error(`❌ [DB] Error updating rd_link_index:`, error.message);
+    return false;
   }
 }
 
@@ -1196,6 +1229,7 @@ module.exports = {
   batchInsertTorrents,
   updateTorrentFileInfo,
   deleteFileInfo,
+  updateRdLinkIndex,
   getImdbIdByHash,
   updateTorrentsWithIds,
   searchPacksByImdbId,

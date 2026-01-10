@@ -498,14 +498,15 @@ function calculateSimilarity(str1, str2) {
  * @param {string} infoHash 
  * @param {Object} config 
  * @param {string} movieImdbId 
- * @param {string} title 
+ * @param {string|Array<string>} targetTitles 
  * @param {number} year 
  * @param {Object} dbHelper 
  */
-async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, dbHelper) {
-    console.log(`🎬 [PACK-HANDLER] Resolving Movie "${title} (${year})" from pack ${infoHash.substring(0, 8)}...`);
+async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles, year, dbHelper) {
+    console.log(`🎬 [PACK-HANDLER] Resolving Movie "${JSON.stringify(targetTitles)}" (${year}) from pack ${infoHash.substring(0, 8)}...`);
 
     let totalPackSize = 0;
+    let videoFiles = [];
 
     // 1️⃣ CHECK DB CACHE Logic (Reused from Series)
     if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
@@ -513,58 +514,36 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, 
             const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
             if (cachedFiles && cachedFiles.length > 0) {
                 console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
-
-                // Process cached files (add filtering logic)
-                const videoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-
-                // Early exit if single file (not a pack really)
-                if (videoFiles.length <= 1) {
-                    // If it's a single file pack, we assume it's the movie.
-                    // But strictly speaking, if we called this function, we suspect it's a pack.
-                    // Let's check anyway.
-                }
-
-                // Fuzzy Match
-                const match = findMovieFile(videoFiles, title, year);
-                if (match) {
-                    console.log(`✅ [PACK-HANDLER] Cache Hit! Found matching movie: ${match.path}`);
-                    return {
-                        fileIndex: match.id,
-                        fileName: match.path.split('/').pop(),
-                        fileSize: match.bytes,
-                        source: "DB_CACHE",
-                        totalPackSize: cachedFiles.reduce((acc, f) => acc + f.bytes, 0)
-                    };
-                } else {
-                    console.log(`⚠️ [PACK-HANDLER] Cache Miss: Movie not found in cached pack.`);
-                    return null;
-                }
+                // Process cached files
+                videoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
+                totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
             }
         } catch (err) {
             console.warn(`⚠️ [PACK-HANDLER] DB Cache check failed: ${err.message}`);
         }
     }
 
-    // 2️⃣ EXTERNAL PROVIDER
-    let fetchedData = null;
-    try {
-        if (config.rd_key) {
-            fetchedData = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
-        } else if (config.torbox_key) {
-            fetchedData = await fetchFilesFromTorbox(infoHash, config.torbox_key);
+    // 2️⃣ EXTERNAL PROVIDER (If no cache or empty cache)
+    if (videoFiles.length === 0) {
+        let fetchedData = null;
+        try {
+            if (config.rd_key) {
+                fetchedData = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
+            } else if (config.torbox_key) {
+                fetchedData = await fetchFilesFromTorbox(infoHash, config.torbox_key);
+            }
+        } catch (e) {
+            console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files: ${e.message}`);
+            return null;
         }
-    } catch (e) {
-        console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files: ${e.message}`);
-        return null;
+
+        if (fetchedData && fetchedData.files) {
+            videoFiles = fetchedData.files.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
+            totalPackSize = fetchedData.files.reduce((acc, f) => acc + f.bytes, 0);
+        }
     }
 
-    if (!fetchedData || !fetchedData.files) return null;
-
-    // Filter videos > 25MB
-    const videoFiles = fetchedData.files.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-
-    // Calculate total size
-    totalPackSize = fetchedData.files.reduce((acc, f) => acc + f.bytes, 0);
+    if (videoFiles.length === 0) return null;
 
     // If <= 1 video file, it's not really a pack to filter, but we return it as "verified"
     if (videoFiles.length === 1) {
@@ -591,8 +570,8 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, 
         };
     }
 
-    // Fuzzy Match Logic
-    const match = findMovieFile(videoFiles, title, year);
+    // Fuzzy Match Logic (using multi-title support)
+    const match = findMovieFile(videoFiles, targetTitles, year);
 
     if (match) {
         console.log(`✅ [PACK-HANDLER] Found Movie: ${match.path} (${(match.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
@@ -600,18 +579,16 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, 
         // Save to DB
         if (dbHelper && movieImdbId) {
             // ✅ INDEX ALL FILES IN PACK (for P2P reverse search)
-            // Even if we only matched one movie now, we save ALL files so they are searchable by title later.
             const allFilesToSave = videoFiles.map(f => ({
                 info_hash: infoHash,
                 file_index: f.id,
                 title: f.path.split('/').pop(),
                 size: f.bytes,
-                imdb_id: (f.id === match.id) ? movieImdbId : null, // Only tag the matched one with THIS ID
+                imdb_id: (f.id === match.id) ? movieImdbId : null,
                 imdb_season: null,
                 imdb_episode: null
             }));
 
-            // Async save (don't await strictly if performance matters, but it's okay here)
             await dbHelper.insertEpisodeFiles(allFilesToSave);
             console.log(`💾 [PACK-HANDLER] Indexed ${allFilesToSave.length} files from movie pack.`);
         }
@@ -624,52 +601,73 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, title, year, 
             totalPackSize
         };
     } else {
-        console.log(`❌ [PACK-HANDLER] Movie "${title}" not found in pack.`);
+        console.log(`❌ [PACK-HANDLER] Movie "${JSON.stringify(targetTitles)}" not found in pack.`);
         return null;
     }
 }
 
-function findMovieFile(files, targetTitle, targetYear) {
+/**
+ * Find the best matching movie file using fuzzy logic against MULTIPLE titles
+ * @param {Array} files - List of files in pack
+ * @param {string|Array<string>} targetTitles - Title(s) to match against (e.g. ["The Great Mouse Detective", "Basil l'investigatopo"])
+ * @param {string} targetYear - Year string (e.g. "1986")
+ */
+function findMovieFile(files, targetTitles, targetYear) {
     if (!files || files.length === 0) return null;
 
+    // Normalize input to array
+    const titles = Array.isArray(targetTitles) ? targetTitles : [targetTitles];
+
+    // Clean function
     const cleanTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-    const targetWords = cleanTitle(targetTitle);
 
     let bestMatch = null;
     let maxScore = 0;
 
+    // Debug logging for titles
+    console.log(`🔍 [FUZZY MATCH] Checking against ${titles.length} titles: ${JSON.stringify(titles)}`);
+
     for (const file of files) {
         const filename = file.path.split('/').pop().toLowerCase();
-        let score = 0;
+        let bestTitleScoreForFile = 0;
 
-        // 1. Year Check (Strong Signal)
-        if (targetYear && filename.includes(targetYear)) {
-            score += 50;
+        // Check against EACH title variant
+        for (const title of titles) {
+            if (!title) continue;
+
+            let score = 0;
+            const targetWords = cleanTitle(title);
+
+            // 1. Year Check (Strong Signal)
+            if (targetYear && filename.includes(targetYear)) {
+                score += 50;
+            }
+
+            // 2. Title Word Match
+            let matchedWords = 0;
+            for (const word of targetWords) {
+                if (filename.includes(word)) matchedWords++;
+            }
+
+            // Normalize word score (0-50)
+            if (targetWords.length > 0) {
+                score += (matchedWords / targetWords.length) * 50;
+            }
+
+            // Keep best score among all title variants for this file
+            if (score > bestTitleScoreForFile) bestTitleScoreForFile = score;
         }
 
-        // 2. Title Word Match
-        let matchedWords = 0;
-        for (const word of targetWords) {
-            if (filename.includes(word)) matchedWords++;
-        }
+        // 3. Negative keywords (apply once per file)
+        if (filename.includes('trailer') || filename.includes('sample')) bestTitleScoreForFile -= 50;
 
-        // Normalize word score (0-50)
-        if (targetWords.length > 0) {
-            score += (matchedWords / targetWords.length) * 50;
-        }
+        console.log(`🔍 [FUZZY DEBUG] Comparing "${filename}" -> Max Score: ${bestTitleScoreForFile}`);
 
-        // 3. Negative keywords
-        if (filename.includes('trailer') || filename.includes('sample')) score -= 50;
-
-        console.log(`🔍 [FUZZY DEBUG] Comparing "${filename}" vs "${targetTitle}" (${targetYear}) -> Score: ${score}`);
-
-        if (score > maxScore && score > 60) { // Threshold 60 avoids completely random matches
-            maxScore = score;
+        if (bestTitleScoreForFile > maxScore && bestTitleScoreForFile > 60) { // Threshold 60 
+            maxScore = bestTitleScoreForFile;
             bestMatch = file;
         }
     }
-
-
 
     return bestMatch;
 }

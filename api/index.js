@@ -9660,7 +9660,7 @@ export default async function handler(req, res) {
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
 
-                    // 🔥 HYBRID APPROACH: Try size-descending guess first (1 call), fallback to loop if wrong
+                    // 🔥 OPTIMIZED RD LINK RESOLUTION with DB cache
                     let selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
                     const targetFilename = targetFile.path.split('/').pop().toLowerCase();
                     
@@ -9679,56 +9679,112 @@ export default async function handler(req, res) {
                         console.log(`[RealDebrid] ✅ File selected, now ${torrent.links.length} links available`);
                     }
 
-                    // 🚀 STEP 1: Calculate predicted index using Size-Descending sort
-                    const sortedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
-                    const predictedIndex = sortedBySize.findIndex(f => f.id === targetFile.id);
-                    
                     let unrestricted = null;
                     let matchedIndex = -1;
-                    
-                    // 🚀 STEP 2: Try predicted index first (1 API call in 99% of cases)
-                    if (predictedIndex >= 0 && predictedIndex < torrent.links.length) {
-                        console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (size-descending)...`);
+                    let usedCachedRdIndex = false;
+
+                    // 🚀 STEP 0: Check DB for cached rd_link_index (FASTEST - 0 guessing)
+                    if (dbEnabled && type === 'series' && season && episode) {
                         try {
-                            const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[predictedIndex]);
-                            if (testUnrestricted && testUnrestricted.filename) {
-                                const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
-                                console.log(`[RealDebrid] 📂 Predicted[${predictedIndex}]: ${testUnrestricted.filename}`);
+                            const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
+                            if (episodeImdbId) {
+                                const cachedFiles = await dbHelper.searchEpisodeFiles(episodeImdbId, parseInt(season), parseInt(episode));
+                                const cachedEntry = cachedFiles.find(f => 
+                                    f.info_hash?.toLowerCase() === infoHash.toLowerCase() && 
+                                    f.rd_link_index !== null && f.rd_link_index !== undefined
+                                );
                                 
-                                if (unrestrictedFilename === targetFilename) {
-                                    console.log(`[RealDebrid] ✅ PREDICTED HIT! Using index ${predictedIndex}`);
-                                    unrestricted = testUnrestricted;
-                                    matchedIndex = predictedIndex;
-                                } else {
-                                    console.log(`[RealDebrid] ⚠️ Predicted miss, falling back to loop...`);
-                                }
-                            }
-                        } catch (err) {
-                            console.log(`[RealDebrid] ⚠️ Predicted index error: ${err.message}`);
-                        }
-                    }
-                    
-                    // 🔄 STEP 3: Fallback - loop through all links if prediction failed
-                    if (!unrestricted) {
-                        console.log(`[RealDebrid] 🔄 Fallback: scanning all ${torrent.links.length} links...`);
-                        for (let i = 0; i < torrent.links.length; i++) {
-                            if (i === predictedIndex) continue; // Already tried this one
-                            try {
-                                const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[i]);
-                                if (testUnrestricted && testUnrestricted.filename) {
-                                    const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
-                                    console.log(`[RealDebrid] 📂 Link[${i}]: ${testUnrestricted.filename}`);
-                                    
-                                    if (unrestrictedFilename === targetFilename) {
-                                        console.log(`[RealDebrid] ✅ FALLBACK MATCH at index ${i}!`);
-                                        unrestricted = testUnrestricted;
-                                        matchedIndex = i;
-                                        break;
+                                if (cachedEntry && cachedEntry.rd_link_index >= 0 && cachedEntry.rd_link_index < torrent.links.length) {
+                                    console.log(`[RealDebrid] 💾 DB HIT! Using cached rd_link_index=${cachedEntry.rd_link_index}`);
+                                    try {
+                                        unrestricted = await realdebrid.unrestrictLink(torrent.links[cachedEntry.rd_link_index]);
+                                        if (unrestricted && unrestricted.filename) {
+                                            const cachedFilename = unrestricted.filename.toLowerCase();
+                                            if (cachedFilename === targetFilename) {
+                                                console.log(`[RealDebrid] ✅ DB CACHE VERIFIED! ${unrestricted.filename}`);
+                                                matchedIndex = cachedEntry.rd_link_index;
+                                                usedCachedRdIndex = true;
+                                            } else {
+                                                console.log(`[RealDebrid] ⚠️ DB cache mismatch (${cachedFilename} != ${targetFilename}), will re-scan`);
+                                                unrestricted = null;
+                                            }
+                                        }
+                                    } catch (cacheErr) {
+                                        console.log(`[RealDebrid] ⚠️ DB cache unrestrict error: ${cacheErr.message}`);
                                     }
                                 }
-                            } catch (linkErr) {
-                                console.log(`[RealDebrid] ⚠️ Link[${i}] error: ${linkErr.message}`);
                             }
+                        } catch (dbLookupErr) {
+                            console.log(`[RealDebrid] ⚠️ DB rd_link_index lookup error: ${dbLookupErr.message}`);
+                        }
+                    }
+
+                    // 🚀 STEP 1: If no DB cache, try size-descending prediction
+                    if (!unrestricted) {
+                        const sortedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                        const predictedIndex = sortedBySize.findIndex(f => f.id === targetFile.id);
+                        
+                        if (predictedIndex >= 0 && predictedIndex < torrent.links.length) {
+                            console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (size-descending)...`);
+                            try {
+                                const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[predictedIndex]);
+                                if (testUnrestricted && testUnrestricted.filename) {
+                                    const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
+                                    console.log(`[RealDebrid] 📂 Predicted[${predictedIndex}]: ${testUnrestricted.filename}`);
+                                    
+                                    if (unrestrictedFilename === targetFilename) {
+                                        console.log(`[RealDebrid] ✅ PREDICTED HIT! Using index ${predictedIndex}`);
+                                        unrestricted = testUnrestricted;
+                                        matchedIndex = predictedIndex;
+                                    } else {
+                                        console.log(`[RealDebrid] ⚠️ Predicted miss, falling back to loop...`);
+                                    }
+                                }
+                            } catch (err) {
+                                console.log(`[RealDebrid] ⚠️ Predicted index error: ${err.message}`);
+                            }
+                        }
+                        
+                        // 🔄 STEP 2: Fallback - loop through all links if prediction failed
+                        if (!unrestricted) {
+                            const predictedIdx = sortedBySize.findIndex(f => f.id === targetFile.id);
+                            console.log(`[RealDebrid] 🔄 Fallback: scanning all ${torrent.links.length} links...`);
+                            for (let i = 0; i < torrent.links.length; i++) {
+                                if (i === predictedIdx) continue; // Already tried this one
+                                try {
+                                    const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[i]);
+                                    if (testUnrestricted && testUnrestricted.filename) {
+                                        const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
+                                        console.log(`[RealDebrid] 📂 Link[${i}]: ${testUnrestricted.filename}`);
+                                        
+                                        if (unrestrictedFilename === targetFilename) {
+                                            console.log(`[RealDebrid] ✅ FALLBACK MATCH at index ${i}!`);
+                                            unrestricted = testUnrestricted;
+                                            matchedIndex = i;
+                                            break;
+                                        }
+                                    }
+                                } catch (linkErr) {
+                                    console.log(`[RealDebrid] ⚠️ Link[${i}] error: ${linkErr.message}`);
+                                }
+                            }
+                        }
+                    }
+
+                    // 💾 STEP 3: Save rd_link_index to DB for future requests (if not from cache)
+                    if (matchedIndex >= 0 && !usedCachedRdIndex && dbEnabled && type === 'series' && season && episode) {
+                        try {
+                            // Calculate the file_index (alphabetical order) for this targetFile
+                            const allVideoFiles = (torrent.files || []).filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
+                            const sortedAlphabetically = [...allVideoFiles].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
+                            const alphabeticalIndex = sortedAlphabetically.findIndex(f => f.id === targetFile.id);
+                            
+                            if (alphabeticalIndex >= 0) {
+                                await dbHelper.updateRdLinkIndex(infoHash, alphabeticalIndex, matchedIndex);
+                                console.log(`[RealDebrid] 💾 Saved rd_link_index=${matchedIndex} for file_index=${alphabeticalIndex}`);
+                            }
+                        } catch (saveErr) {
+                            console.log(`[RealDebrid] ⚠️ Failed to save rd_link_index: ${saveErr.message}`);
                         }
                     }
                     

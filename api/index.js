@@ -9660,9 +9660,13 @@ export default async function handler(req, res) {
 
                     // 🔥 CRITICAL FIX: Use SELECTED files to find the correct link index!
                     // RealDebrid returns links[] array ONLY for selected files (selected=1)
-                    // We need to find which position our targetFile is AMONG SELECTED FILES
+                    // BUT the links are ordered by SIZE DESCENDING (largest first)
+                    // So we need to sort selectedForLink the same way to match link positions
                     let selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
-                    let fileIndex = selectedForLink.findIndex(f => f.id === targetFile.id);
+                    
+                    // 🔥 Sort by size descending to match RealDebrid's link order
+                    const selectedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                    let fileIndex = selectedBySize.findIndex(f => f.id === targetFile.id);
 
                     // 🔥 FIX: For movie packs, if target file is not selected, select it now
                     if (fileIndex === -1 && type === 'movie' && packFileIdx !== null) {
@@ -9674,7 +9678,9 @@ export default async function handler(req, res) {
                         // Re-fetch torrent info
                         torrent = await realdebrid.getTorrentInfo(torrent.id);
                         selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
-                        fileIndex = selectedForLink.findIndex(f => f.id === targetFile.id);
+                        // 🔥 Sort by size descending to match RealDebrid's link order
+                        const newSelectedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                        fileIndex = newSelectedBySize.findIndex(f => f.id === targetFile.id);
 
                         console.log(`[RealDebrid] ✅ File selected, new index: ${fileIndex}`);
                     }
@@ -9685,7 +9691,7 @@ export default async function handler(req, res) {
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
 
-                    console.log(`[RealDebrid] 📍 File ID: ${targetFile.id}, Selected Index: ${fileIndex}/${selectedForLink.length}, Total links: ${(torrent.links || []).length}`);
+                    console.log(`[RealDebrid] 📍 File ID: ${targetFile.id}, Size-sorted Index: ${fileIndex}/${selectedForLink.length}, Total links: ${(torrent.links || []).length}`);
 
                     let downloadLink = torrent.links[fileIndex];
 

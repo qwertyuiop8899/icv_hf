@@ -9577,12 +9577,14 @@ export default async function handler(req, res) {
                                                         console.log(`💾 [DB] Saving ALL ${allVideoFiles.length} files from re-added pack...`);
 
                                                         // ✅ FIX: Calculate correct torrent file index
-                                                        // RealDebrid's file.id does NOT match torrent index!
-                                                        const sortedBySize = [...allVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                                        // For P2P, torrent files are typically ordered ALPHABETICALLY by path
+                                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                                            (a.path || '').localeCompare(b.path || ''));
                                                         const fileIdToTorrentIndex = new Map();
-                                                        sortedBySize.forEach((file, index) => {
+                                                        sortedAlphabetically.forEach((file, index) => {
                                                             fileIdToTorrentIndex.set(file.id, index);
                                                         });
+                                                        console.log(`📊 [DB] File order map (ALPHABETICAL for P2P):`, sortedAlphabetically.map((f, i) => `${i}=${f.path.split('/').pop()}`).join(', '));
 
                                                         for (const file of allVideoFiles) {
                                                             const filename = file.path.split('/').pop();
@@ -9793,17 +9795,17 @@ export default async function handler(req, res) {
                                         console.log(`💾 [DB] Saving ALL ${torrent.files.length} files from pack...`);
 
                                         // ✅ FIX: Calculate correct torrent file index
-                                        // RealDebrid's file.id does NOT match torrent index!
-                                        // Torrent files are typically ordered by size (descending)
+                                        // For P2P, torrent files are ordered ALPHABETICALLY by path
                                         const allVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
-                                        const sortedBySize = [...allVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                            (a.path || '').localeCompare(b.path || ''));
                                         
-                                        // Create a map: file.id -> correct torrent index
+                                        // Create a map: file.id -> correct torrent index (ALPHABETICAL order)
                                         const fileIdToTorrentIndex = new Map();
-                                        sortedBySize.forEach((file, index) => {
+                                        sortedAlphabetically.forEach((file, index) => {
                                             fileIdToTorrentIndex.set(file.id, index);
                                         });
-                                        console.log(`📊 [DB] File order map (by size desc):`, [...fileIdToTorrentIndex.entries()].map(([id, idx]) => `id=${id}->idx=${idx}`).join(', '));
+                                        console.log(`📊 [DB] File order map (ALPHABETICAL for P2P):`, sortedAlphabetically.map((f, i) => `${i}=${f.path.split('/').pop()}`).join(', '));
 
                                         // Iterate through ALL files in the pack
                                         for (const file of torrent.files) {
@@ -9875,14 +9877,16 @@ export default async function handler(req, res) {
                                     console.log(`📦 [DB] Saving pack file mapping for movie ${movieImdbId}...`);
 
                                     // ✅ FIX: Calculate correct torrent file index
-                                    // RealDebrid's file.id does NOT match torrent index!
+                                    // For P2P, torrent files are ordered ALPHABETICALLY by path
                                     const allPackVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
-                                    const sortedBySize = [...allPackVideoFiles].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                                    const sortedAlphabetically = [...allPackVideoFiles].sort((a, b) => 
+                                        (a.path || '').localeCompare(b.path || ''));
                                     const movieFileIdToTorrentIndex = new Map();
-                                    sortedBySize.forEach((file, index) => {
+                                    sortedAlphabetically.forEach((file, index) => {
                                         movieFileIdToTorrentIndex.set(file.id, index);
                                     });
                                     const correctMovieFileIndex = movieFileIdToTorrentIndex.get(targetFile.id) ?? targetFile.id;
+                                    console.log(`📊 [DB] Movie pack file order (ALPHABETICAL):`, sortedAlphabetically.map((f, i) => `${i}=${f.path.split('/').pop()}`).join(', '));
 
                                     // Save this specific file mapping to pack_files table
                                     const packFileData = [{

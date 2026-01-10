@@ -823,6 +823,7 @@ async function searchPacksByImdbId(imdbId) {
         t.last_cached_check,
         pf.file_index,
         pf.file_path,
+        pf.file_path as file_title,
         pf.file_size,
         pf.imdb_id as film_imdb_id
       FROM torrents t
@@ -1039,14 +1040,17 @@ async function getSeriesPackFiles(infoHash) {
  * [Updated] Added for P2P Pack Support
  * @param {string} titleQuery - Title to search for
  * @param {Array<string>} providers - Optional providers
+ * @param {Object} options - Optional filters: { movieImdbId, excludeSeries }
  */
-async function searchFilesByTitle(titleQuery, providers = null) {
+async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   if (!pool) throw new Error('Database not initialized');
+
+  const { movieImdbId = null, excludeSeries = false } = options;
 
   try {
     // Basic sanitation
     const cleanQuery = titleQuery.replace(/[^\w\s]/g, ' ').trim().replace(/\s+/g, ' & ');
-    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}" (FTS: ${cleanQuery})`);
+    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}" (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
 
     let query = `
       SELECT 
@@ -1059,16 +1063,31 @@ async function searchFilesByTitle(titleQuery, providers = null) {
         t.size as torrent_size,
         t.seeders,
         t.imdb_id,
-        t.cached_rd
+        t.cached_rd,
+        t.type as torrent_type,
+        f.imdb_id as file_imdb_id
       FROM files f
       JOIN torrents t ON f.info_hash = t.info_hash
       WHERE to_tsvector('english', f.title) @@ to_tsquery('english', $1)
     `;
 
     const params = [cleanQuery];
+    let paramIndex = 2;
+
+    // 🎬 FILTER 1: Exclude series torrents when searching for movies
+    if (excludeSeries) {
+      query += ` AND (t.type IS NULL OR t.type != 'series')`;
+    }
+
+    // 🎬 FILTER 2: Only include files with matching IMDb or NULL (unknown)
+    if (movieImdbId) {
+      query += ` AND (f.imdb_id IS NULL OR f.imdb_id = $${paramIndex})`;
+      params.push(movieImdbId);
+      paramIndex++;
+    }
 
     if (providers && Array.isArray(providers) && providers.length > 0) {
-      const patterns = providers.map((p, i) => `t.provider ILIKE $${2 + i}`).join(' OR ');
+      const patterns = providers.map((p, i) => `t.provider ILIKE $${paramIndex + i}`).join(' OR ');
       query += ` AND (${patterns})`;
       params.push(...providers.map(p => `%${p}%`));
     }
@@ -1094,15 +1113,30 @@ async function searchFilesByTitle(titleQuery, providers = null) {
             t.size as torrent_size,
             t.seeders,
             t.imdb_id,
-            t.cached_rd
+            t.cached_rd,
+            t.type as torrent_type,
+            f.imdb_id as file_imdb_id
           FROM files f
           JOIN torrents t ON f.info_hash = t.info_hash
           WHERE f.title ILIKE $1
         `;
       const params = [`%${titleQuery}%`];
+      let paramIndex = 2;
+
+      // 🎬 FILTER 1: Exclude series torrents when searching for movies
+      if (excludeSeries) {
+        query += ` AND (t.type IS NULL OR t.type != 'series')`;
+      }
+
+      // 🎬 FILTER 2: Only include files with matching IMDb or NULL
+      if (movieImdbId) {
+        query += ` AND (f.imdb_id IS NULL OR f.imdb_id = $${paramIndex})`;
+        params.push(movieImdbId);
+        paramIndex++;
+      }
 
       if (providers && Array.isArray(providers) && providers.length > 0) {
-        const patterns = providers.map((p, i) => `t.provider ILIKE $${2 + i}`).join(' OR ');
+        const patterns = providers.map((p, i) => `t.provider ILIKE $${paramIndex + i}`).join(' OR ');
         query += ` AND (${patterns})`;
         params.push(...providers.map(p => `%${p}%`));
       }

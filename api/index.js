@@ -9765,17 +9765,55 @@ export default async function handler(req, res) {
                     
                     console.log(`[RealDebrid] 🔍 Target: ${targetFilename} (${torrent.links.length} links)`);
 
-                    // 🔥 FIX: For movie packs, if target file is not selected, select it now
+                    // 🔥 FIX: For movie packs, if target file is not selected, SELECT ALL VIDEO FILES
+                    // This ensures we have links for all files in the pack, not just the first one accessed
                     if (!selectedForLink.some(f => f.id === targetFile.id) && type === 'movie' && packFileIdx !== null) {
-                        console.log(`[RealDebrid] ⚠️ Pack movie file not selected, selecting now...`);
+                        console.log(`[RealDebrid] ⚠️ Pack movie file not selected, selecting ALL video files...`);
 
-                        // Select the target file
-                        await realdebrid.selectFiles(torrent.id, targetFile.id);
+                        // Get ALL video files from the pack
+                        const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg'];
+                        const allVideoFiles = (torrent.files || []).filter(file => {
+                            const lowerPath = file.path.toLowerCase();
+                            return videoExtensions.some(ext => lowerPath.endsWith(ext)) && file.bytes > 25 * 1024 * 1024;
+                        });
+
+                        // Select ALL video files at once
+                        const allVideoIds = allVideoFiles.map(f => f.id).join(',');
+                        console.log(`[RealDebrid] 📦 Selecting ALL ${allVideoFiles.length} video files`);
+                        await realdebrid.selectFiles(torrent.id, allVideoIds);
+
+                        // Wait a moment for RD to process
+                        await new Promise(resolve => setTimeout(resolve, 1000));
 
                         // Re-fetch torrent info
                         torrent = await realdebrid.getTorrentInfo(torrent.id);
                         selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
-                        console.log(`[RealDebrid] ✅ File selected, now ${torrent.links.length} links available`);
+                        console.log(`[RealDebrid] ✅ All files selected, now ${torrent.links.length} links available`);
+
+                        // 🔥 BULK SAVE ALL PACK FILES TO DB for future lookups!
+                        if (dbEnabled && allVideoFiles.length > 0) {
+                            try {
+                                console.log(`📦 [DB] Bulk saving ALL ${allVideoFiles.length} pack files for future lookups...`);
+                                
+                                // Sort alphabetically for consistent indexing
+                                const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                    (a.path || '').localeCompare(b.path || ''));
+                                
+                                // Create pack file entries for ALL files (imdb_id = NULL for now)
+                                const packFilesData = sortedAlphabetically.map((file, index) => ({
+                                    pack_hash: infoHash.toLowerCase(),
+                                    imdb_id: null, // Will be filled in by searchPacksByTitle when accessed
+                                    file_index: file.id, // Use RD file.id for playback
+                                    file_path: file.path,
+                                    file_size: file.bytes || 0
+                                }));
+                                
+                                await dbHelper.insertPackFiles(packFilesData);
+                                console.log(`✅ [DB] Bulk saved ${packFilesData.length} pack files to DB`);
+                            } catch (bulkErr) {
+                                console.warn(`⚠️ [DB] Bulk save error (non-critical): ${bulkErr.message}`);
+                            }
+                        }
                     }
 
                     let unrestricted = null;
@@ -9845,11 +9883,18 @@ export default async function handler(req, res) {
                         }
                         
                         // 🔄 STEP 2: Fallback - loop through all links if prediction failed
+                        // RD allows 250 requests/min (~4/sec) so we can be fast
+                        // Track which indices we've already processed for background job
+                        const processedIndices = new Set();
                         if (!unrestricted) {
                             const predictedIdx = sortedBySize.findIndex(f => f.id === targetFile.id);
+                            if (predictedIdx >= 0) processedIndices.add(predictedIdx);
+                            
                             console.log(`[RealDebrid] 🔄 Fallback: scanning all ${torrent.links.length} links...`);
                             for (let i = 0; i < torrent.links.length; i++) {
-                                if (i === predictedIdx) continue; // Already tried this one
+                                if (processedIndices.has(i)) continue; // Already tried this one
+                                processedIndices.add(i);
+                                
                                 try {
                                     const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[i]);
                                     if (testUnrestricted && testUnrestricted.filename) {
@@ -9860,12 +9905,67 @@ export default async function handler(req, res) {
                                             console.log(`[RealDebrid] ✅ FALLBACK MATCH at index ${i}!`);
                                             unrestricted = testUnrestricted;
                                             matchedIndex = i;
-                                            break;
+                                            break; // Found it! Exit loop, will continue in background
                                         }
                                     }
                                 } catch (linkErr) {
                                     console.log(`[RealDebrid] ⚠️ Link[${i}] error: ${linkErr.message}`);
+                                    // If rate limited (error_code 34), wait and retry
+                                    if (linkErr.message?.includes('429') || linkErr.message?.includes('Too many requests')) {
+                                        console.log(`[RealDebrid] 🚦 Rate limited, waiting 2 seconds...`);
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                        i--; // Retry this index
+                                    }
                                 }
+                            }
+                        }
+
+                        // 🔥 BACKGROUND JOB: Continue mapping remaining links after response
+                        // This runs async AFTER we send the redirect to the user
+                        if (dbEnabled && type === 'movie' && packFileIdx !== null && torrent.links.length > 1) {
+                            const remainingIndices = [];
+                            for (let i = 0; i < torrent.links.length; i++) {
+                                if (!processedIndices.has(i)) remainingIndices.push(i);
+                            }
+                            
+                            if (remainingIndices.length > 0) {
+                                console.log(`[RealDebrid] 🔄 Background job: will map ${remainingIndices.length} remaining links after response`);
+                                
+                                // Fire and forget - don't await!
+                                (async () => {
+                                    try {
+                                        console.log(`[RealDebrid] 🔄 Background: Starting to map ${remainingIndices.length} links...`);
+                                        
+                                        for (const idx of remainingIndices) {
+                                            try {
+                                                // Rate limit: wait 250ms between calls (4 req/sec safe)
+                                                await new Promise(resolve => setTimeout(resolve, 250));
+                                                
+                                                const bgUnrestricted = await realdebrid.unrestrictLink(torrent.links[idx]);
+                                                if (bgUnrestricted && bgUnrestricted.filename) {
+                                                    const bgFilename = bgUnrestricted.filename;
+                                                    console.log(`[RealDebrid] 📦 Background mapped: link[${idx}] = ${bgFilename}`);
+                                                    
+                                                    // Save to DB: find the file.id that matches this filename
+                                                    const matchingFile = allVideoFilesForPack.find(f => 
+                                                        f.path.split('/').pop().toLowerCase() === bgFilename.toLowerCase()
+                                                    );
+                                                    if (matchingFile && dbHelper.updateRdLinkIndexForPack) {
+                                                        await dbHelper.updateRdLinkIndexForPack(infoHash, matchingFile.id, idx, bgFilename);
+                                                    }
+                                                }
+                                            } catch (bgErr) {
+                                                if (bgErr.message?.includes('429')) {
+                                                    console.log(`[RealDebrid] 🚦 Background rate limited, waiting 3s...`);
+                                                    await new Promise(resolve => setTimeout(resolve, 3000));
+                                                }
+                                            }
+                                        }
+                                        console.log(`[RealDebrid] ✅ Background job completed: mapped ${remainingIndices.length} links`);
+                                    } catch (bgJobErr) {
+                                        console.error(`[RealDebrid] ❌ Background job error: ${bgJobErr.message}`);
+                                    }
+                                })();
                             }
                         }
                     }

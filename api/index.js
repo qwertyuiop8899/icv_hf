@@ -5470,6 +5470,19 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
                 const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
+                
+                // 🔧 FIX: For multi-film packs (all_imdb_ids has multiple entries), REMOVE file_index
+                // The file_index in torrents table is from a DIFFERENT movie in the pack
+                // These packs need dynamic resolution via resolveMoviePackFile
+                for (const result of regularResults) {
+                    if (result.all_imdb_ids && Array.isArray(result.all_imdb_ids) && result.all_imdb_ids.length > 1) {
+                        if (result.file_index !== null && result.file_index !== undefined) {
+                            console.log(`🔧 [PACK FIX] Removing stale file_index=${result.file_index} from multi-film pack ${result.info_hash?.substring(0,8)}`);
+                            result.file_index = null;
+                            result.file_title = null;
+                        }
+                    }
+                }
 
                 // Merge: packs first (with file_index), then regular
                 dbResults = [...(packResults || []), ...regularResults];

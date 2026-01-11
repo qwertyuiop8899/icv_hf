@@ -6381,10 +6381,15 @@ async function handleStream(type, id, config, workerOrigin) {
                             excluded.push(dbResult);
                         }
                     } catch (err) {
-                        console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - EXCLUDING pack to be safe`);
-                        // 🔥 STRICT MODE: If we can't verify it, we can't assume it has the episode.
-                        // User requested: "if you can't see the file inside then don't put the placeholder"
-                        excluded.push(dbResult);
+                        // ✅ FIX: If rate limited (429), keep the pack instead of excluding
+                        if (err.message?.includes('RATE_LIMITED') || err.message?.includes('429')) {
+                            console.warn(`⚠️ [PACK VERIFY] Rate limited, KEEPING pack for later: ${err.message}`);
+                            newlyVerified.push(dbResult); // Keep it, resolve at playback time
+                        } else {
+                            console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - EXCLUDING pack to be safe`);
+                            // 🔥 STRICT MODE: If we can't verify it, we can't assume it has the episode.
+                            excluded.push(dbResult);
+                        }
                     }
                 }
 
@@ -7697,6 +7702,11 @@ async function handleStream(type, id, config, workerOrigin) {
                     } else if (type === 'movie' && result.fileIndex !== undefined && result.fileIndex !== null) {
                         // Movie pack: add fileIdx to URL
                         streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/pack/${result.fileIndex}`;
+                    } else if (type === 'movie' && result.packSize && result.packSize > 5 * 1024 * 1024 * 1024) {
+                        // ✅ Movie pack WITHOUT verified fileIndex - pass title+year for runtime resolution
+                        const movieTitle = encodeURIComponent(mediaDetails.title || '');
+                        const movieYear = mediaDetails.year || '';
+                        streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/movie/${movieTitle}/${movieYear}`;
                     } else {
                         streamUrl = `${workerOrigin}/rd-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
                     }
@@ -7932,6 +7942,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         // Movie pack: add fileIdx to URL (same as RD)
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/pack/${result.fileIndex}`;
                         console.log(`📦 [Torbox] Stream URL with pack file index ${result.fileIndex}: ${result.title}`);
+                    } else if (type === 'movie' && result.packSize && result.packSize > 5 * 1024 * 1024 * 1024) {
+                        // ✅ Movie pack WITHOUT verified fileIndex - pass title+year for runtime resolution
+                        const movieTitle = encodeURIComponent(mediaDetails.title || '');
+                        const movieYear = mediaDetails.year || '';
+                        streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/movie/${movieTitle}/${movieYear}`;
+                        console.log(`📦 [Torbox] Stream URL with movie title match: ${result.title}`);
                     } else {
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
                     }
@@ -9159,29 +9175,45 @@ export default async function handler(req, res) {
             const pathParts = url.pathname.split('/');
             const encodedConfigStr = pathParts[2];
             const encodedMagnet = pathParts[3];
-            const seasonOrPackFlag = pathParts[4] ? pathParts[4] : null; // 'pack' or season number
-            const episodeOrFileIdx = pathParts[5] ? parseInt(pathParts[5]) : null; // episode number or fileIdx for pack
+            const seasonOrPackFlag = pathParts[4] ? pathParts[4] : null; // 'pack', 'movie', or season number
+            const episodeOrFileIdxOrTitle = pathParts[5] ? pathParts[5] : null; // episode number, fileIdx, or movie title
+            const yearIfMovie = pathParts[6] ? pathParts[6] : null; // year for movie pack resolution
 
             // Determine type and extract parameters
-            let type, season, episode, packFileIdx;
+            let type, season, episode, packFileIdx, movieTitleForMatch, movieYearForMatch;
             if (seasonOrPackFlag === 'pack') {
-                // Movie pack: /rd-stream/config/magnet/pack/0
+                // Movie pack with known fileIdx: /rd-stream/config/magnet/pack/0
                 type = 'movie';
-                packFileIdx = episodeOrFileIdx;
+                packFileIdx = parseInt(episodeOrFileIdxOrTitle);
                 season = null;
                 episode = null;
-            } else if (seasonOrPackFlag !== null && episodeOrFileIdx !== null) {
+                movieTitleForMatch = null;
+                movieYearForMatch = null;
+            } else if (seasonOrPackFlag === 'movie') {
+                // ✅ Movie pack WITHOUT fileIdx - resolve by title+year: /rd-stream/config/magnet/movie/Dumbo/1941
+                type = 'movie';
+                packFileIdx = null;
+                season = null;
+                episode = null;
+                movieTitleForMatch = episodeOrFileIdxOrTitle ? decodeURIComponent(episodeOrFileIdxOrTitle) : null;
+                movieYearForMatch = yearIfMovie || null;
+                console.log(`🎬 [RD-Stream] Movie pack resolution by title: "${movieTitleForMatch}" (${movieYearForMatch})`);
+            } else if (seasonOrPackFlag !== null && episodeOrFileIdxOrTitle !== null && !isNaN(parseInt(seasonOrPackFlag))) {
                 // Series: /rd-stream/config/magnet/1/5
                 type = 'series';
                 season = parseInt(seasonOrPackFlag);
-                episode = episodeOrFileIdx;
+                episode = parseInt(episodeOrFileIdxOrTitle);
                 packFileIdx = null;
+                movieTitleForMatch = null;
+                movieYearForMatch = null;
             } else {
                 // Single movie: /rd-stream/config/magnet
                 type = 'movie';
                 season = null;
                 episode = null;
                 packFileIdx = null;
+                movieTitleForMatch = null;
+                movieYearForMatch = null;
             }
 
             const workerOrigin = url.origin;
@@ -9286,14 +9318,14 @@ export default async function handler(req, res) {
                         })
                         .sort((a, b) => b.bytes - a.bytes);
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in SIZE DESCENDING list)
+                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in ALPHABETICAL list)
                     if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
-                        // 🔥 FIX: Sort files BY SIZE DESCENDING to match torrent file order
-                        // This matches how we save indices in pack-files-handler.cjs and api/index.js
-                        const sortedVideoFiles = [...videoFilesForPack].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                        // 🔥 FIX: Sort files ALPHABETICALLY to match torrent file order for P2P
+                        // This matches how we save indices in pack-files-handler.cjs
+                        const sortedVideoFiles = [...videoFilesForPack].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
 
                         console.log(`[RealDebrid] 🎬 Pack movie - looking for file at sorted index ${packFileIdx}`);
-                        console.log(`[RealDebrid] 📂 Sorted files (by size descending):`);
+                        console.log(`[RealDebrid] 📂 Sorted files (ALPHABETICAL for P2P/RD consistency):`);
                         sortedVideoFiles.forEach((f, i) => {
                             const marker = i === packFileIdx ? '👉' : '  ';
                             console.log(`${marker} [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB, id=${f.id})`);
@@ -9304,6 +9336,53 @@ export default async function handler(req, res) {
                             console.log(`[RealDebrid] ✅ Found pack file at index ${packFileIdx}: ${targetFile.path} (id=${targetFile.id})`);
                         } else {
                             console.log(`[RealDebrid] ❌ Pack file index ${packFileIdx} out of range! Max: ${sortedVideoFiles.length - 1}`);
+                        }
+                    }
+
+                    // ✅ PRIORITY 1.5: For movie packs WITHOUT fileIdx, use title+year fuzzy matching
+                    if (!targetFile && type === 'movie' && movieTitleForMatch) {
+                        console.log(`[RealDebrid] 🎬 Movie pack - fuzzy matching for "${movieTitleForMatch}" (${movieYearForMatch || 'no year'})`);
+                        
+                        const cleanTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+                        const targetWords = cleanTitle(movieTitleForMatch);
+                        
+                        let bestMatch = null;
+                        let maxScore = 0;
+                        
+                        for (const file of videoFilesForPack) {
+                            const filename = file.path.split('/').pop().toLowerCase();
+                            let score = 0;
+                            
+                            // Year check (+50 points)
+                            if (movieYearForMatch && filename.includes(movieYearForMatch)) {
+                                score += 50;
+                            }
+                            
+                            // Title word match (+50 points proportional)
+                            let matchedWords = 0;
+                            for (const word of targetWords) {
+                                if (filename.includes(word)) matchedWords++;
+                            }
+                            if (targetWords.length > 0) {
+                                score += (matchedWords / targetWords.length) * 50;
+                            }
+                            
+                            // Negative keywords
+                            if (filename.includes('trailer') || filename.includes('sample')) score -= 50;
+                            
+                            console.log(`[RealDebrid] 🔍 "${filename}" -> Score: ${score.toFixed(0)}`);
+                            
+                            if (score > maxScore && score >= 40) { // Lower threshold for runtime matching
+                                maxScore = score;
+                                bestMatch = file;
+                            }
+                        }
+                        
+                        if (bestMatch) {
+                            targetFile = bestMatch;
+                            console.log(`[RealDebrid] ✅ Fuzzy matched: ${bestMatch.path} (score: ${maxScore.toFixed(0)})`);
+                        } else {
+                            console.log(`[RealDebrid] ❌ No fuzzy match found for "${movieTitleForMatch}"`);
                         }
                     }
 
@@ -9458,14 +9537,14 @@ export default async function handler(req, res) {
 
                     let targetFile = null;
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in SIZE DESCENDING list)
+                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in ALPHABETICAL list)
                     if (type === 'movie' && packFileIdx !== null && packFileIdx !== undefined) {
-                        // 🔥 FIX: Sort files BY SIZE DESCENDING to match torrent file order
-                        // This matches how we save indices in pack-files-handler.cjs and api/index.js
-                        const sortedAllVideoFiles = [...allVideoFilesForPack].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+                        // 🔥 FIX: Sort files ALPHABETICALLY to match torrent file order for P2P
+                        // This matches how we save indices in pack-files-handler.cjs
+                        const sortedAllVideoFiles = [...allVideoFilesForPack].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
 
                         console.log(`[RealDebrid] 🎬 Pack movie (ready) - looking for file at sorted index ${packFileIdx}`);
-                        console.log(`[RealDebrid] 📂 Sorted files (by size descending):`);;
+                        console.log(`[RealDebrid] 📂 Sorted files (ALPHABETICAL for P2P/RD consistency):`);
                         sortedAllVideoFiles.forEach((f, i) => {
                             const marker = i === packFileIdx ? '👉' : '  ';
                             console.log(`${marker} [${i}] ${f.path.split('/').pop()} (${(f.bytes / 1024 / 1024).toFixed(0)}MB, id=${f.id})`);
@@ -10635,23 +10714,31 @@ export default async function handler(req, res) {
             const pathParts = url.pathname.split('/');
             const encodedConfigStr = pathParts[2];
             const encodedMagnet = pathParts[3];
-            const seasonOrPackFlag = pathParts[4]; // 'pack' or season number
-            const episodeOrFileIdx = pathParts[5] ? parseInt(pathParts[5]) : null; // episode number or fileIdx for pack
+            const seasonOrPackFlag = pathParts[4]; // 'pack', 'movie', or season number
+            const episodeOrFileIdxOrTitle = pathParts[5] ? pathParts[5] : null; // episode number, fileIdx, or movie title
+            const yearIfMovie = pathParts[6] ? pathParts[6] : null; // year for movie pack resolution
             const workerOrigin = url.origin; // For placeholder video URLs
 
             // Determine type and extract parameters (same logic as RD)
             let packFileIdx = null;
             let seasonParam = null;
             let episodeParam = null;
+            let movieTitleForMatch = null;
+            let movieYearForMatch = null;
 
             if (seasonOrPackFlag === 'pack') {
                 // Movie pack: /torbox-stream/config/magnet/pack/0
-                packFileIdx = episodeOrFileIdx;
+                packFileIdx = parseInt(episodeOrFileIdxOrTitle);
                 console.log(`[Torbox] 🎬 Movie pack mode - fileIdx=${packFileIdx}`);
-            } else if (seasonOrPackFlag !== null && seasonOrPackFlag !== undefined && episodeOrFileIdx !== null) {
+            } else if (seasonOrPackFlag === 'movie') {
+                // ✅ Movie pack WITHOUT fileIdx - resolve by title+year
+                movieTitleForMatch = episodeOrFileIdxOrTitle ? decodeURIComponent(episodeOrFileIdxOrTitle) : null;
+                movieYearForMatch = yearIfMovie || null;
+                console.log(`[Torbox] 🎬 Movie pack resolution by title: "${movieTitleForMatch}" (${movieYearForMatch})`);
+            } else if (seasonOrPackFlag !== null && seasonOrPackFlag !== undefined && episodeOrFileIdxOrTitle !== null && !isNaN(parseInt(seasonOrPackFlag))) {
                 // Series: /torbox-stream/config/magnet/1/5
                 seasonParam = seasonOrPackFlag;
-                episodeParam = String(episodeOrFileIdx);
+                episodeParam = String(episodeOrFileIdxOrTitle);
             }
 
             const htmlResponse = (title, message, isError = false) => `
@@ -10769,6 +10856,52 @@ export default async function handler(req, res) {
                             console.log(`[Torbox] ✅ Found pack file at index ${packFileIdx}: ${targetVideo.short_name || targetVideo.name} (id=${targetVideo.id})`);
                         } else {
                             console.log(`[Torbox] ❌ Pack file index ${packFileIdx} out of range! Max: ${sortedVideos.length - 1}`);
+                        }
+                    }
+                    // ✅ PRIORITY 1.5: For movie packs WITHOUT fileIdx, use title+year fuzzy matching
+                    else if (movieTitleForMatch) {
+                        console.log(`[Torbox] 🎬 Movie pack - fuzzy matching for "${movieTitleForMatch}" (${movieYearForMatch || 'no year'})`);
+                        
+                        const cleanTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+                        const targetWords = cleanTitle(movieTitleForMatch);
+                        
+                        let bestMatch = null;
+                        let maxScore = 0;
+                        
+                        for (const file of videosForPack) {
+                            const filename = (file.short_name || file.name || '').toLowerCase();
+                            let score = 0;
+                            
+                            // Year check (+50 points)
+                            if (movieYearForMatch && filename.includes(movieYearForMatch)) {
+                                score += 50;
+                            }
+                            
+                            // Title word match (+50 points proportional)
+                            let matchedWords = 0;
+                            for (const word of targetWords) {
+                                if (filename.includes(word)) matchedWords++;
+                            }
+                            if (targetWords.length > 0) {
+                                score += (matchedWords / targetWords.length) * 50;
+                            }
+                            
+                            // Negative keywords
+                            if (filename.includes('trailer') || filename.includes('sample')) score -= 50;
+                            
+                            console.log(`[Torbox] 🔍 "${filename}" -> Score: ${score.toFixed(0)}`);
+                            
+                            if (score > maxScore && score >= 40) {
+                                maxScore = score;
+                                bestMatch = file;
+                            }
+                        }
+                        
+                        if (bestMatch) {
+                            targetVideo = bestMatch;
+                            console.log(`[Torbox] ✅ Fuzzy matched: ${bestMatch.short_name || bestMatch.name} (score: ${maxScore.toFixed(0)})`);
+                        } else {
+                            console.log(`[Torbox] ❌ No fuzzy match found for "${movieTitleForMatch}"`);
                         }
                     }
                     // ✅ PRIORITY 2: If season/episode is provided, use pattern matching to find correct file

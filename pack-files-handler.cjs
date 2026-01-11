@@ -122,13 +122,13 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
             throw new Error('No files in torrent info');
         }
 
-        // ✅ FIX: Use ORIGINAL RD file ID (0-based index in torrent)
-        // RD 'id' IS the correct torrent file index - DO NOT reorder!
-        // RD returns files with their original torrent indices.
+        // ✅ FIX: Use ORIGINAL RD file ID directly
+        // RD API returns 1-based IDs, we keep them as-is to match what we search for later
+        // The rd-stream handler also receives the same ID from the URL
         const rawFiles = infoResponse.data.files;
 
         const files = rawFiles.map((f) => ({
-            id: f.id - 1, // RD uses 1-based, torrent clients use 0-based
+            id: f.id, // Keep original RD ID (1-based)
             path: f.path,
             bytes: f.bytes,
             selected: f.selected

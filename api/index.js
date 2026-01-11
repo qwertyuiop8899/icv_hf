@@ -9505,7 +9505,7 @@ export default async function handler(req, res) {
                     const selectedFiles = (torrent.files || []).filter(file => file.selected === 1);
 
                     // 🔥 For movie packs: use SAME filter as pack-files-handler.cjs (video + >25MB)
-                    const allVideoFilesForPack = (torrent.files || []).filter(file => {
+                    let allVideoFilesForPack = (torrent.files || []).filter(file => {
                         const lowerPath = file.path.toLowerCase();
                         return videoExtensions.some(ext => lowerPath.endsWith(ext)) && file.bytes > 25 * 1024 * 1024;
                     });
@@ -9528,17 +9528,22 @@ export default async function handler(req, res) {
                         })
                         .sort((a, b) => b.bytes - a.bytes);
 
-                    // 🔥 CRITICAL FIX: If series pack has incomplete file selection, add missing files
-                    if (type === 'series' && videos.length < allVideoFiles.length && allVideoFiles.length > 1) {
-                        console.log(`⚠️ [RD] Incomplete file selection: ${videos.length}/${allVideoFiles.length} videos selected`);
-                        console.log(`🔄 [RD] Adding ${allVideoFiles.length - videos.length} missing video files...`);
+                    // 🔥 CRITICAL FIX: If pack has incomplete file selection, add missing files
+                    // This handles BOTH series packs AND movie packs (like Disney collection)
+                    const isPackWithMissingFiles = (type === 'series' && videos.length < allVideoFiles.length && allVideoFiles.length > 1) ||
+                        (type === 'movie' && packFileIdx !== null && videos.length < allVideoFilesForPack.length && allVideoFilesForPack.length > 1);
+                    
+                    if (isPackWithMissingFiles) {
+                        const targetVideoList = type === 'movie' ? allVideoFilesForPack : allVideoFiles;
+                        console.log(`⚠️ [RD] Incomplete file selection: ${videos.length}/${targetVideoList.length} videos selected`);
+                        console.log(`🔄 [RD] Adding ${targetVideoList.length - videos.length} missing video files...`);
 
-                        const allVideoIds = allVideoFiles.map(f => f.id).join(',');
+                        const allVideoIds = targetVideoList.map(f => f.id).join(',');
                         await realdebrid.selectFiles(torrent.id, allVideoIds);
 
                         // Re-fetch torrent info with updated selection
                         torrent = await realdebrid.getTorrentInfo(torrent.id);
-                        console.log(`✅ [RD] Updated file selection: ${allVideoFiles.length} videos now selected`);
+                        console.log(`✅ [RD] Updated file selection: ${targetVideoList.length} videos now selected`);
 
                         // Refresh videos list
                         const updatedSelectedFiles = (torrent.files || []).filter(file => file.selected === 1);
@@ -9553,6 +9558,12 @@ export default async function handler(req, res) {
                                 return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
                             })
                             .sort((a, b) => b.bytes - a.bytes));
+                            
+                        // Also refresh allVideoFilesForPack for movie pack lookup
+                        allVideoFilesForPack = (torrent.files || []).filter(file => {
+                            const lowerPath = file.path.toLowerCase();
+                            return videoExtensions.some(ext => lowerPath.endsWith(ext)) && file.bytes > 25 * 1024 * 1024;
+                        });
                     }
 
                     let targetFile = null;

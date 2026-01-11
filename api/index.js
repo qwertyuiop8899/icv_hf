@@ -5406,11 +5406,13 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 🔧 FIX: Sanity check pack results from DB - verify file_title matches requested movie
                 // This catches corrupted cache entries (e.g., Dumbo IMDb mapped to Basil file)
+                // Also handles cases like "Frozen" vs "Frozen II" by checking year
                 if (packResults.length > 0 && mediaDetails.title) {
                     const normalizeForMatch = (str) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim() : '';
                     const requestedTitle = normalizeForMatch(mediaDetails.title);
                     const requestedOriginal = mediaDetails.originalName ? normalizeForMatch(mediaDetails.originalName) : '';
                     const requestedWords = [...new Set([...requestedTitle.split(' '), ...requestedOriginal.split(' ')].filter(w => w.length > 2))];
+                    const requestedYear = mediaDetails.year ? String(mediaDetails.year) : null;
                     
                     const validPackResults = [];
                     const corruptedHashes = [];
@@ -5423,8 +5425,22 @@ async function handleStream(type, id, config, workerOrigin) {
                         const minMatches = requestedWords.length <= 2 ? 1 : 2;
                         const matchCount = requestedWords.filter(w => fileWords.some(fw => fw.includes(w) || w.includes(fw))).length;
                         
-                        if (matchCount >= minMatches) {
+                        // 🔧 YEAR CHECK: If file has a year in name, it MUST match requested year
+                        // This prevents "Frozen II (2019)" matching when we want "Frozen (2013)"
+                        const fileYearMatch = (pack.file_title || pack.file_path || '').match(/\((\d{4})\)/);
+                        const fileYear = fileYearMatch ? fileYearMatch[1] : null;
+                        
+                        let yearOk = true;
+                        if (requestedYear && fileYear && fileYear !== requestedYear) {
+                            // File has a year but it doesn't match - REJECT
+                            yearOk = false;
+                            console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" has year ${fileYear} but we want ${requestedYear} - EXCLUDING`);
+                        }
+                        
+                        if (matchCount >= minMatches && yearOk) {
                             validPackResults.push(pack);
+                        } else if (!yearOk) {
+                            // Don't delete cache for year mismatch - it's valid for other movies
                         } else {
                             console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" does NOT match "${mediaDetails.title}" - EXCLUDING`);
                             if (pack.info_hash) {

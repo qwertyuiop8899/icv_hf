@@ -9806,6 +9806,56 @@ export default async function handler(req, res) {
                         selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
                         console.log(`[RealDebrid] ✅ All files selected, now ${torrent.links.length} links available`);
 
+                        // 🔥 CRITICAL FIX: If links are still less than expected (action_already_done case),
+                        // we need to DELETE and RE-ADD the torrent with ALL files selected
+                        if (torrent.links.length < allVideoFiles.length * 0.5) { // Less than 50% of expected links
+                            console.log(`🔄 [RD] Only ${torrent.links.length}/${allVideoFiles.length} links - torrent has locked selection!`);
+                            console.log(`🗑️ [RD] Deleting old torrent and re-adding with ALL files...`);
+                            
+                            try {
+                                // Delete the existing torrent
+                                await realdebrid.deleteTorrent(torrent.id);
+                                console.log(`✅ [RD] Deleted old torrent: ${torrent.id}`);
+                                
+                                // Re-add the magnet
+                                const newTorrent = await realdebrid.addMagnet(magnetUri);
+                                console.log(`✅ [RD] Re-added torrent: ${newTorrent.id}`);
+                                
+                                // Wait for magnet to convert
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                
+                                // Get new torrent info
+                                let newTorrentInfo = await realdebrid.getTorrentInfo(newTorrent.id);
+                                
+                                // Wait for magnet conversion if needed
+                                let waitCount = 0;
+                                while (newTorrentInfo.status === 'magnet_conversion' && waitCount < 10) {
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                    newTorrentInfo = await realdebrid.getTorrentInfo(newTorrent.id);
+                                    waitCount++;
+                                }
+                                
+                                if (newTorrentInfo.status === 'waiting_files_selection') {
+                                    // Select ALL video files
+                                    const newAllVideoIds = allVideoFiles.map(f => f.id).join(',');
+                                    console.log(`📦 [RD] Selecting ALL ${allVideoFiles.length} files on new torrent`);
+                                    await realdebrid.selectFiles(newTorrent.id, newAllVideoIds);
+                                    
+                                    // Wait for download to start
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    
+                                    // Redirect to same URL to restart with new torrent
+                                    console.log(`🔄 [RD] Reloading stream with new torrent...`);
+                                    return res.redirect(302, req.url);
+                                } else {
+                                    console.log(`⚠️ [RD] New torrent status: ${newTorrentInfo.status}, redirecting...`);
+                                    return res.redirect(302, req.url);
+                                }
+                            } catch (readdErr) {
+                                console.error(`❌ [RD] Failed to re-add torrent: ${readdErr.message}`);
+                            }
+                        }
+
                         // 🔥 BULK SAVE ALL PACK FILES TO DB for future lookups!
                         if (dbEnabled && allVideoFiles.length > 0) {
                             try {

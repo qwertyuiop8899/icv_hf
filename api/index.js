@@ -9473,10 +9473,15 @@ export default async function handler(req, res) {
                     }
 
                     if (targetFile) {
-                        // ✅ For series: Select ALL video files (not just target) so all episodes are available
-                        if (type === 'series' && videoFiles.length > 1) {
-                            const allVideoIds = videoFiles.map(f => f.id).join(',');
-                            console.log(`[RealDebrid] 📦 Selecting all ${videoFiles.length} video files for series pack`);
+                        // ✅ For series AND movie packs: Select ALL video files so all can be streamed
+                        const isMoviePack = type === 'movie' && packFileIdx !== null && videoFilesForPack.length > 1;
+                        
+                        if ((type === 'series' && videoFiles.length > 1) || isMoviePack) {
+                            // For movie packs, use videoFilesForPack (same filter as pack-files-handler)
+                            // For series, use videoFiles (with junk keywords filtered)
+                            const filesToSelect = isMoviePack ? videoFilesForPack : videoFiles;
+                            const allVideoIds = filesToSelect.map(f => f.id).join(',');
+                            console.log(`[RealDebrid] 📦 Selecting all ${filesToSelect.length} video files for ${isMoviePack ? 'movie pack' : 'series pack'}`);
                             await realdebrid.selectFiles(torrent.id, allVideoIds);
                         } else {
                             // For movies or single-file torrents, select only the target

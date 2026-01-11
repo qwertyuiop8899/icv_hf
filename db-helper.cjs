@@ -60,6 +60,26 @@ async function runMigrations() {
       console.error('⚠️ Migration warning:', error.message);
     }
   }
+  
+  // 🔧 FIX: Create unique index on (pack_hash, file_index) for proper bulk insert
+  try {
+    // First drop the old constraint if it exists (on pack_hash, imdb_id)
+    await pool.query(`
+      ALTER TABLE pack_files DROP CONSTRAINT IF EXISTS pack_files_pack_hash_imdb_id_key
+    `);
+    
+    // Create new unique index on (pack_hash, file_index)
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS pack_files_hash_fileindex_idx 
+      ON pack_files (pack_hash, file_index)
+    `);
+    console.log('✅ DB Migration: pack_files unique index on (pack_hash, file_index) ensured');
+  } catch (error) {
+    // Ignore errors - constraint might not exist or index might already exist
+    if (!error.message.includes('already exists')) {
+      console.error('⚠️ Migration warning (pack_files index):', error.message);
+    }
+  }
 }
 
 /**
@@ -1084,7 +1104,8 @@ async function insertPackFiles(packFiles) {
     const query = `
       INSERT INTO pack_files (pack_hash, imdb_id, file_index, file_path, file_size)
       VALUES ${values.join(', ')}
-      ON CONFLICT (pack_hash, imdb_id) DO UPDATE SET
+      ON CONFLICT (pack_hash, file_index) DO UPDATE SET
+        imdb_id = COALESCE(EXCLUDED.imdb_id, pack_files.imdb_id),
         file_path = EXCLUDED.file_path,
         file_size = EXCLUDED.file_size
     `;

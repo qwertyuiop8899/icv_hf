@@ -530,6 +530,12 @@ function extractQuality(title) {
 // ✅ Improved Info Hash Extraction
 function extractInfoHash(magnet) {
     if (!magnet) return null;
+    
+    // 🔥 Also accept raw 40-char hex hash (not just magnet links)
+    if (/^[A-Fa-f0-9]{40}$/.test(magnet)) {
+        return magnet.toUpperCase();
+    }
+    
     const match = magnet.match(/btih:([A-Fa-f0-9]{40}|[A-Za-z2-7]{32})/i);
     if (!match) return null;
 

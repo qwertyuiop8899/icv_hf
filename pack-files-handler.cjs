@@ -538,16 +538,17 @@ function calculateSimilarity(str1, str2) {
  * @param {string|Array<string>} targetTitles 
  * @param {number} year 
  * @param {Object} dbHelper 
+ * @param {boolean} forceRefresh - If true, skip DB cache and fetch fresh from debrid (used when cache is corrupted)
  */
-async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles, year, dbHelper) {
-    console.log(`🎬 [PACK-HANDLER] Resolving Movie "${JSON.stringify(targetTitles)}" (${year}) from pack ${infoHash.substring(0, 8)}...`);
+async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles, year, dbHelper, forceRefresh = false) {
+    console.log(`🎬 [PACK-HANDLER] Resolving Movie "${JSON.stringify(targetTitles)}" (${year}) from pack ${infoHash.substring(0, 8)}${forceRefresh ? ' (FORCE REFRESH)' : ''}...`);
 
     let totalPackSize = 0;
     let videoFiles = [];
-    let dbCacheCorrupted = false;
+    let dbCacheCorrupted = forceRefresh; // If forceRefresh, treat cache as corrupted
 
-    // 1️⃣ CHECK DB CACHE Logic (Reused from Series)
-    if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
+    // 1️⃣ CHECK DB CACHE Logic (Reused from Series) - SKIP if forceRefresh
+    if (!forceRefresh && dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
         try {
             const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
             if (cachedFiles && cachedFiles.length > 0) {
@@ -665,6 +666,22 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
 
             await dbHelper.insertEpisodeFiles(allFilesToSave);
             console.log(`💾 [PACK-HANDLER] Indexed ${allFilesToSave.length} files from movie pack.`);
+            
+            // 🔧 FIX: Also update pack_files with the IMDb ID for direct lookups
+            if (typeof dbHelper.insertPackFiles === 'function') {
+                try {
+                    await dbHelper.insertPackFiles([{
+                        pack_hash: infoHash.toLowerCase(),
+                        imdb_id: movieImdbId,
+                        file_index: match.id,
+                        file_path: match.path,
+                        file_size: match.bytes || 0
+                    }]);
+                    console.log(`💾 [PACK-HANDLER] Updated pack_files with IMDb ${movieImdbId} for file idx=${match.id}`);
+                } catch (e) {
+                    console.warn(`⚠️ [PACK-HANDLER] pack_files update failed (non-critical): ${e.message}`);
+                }
+            }
         }
 
         // Use original match.id as torrent index

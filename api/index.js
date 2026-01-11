@@ -8451,10 +8451,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         _meta: { infoHash: result.infoHash, cached: false, quality: result.quality, seeders: result.seeders }
                     };
 
-                    // Add fileIdx if this is a pack torrent with a specific file selected
+                    // 🔥 P2P Pack: Add fileIdx for pack torrents
+                    // fileIdx tells Stremio which file in the torrent to play (0-based index)
+                    // Also set behaviorHints.filename as fallback/verification
                     if (result.fileIndex !== null && result.fileIndex !== undefined) {
                         p2pStream.fileIdx = result.fileIndex;
-                        console.log(`🔥 [P2P Pack] Added fileIdx=${result.fileIndex} for ${result.title.substring(0, 50)}...`);
+                        console.log(`🔥 [P2P Pack] Added fileIdx=${result.fileIndex} for "${cleanMainFilename || result.title.substring(0, 50)}"`);
                     }
 
                     streams.push(p2pStream);

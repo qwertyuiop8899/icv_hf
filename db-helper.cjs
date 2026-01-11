@@ -1419,6 +1419,29 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   }
 }
 
+/**
+ * Delete all pack files cache for a specific infoHash
+ * Used to clear corrupted cache entries
+ * @param {string} infoHash - InfoHash of the pack
+ * @returns {Promise<number>} Number of deleted rows
+ */
+async function deletePackFilesCache(infoHash) {
+  if (!pool) throw new Error('Database not initialized');
+  
+  try {
+    const hashLower = infoHash.toLowerCase();
+    const result = await pool.query(
+      'DELETE FROM pack_files WHERE pack_hash = $1',
+      [hashLower]
+    );
+    console.log(`🗑️ [DB] Deleted ${result.rowCount} cached files for pack ${infoHash.substring(0, 8)}`);
+    return result.rowCount;
+  } catch (error) {
+    console.error(`❌ [DB] Error deleting pack cache: ${error.message}`);
+    return 0;
+  }
+}
+
 module.exports = {
   initDatabase,
   searchByImdbId,
@@ -1444,5 +1467,6 @@ module.exports = {
   updatePackAllImdbIds,
   insertEpisodeFiles,
   closeDatabase,
-  searchFilesByTitle
+  searchFilesByTitle,
+  deletePackFilesCache
 };

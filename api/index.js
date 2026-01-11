@@ -10843,29 +10843,24 @@ export default async function handler(req, res) {
 
                     let targetVideo;
 
-                    // ✅ PRIORITY 1: For movie packs, use packFileIdx (0-based index in alphabetically sorted list)
+                    // ✅ PRIORITY 1: For movie packs, use packFileIdx as Torbox file.id (NOT alphabetical index!)
                     if (packFileIdx !== null && packFileIdx !== undefined) {
-                        // 🔥 FIX: Sort files ALPHABETICALLY to match how pack-files-handler saves indices
-                        // Use videosForPack which has SAME filter as pack-files-handler.cjs
-                        const sortedVideos = [...videosForPack].sort((a, b) => {
-                            const nameA = a.short_name || a.name || '';
-                            const nameB = b.short_name || b.name || '';
-                            return nameA.localeCompare(nameB);
-                        });
-
-                        console.log(`[Torbox] 🎬 Pack movie - looking for file at sorted index ${packFileIdx}`);
-                        console.log(`[Torbox] 📂 Sorted files (alphabetically):`);
-                        sortedVideos.forEach((f, i) => {
+                        // 🔥 FIX: packFileIdx IS the Torbox file.id - search by ID, not alphabetical order!
+                        // The DB stores the original file.id from Torbox/RD, not alphabetical position
+                        console.log(`[Torbox] 🎬 Pack movie - looking for file with id=${packFileIdx}`);
+                        console.log(`[Torbox] 📂 Available files:`);
+                        videosForPack.forEach((f) => {
                             const name = f.short_name || f.name || 'unknown';
-                            const marker = i === packFileIdx ? '👉' : '  ';
-                            console.log(`${marker} [${i}] ${name} (${(f.size / 1024 / 1024).toFixed(0)}MB, id=${f.id})`);
+                            const marker = f.id === packFileIdx ? '👉' : '  ';
+                            console.log(`${marker} [id=${f.id}] ${name} (${(f.size / 1024 / 1024).toFixed(0)}MB)`);
                         });
 
-                        targetVideo = sortedVideos[packFileIdx];
+                        // Search by file.id, NOT by alphabetical index
+                        targetVideo = videosForPack.find(f => f.id === packFileIdx);
                         if (targetVideo) {
-                            console.log(`[Torbox] ✅ Found pack file at index ${packFileIdx}: ${targetVideo.short_name || targetVideo.name} (id=${targetVideo.id})`);
+                            console.log(`[Torbox] ✅ Found pack file with id=${packFileIdx}: ${targetVideo.short_name || targetVideo.name}`);
                         } else {
-                            console.log(`[Torbox] ❌ Pack file index ${packFileIdx} out of range! Max: ${sortedVideos.length - 1}`);
+                            console.log(`[Torbox] ❌ Pack file id=${packFileIdx} not found! Available IDs: ${videosForPack.map(f => f.id).join(', ')}`);
                         }
                     }
                     // ✅ PRIORITY 1.5: For movie packs WITHOUT fileIdx, use title+year fuzzy matching

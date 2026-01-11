@@ -122,17 +122,19 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
             throw new Error('No files in torrent info');
         }
 
-        // Fix: Sort files alphabetically to match WebTorrent/Magnet index order
-        // RD 'id' is not reliable for playback index.
+        // ✅ FIX: Use ORIGINAL RD file ID (0-based index in torrent)
+        // RD 'id' IS the correct torrent file index - DO NOT reorder!
+        // RD returns files with their original torrent indices.
         const rawFiles = infoResponse.data.files;
-        rawFiles.sort((a, b) => a.path.localeCompare(b.path));
 
-        const files = rawFiles.map((f, index) => ({
-            id: index, // Use sorted index as File Index (0-based)
+        const files = rawFiles.map((f) => ({
+            id: f.id - 1, // RD uses 1-based, torrent clients use 0-based
             path: f.path,
             bytes: f.bytes,
             selected: f.selected
         }));
+        
+        console.log(`📊 [PACK-HANDLER] RD file order: ${files.slice(0, 5).map(f => `id=${f.id}:${f.path.split('/').pop().substring(0, 30)}`).join(', ')}...`);
 
         // 3. Cancella torrent (era solo per leggere file list)
         console.log(`🗑️ [PACK-HANDLER] Deleting temporary torrent ${torrentId}`);
@@ -186,15 +188,19 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                 const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
                 if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
                     const rawFiles = cacheData[hashKey].files;
-                    rawFiles.sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
+                    
+                    // ✅ FIX: Torbox cache doesn't provide original index, so we sort alphabetically
+                    // This is a best-effort approach - for accurate indices, we need the slow path
+                    // NOTE: Torbox cache files may not have reliable ordering
+                    const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
 
-                    const files = rawFiles.map((f, idx) => ({
+                    const files = sortedFiles.map((f, idx) => ({
                         id: idx,
                         path: f.name || f.path || `file_${idx}`,
                         bytes: f.size || 0,
                         selected: 1
                     }));
-                    console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path)`);
+                    console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path - alphabetical order)`);
                     return { torrentId: 'cached', files };
                 }
             }
@@ -234,15 +240,34 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             throw new Error('No files in Torbox torrent info');
         }
 
+        // ✅ FIX: Torbox returns files with 'id' field which is the original torrent index
+        // If 'id' is not available, fall back to alphabetical sorting
         const rawFiles = torrent.files;
-        rawFiles.sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
-
-        const files = rawFiles.map((f, idx) => ({
-            id: idx,
-            path: f.name,
-            bytes: f.size,
-            selected: 1
-        }));
+        
+        // Check if Torbox provides file IDs
+        const hasFileIds = rawFiles.length > 0 && rawFiles[0].id !== undefined;
+        
+        let files;
+        if (hasFileIds) {
+            // Use Torbox's original file indices
+            files = rawFiles.map((f) => ({
+                id: f.id,
+                path: f.name,
+                bytes: f.size,
+                selected: 1
+            }));
+            console.log(`📊 [PACK-HANDLER] Torbox file order (original IDs): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
+        } else {
+            // Fallback to alphabetical - best effort
+            const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
+            files = sortedFiles.map((f, idx) => ({
+                id: idx,
+                path: f.name,
+                bytes: f.size,
+                selected: 1
+            }));
+            console.log(`📊 [PACK-HANDLER] Torbox file order (alphabetical fallback): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
+        }
 
         console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
         await axios.get(`${baseUrl}/torrents/controltorrent`, {
@@ -278,15 +303,10 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
 
     console.log(`🔍 [PACK-HANDLER] Processing ${videoFiles.length} video files from pack`);
 
-    // 🔥 FIX: Calculate correct torrent file index using ALPHABETICAL order
-    // P2P torrent clients typically order files ALPHABETICALLY by path
-    // This matches how files appear in the torrent and how clients select them
-    const sortedAlphabetically = [...videoFiles].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
-    const fileIdToTorrentIndex = new Map();
-    sortedAlphabetically.forEach((file, index) => {
-        fileIdToTorrentIndex.set(file.id, index);
-    });
-    console.log(`📊 [PACK-HANDLER] File order map (ALPHABETICAL for P2P):`, [...fileIdToTorrentIndex.entries()].slice(0, 5).map(([id, idx]) => `id=${id}->idx=${idx}`).join(', '));
+    // ✅ FIX: Use the file.id directly - it's already the correct torrent index
+    // The fetch functions (fetchFilesFromRealDebrid, fetchFilesFromTorbox) now return
+    // the original torrent file index in file.id
+    console.log(`📊 [PACK-HANDLER] Using ORIGINAL file indices from API`);
 
     for (const file of videoFiles) {
         // 🗑️ FILTER: Ignore small files (samples, extras) < 25MB
@@ -296,12 +316,12 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
         const parsed = parseSeasonEpisode(filename, targetSeason);
 
         if (parsed && parsed.season === targetSeason) {
-            // ✅ Use correct torrent index, not RealDebrid's file.id
-            const correctTorrentIndex = fileIdToTorrentIndex.get(file.id) ?? file.id;
+            // ✅ Use the original file.id directly - this IS the torrent index
+            const torrentIndex = file.id;
             
             processedFiles.push({
                 info_hash: infoHash,
-                file_index: correctTorrentIndex,
+                file_index: torrentIndex,
                 title: filename,
                 size: file.bytes,
                 imdb_id: seriesImdbId,
@@ -558,19 +578,15 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
 
     if (videoFiles.length === 0) return null;
 
-    // 🔥 FIX: Calculate correct torrent file index using ALPHABETICAL order
-    // P2P torrent clients typically order files ALPHABETICALLY by path
-    const sortedAlphabetically = [...videoFiles].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
-    const movieFileIdToTorrentIndex = new Map();
-    sortedAlphabetically.forEach((file, index) => {
-        movieFileIdToTorrentIndex.set(file.id, index);
-    });
+    // ✅ FIX: Use the file.id directly - it's already the correct torrent index
+    // No need to reorder - the fetch functions return correct indices
+    console.log(`📊 [PACK-HANDLER] Using ORIGINAL file indices for movie pack`);
 
     // If <= 1 video file, it's not really a pack to filter, but we return it as "verified"
     if (videoFiles.length === 1) {
         console.log(`ℹ️ [PACK-HANDLER] Single video file found. Assuming it's the movie.`);
         const f = videoFiles[0];
-        const correctIndex = movieFileIdToTorrentIndex.get(f.id) ?? f.id;
+        const correctIndex = f.id; // Use original index directly
         // Save to DB
         if (dbHelper && movieImdbId) {
             await dbHelper.insertEpisodeFiles([{
@@ -601,9 +617,10 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
         // Save to DB
         if (dbHelper && movieImdbId) {
             // ✅ INDEX ALL FILES IN PACK (for P2P reverse search)
+            // Use original file.id as torrent index
             const allFilesToSave = videoFiles.map(f => ({
                 info_hash: infoHash,
-                file_index: movieFileIdToTorrentIndex.get(f.id) ?? f.id,
+                file_index: f.id, // Use original index directly
                 title: f.path.split('/').pop(),
                 size: f.bytes,
                 imdb_id: (f.id === match.id) ? movieImdbId : null,
@@ -615,9 +632,9 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
             console.log(`💾 [PACK-HANDLER] Indexed ${allFilesToSave.length} files from movie pack.`);
         }
 
-        const correctMatchIndex = movieFileIdToTorrentIndex.get(match.id) ?? match.id;
+        // Use original match.id as torrent index
         return {
-            fileIndex: correctMatchIndex,
+            fileIndex: match.id,
             fileName: match.path.split('/').pop(),
             fileSize: match.bytes,
             source: 'debrid_api',

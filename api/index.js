@@ -9818,7 +9818,7 @@ export default async function handler(req, res) {
                                 console.log(`✅ [RD] Deleted old torrent: ${torrent.id}`);
                                 
                                 // Re-add the magnet
-                                const newTorrent = await realdebrid.addMagnet(magnetUri);
+                                const newTorrent = await realdebrid.addMagnet(magnetLink);
                                 console.log(`✅ [RD] Re-added torrent: ${newTorrent.id}`);
                                 
                                 // Wait for magnet to convert

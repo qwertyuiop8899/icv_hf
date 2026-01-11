@@ -441,6 +441,10 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
         }
     } catch (e) {
         console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from provider: ${e.message}`);
+        // ✅ FIX: If rate limited (429), rethrow so caller keeps the pack instead of excluding
+        if (e.message?.includes('429') || e.response?.status === 429) {
+            throw new Error(`RATE_LIMITED: ${e.message}`);
+        }
         return null;
     }
 
@@ -567,6 +571,10 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
             }
         } catch (e) {
             console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files: ${e.message}`);
+            // ✅ FIX: If rate limited (429), rethrow so caller keeps the pack instead of excluding
+            if (e.message?.includes('429') || e.response?.status === 429) {
+                throw new Error(`RATE_LIMITED: ${e.message}`);
+            }
             return null;
         }
 

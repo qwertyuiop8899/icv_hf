@@ -329,7 +329,7 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
                 imdb_episode: parsed.episode
             });
 
-            console.log(`   📄 ${filename} → S${parsed.season}E${parsed.episode} (idx=${correctTorrentIndex}, ${(file.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+            console.log(`   📄 ${filename} → S${parsed.season}E${parsed.episode} (idx=${torrentIndex}, ${(file.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
         }
     }
 

@@ -544,6 +544,7 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
 
     let totalPackSize = 0;
     let videoFiles = [];
+    let dbCacheCorrupted = false;
 
     // 1️⃣ CHECK DB CACHE Logic (Reused from Series)
     if (dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
@@ -551,16 +552,24 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
             const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
             if (cachedFiles && cachedFiles.length > 0) {
                 console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
-                // Process cached files
-                videoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-                totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+                
+                // 🔧 FIX: Check if cache is corrupted (too few files - likely from old bug)
+                // A real movie pack should have at least 2 video files
+                const cachedVideoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
+                if (cachedVideoFiles.length < 2) {
+                    console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching from debrid...`);
+                    dbCacheCorrupted = true;
+                } else {
+                    videoFiles = cachedVideoFiles;
+                    totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+                }
             }
         } catch (err) {
             console.warn(`⚠️ [PACK-HANDLER] DB Cache check failed: ${err.message}`);
         }
     }
 
-    // 2️⃣ EXTERNAL PROVIDER (If no cache or empty cache)
+    // 2️⃣ EXTERNAL PROVIDER (If no cache, empty cache, or corrupted cache)
     if (videoFiles.length === 0) {
         let fetchedData = null;
         try {
@@ -581,6 +590,24 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
         if (fetchedData && fetchedData.files) {
             videoFiles = fetchedData.files.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
             totalPackSize = fetchedData.files.reduce((acc, f) => acc + f.bytes, 0);
+            
+            // 🔧 FIX: Save ALL pack files to DB for future lookups (fixes corrupted cache)
+            if (dbHelper && typeof dbHelper.insertPackFiles === 'function' && videoFiles.length > 1) {
+                try {
+                    console.log(`📦 [PACK-HANDLER] Saving ${videoFiles.length} pack files to DB...`);
+                    const packFilesData = videoFiles.map(f => ({
+                        pack_hash: infoHash.toLowerCase(),
+                        imdb_id: null, // Will be filled when matched
+                        file_index: f.id,
+                        file_path: f.path,
+                        file_size: f.bytes || 0
+                    }));
+                    await dbHelper.insertPackFiles(packFilesData);
+                    console.log(`✅ [PACK-HANDLER] Saved ${videoFiles.length} pack files to DB`);
+                } catch (dbErr) {
+                    console.warn(`⚠️ [PACK-HANDLER] DB save error (non-critical): ${dbErr.message}`);
+                }
+            }
         }
     }
 

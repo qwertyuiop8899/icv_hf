@@ -9111,7 +9111,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         originalTitle: originalTitle || mediaDetails.title,
                         type: type,
                         year: mediaDetails.year,
-                        searchQueries: finalSearchQueries || [] // ✅ Send pre-built queries
+                        searchQueries: searchQueries || [] // ✅ Use searchQueries (available from cache)
                     }),
                     signal: AbortSignal.timeout(5000)
                 });

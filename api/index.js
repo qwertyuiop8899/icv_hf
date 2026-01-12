@@ -477,6 +477,46 @@ function cleanSearchQuery(query) {
     return cleaned;
 }
 
+// ✅ Generate dynamic bingeGroup for binge watching continuity
+// Format: icv|{service}|{quality}|{hdr}|{group}
+// Example: icv|rd|2160p|DV|FLUX or icv|tb|1080p|SDR|MeM
+function generateBingeGroup(title, service = 'p2p') {
+    if (!title) return `icv|${service}|unknown`;
+    
+    const parsed = parseTorrentTitle(title);
+    
+    // Quality: 2160p, 1080p, 720p, etc.
+    const quality = parsed.resolution || extractQuality(title) || 'unknown';
+    
+    // HDR info: DV, HDR10+, HDR10, HDR, SDR
+    let hdr = 'SDR'; // Default
+    if (parsed.visualTags && parsed.visualTags.length > 0) {
+        // Priority: DV > HDR10+ > HDR10 > HDR
+        if (parsed.visualTags.includes('DV')) {
+            hdr = 'DV';
+            // Check if also has HDR (DV+HDR)
+            if (parsed.visualTags.includes('HDR') || parsed.visualTags.includes('HDR10') || parsed.visualTags.includes('HDR10+')) {
+                hdr = 'DV-HDR';
+            }
+        } else if (parsed.visualTags.includes('HDR10+')) {
+            hdr = 'HDR10+';
+        } else if (parsed.visualTags.includes('HDR10')) {
+            hdr = 'HDR10';
+        } else if (parsed.visualTags.includes('HDR')) {
+            hdr = 'HDR';
+        }
+    }
+    
+    // Release group: FLUX, NTb, MeM, etc.
+    const group = parsed.group || '';
+    
+    // Build bingeGroup - omit empty parts
+    const parts = ['icv', service, quality, hdr];
+    if (group) parts.push(group);
+    
+    return parts.join('|');
+}
+
 // ✅ Enhanced Quality Extraction
 function extractQuality(title) {
     if (!title) return 'Unknown';
@@ -8363,7 +8403,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         ...(isPack && result.title ? { folderName: result.title } : {}),
                         ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
                         behaviorHints: {
-                            bingeGroup: 'uindex-realdebrid-optimized',
+                            bingeGroup: generateBingeGroup(result.file_title || result.title, 'rd'),
                             notWebReady: false,
                             // AIOStreams compatibility: provide file size and name for dedup
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
@@ -8596,7 +8636,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         ...(isPack && result.title ? { folderName: result.title } : {}),
                         ...(cleanMainFilename ? { filename: cleanMainFilename } : {}),
                         behaviorHints: {
-                            bingeGroup: 'uindex-torbox-optimized',
+                            bingeGroup: generateBingeGroup(result.file_title || result.title, 'tb'),
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
@@ -8783,7 +8823,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         size: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0),
                         folderSize: Number(result.packSize || result.sizeInBytes || 0),
                         behaviorHints: {
-                            bingeGroup: 'uindex-alldebrid-optimized',
+                            bingeGroup: generateBingeGroup(result.file_title || result.title, 'ad'),
                             notWebReady: false,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),
@@ -8947,7 +8987,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         folderSize: Number(result.packSize || result.sizeInBytes || 0),
 
                         behaviorHints: {
-                            bingeGroup: 'uindex-p2p',
+                            bingeGroup: generateBingeGroup(result.file_title || result.title, 'p2p'),
                             notWebReady: true,
                             // AIOStreams compatibility
                             ...(result.size ? { videoSize: isPack ? Number(result.file_size || result.sizeInBytes || 0) : Number(result.sizeInBytes || 0) } : {}),

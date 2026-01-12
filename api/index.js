@@ -4268,11 +4268,25 @@ const cache = new Map();
 const CACHE_TTL = 1800000; // 30 minutes
 const MAX_CACHE_ENTRIES = 1000;
 
-// ✅ Stream results cache - caches final stream results for repeated requests
+// ✅ GLOBAL TORRENT CACHE - now uses PostgreSQL for persistence!
+// This cache stores torrent search results (shared across ALL users)
+// Different users with different debrid keys/proxies share this cache
+// Each user's streams are rebuilt with their own config on cache hit
+// Cache is now PERSISTENT in DB - survives restarts and HuggingFace sleep!
+const GLOBAL_CACHE_TTL_HOURS = 6; // 6 hours TTL
+const GLOBAL_CACHE_ENABLED = true;
+const USE_DB_CACHE = true; // ✅ Use PostgreSQL instead of in-memory Map
+
+// Legacy in-memory cache (fallback if DB fails)
+const globalTorrentCache = new Map();
+const GLOBAL_CACHE_TTL = GLOBAL_CACHE_TTL_HOURS * 60 * 60 * 1000;
+const MAX_GLOBAL_CACHE_ENTRIES = 200;
+
+// Legacy streamCache kept for backward compatibility (can be removed later)
 const streamCache = new Map();
-const STREAM_CACHE_TTL = 6 * 60 * 60 * 1000; // 8 hours
+const STREAM_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 const MAX_STREAM_CACHE_ENTRIES = 200;
-const STREAM_CACHE_ENABLED = true; // ✅ ENABLED - skip all logic for cached searches
+const STREAM_CACHE_ENABLED = false; // ⚠️ DISABLED - replaced by globalTorrentCache
 
 function cleanupCache() {
     const now = Date.now();
@@ -4297,11 +4311,20 @@ function cleanupCache() {
 }
 
 let lastCleanup = 0;
+let lastDbCacheCleanup = 0;
 function maybeCleanupCache() {
     const now = Date.now();
     if (now - lastCleanup > 300000) { // Every 5 minutes
         cleanupCache();
         lastCleanup = now;
+    }
+    
+    // Cleanup DB cache every hour (not critical, just housekeeping)
+    if (USE_DB_CACHE && now - lastDbCacheCleanup > 3600000) {
+        dbHelper.cleanupTorrentSearchCache(GLOBAL_CACHE_TTL_HOURS).catch(err => 
+            console.error(`⚠️ [DB Cache Cleanup] Error: ${err.message}`)
+        );
+        lastDbCacheCleanup = now;
     }
 }
 
@@ -5063,15 +5086,46 @@ async function handleStream(type, id, config, workerOrigin) {
 
     const startTime = Date.now();
 
-    // ✅ Stream cache - check if we have recent results for this request
-    // Cache key includes: type, id, debrid keys (hashed), proxy URL, and db_only flag
-    // IMPORTANT: Each user's config gets a separate cache to avoid mixing URLs with different keys/proxies
-    const useRD = config.use_rd && config.rd_key;
-    const useTB = config.use_torbox && config.torbox_key;
-    const useAD = config.use_alldebrid && config.ad_key;
+    // ✅ GLOBAL TORRENT CACHE - key is type:id:db_only (NO user-specific keys!)
+    // This allows different users to share the same torrent search results
+    // Each user's debrid cache check and stream URLs are rebuilt with their own config
+    const globalCacheKey = `torrent:${type}:${decodedId}:db=${config.db_only || false}`;
+    let fromGlobalCache = false;
+    let cachedData = null;
     
-    // Hash sensitive config parts for cache key (don't store actual keys in memory key)
-    const configHash = (() => {
+    // ✅ Check global cache FIRST (before any API calls)
+    // Priority: 1) DB cache (persistent), 2) In-memory cache (fallback)
+    if (GLOBAL_CACHE_ENABLED) {
+        // Try DB cache first (persistent across restarts)
+        if (USE_DB_CACHE) {
+            try {
+                const dbCached = await dbHelper.getTorrentSearchCache(globalCacheKey, GLOBAL_CACHE_TTL_HOURS);
+                if (dbCached) {
+                    console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
+                    cachedData = dbCached;
+                    fromGlobalCache = true;
+                }
+            } catch (dbError) {
+                console.error(`⚠️ [DB Cache] Error reading: ${dbError.message}`);
+            }
+        }
+        
+        // Fallback to in-memory cache if DB failed or not enabled
+        if (!fromGlobalCache && globalTorrentCache.has(globalCacheKey)) {
+            const cached = globalTorrentCache.get(globalCacheKey);
+            if (Date.now() - cached.timestamp < GLOBAL_CACHE_TTL) {
+                const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
+                console.log(`⚡ [MEMORY CACHE HIT] ${cached.data.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey} | Age: ${cacheAge}s`);
+                cachedData = cached.data;
+                fromGlobalCache = true;
+            } else {
+                globalTorrentCache.delete(globalCacheKey);
+            }
+        }
+    }
+
+    // Config hash for logging purposes only (not used in cache key anymore)
+    const configHashForLog = (() => {
         const parts = [];
         if (config.rd_key) parts.push(`rd:${config.rd_key.substring(0, 8)}`);
         if (config.torbox_key) parts.push(`tb:${config.torbox_key.substring(0, 8)}`);
@@ -5080,13 +5134,14 @@ async function handleStream(type, id, config, workerOrigin) {
         return parts.join('|') || 'p2p';
     })();
     
-    const streamCacheKey = `stream:${type}:${decodedId}:${configHash}:db=${config.db_only || false}`;
+    // Legacy streamCache disabled
+    const streamCacheKey = `stream:${type}:${decodedId}:db=${config.db_only || false}`;
     
     if (STREAM_CACHE_ENABLED && streamCache.has(streamCacheKey)) {
         const cached = streamCache.get(streamCacheKey);
         if (Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
             const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
-            console.log(`⚡ [CACHE HIT] ${cached.data.streams?.length || 0} streams | Key: ${configHash} | Age: ${cacheAge}s`);
+            console.log(`⚡ [CACHE HIT] ${cached.data.streams?.length || 0} streams | Key: ${configHashForLog} | Age: ${cacheAge}s`);
             // Mark as cached for debug purposes
             const cachedResult = { ...cached.data };
             if (cachedResult._debug) {
@@ -5116,11 +5171,30 @@ async function handleStream(type, id, config, workerOrigin) {
         const torboxService = debridServices.torbox;
         const adService = debridServices.alldebrid;
 
+        // ✅ Variables that will be populated from cache OR search
         let imdbId = null;
         let kitsuId = null;
         let season = null;
         let episode = null;
         let mediaDetails = null;
+        let filteredResults = [];
+        let searchQueries = [];
+
+        // ✅ GLOBAL CACHE HIT: Load data from cache, skip search
+        if (fromGlobalCache && cachedData) {
+            console.log(`⚡ [GLOBAL CACHE] Loading ${cachedData.filteredResults?.length || 0} torrents from cache...`);
+            filteredResults = cachedData.filteredResults || [];
+            mediaDetails = cachedData.mediaDetails || null;
+            season = cachedData.season || null;
+            episode = cachedData.episode || null;
+            imdbId = cachedData.imdbId || null;
+            kitsuId = cachedData.kitsuId || null;
+            searchQueries = cachedData.searchQueries || [];
+            console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
+        }
+        
+        // ✅ GLOBAL CACHE MISS: Do the full search
+        if (!fromGlobalCache) {
 
         if (decodedId.startsWith('kitsu:')) {
             const parts = decodedId.split(':');
@@ -5851,7 +5925,8 @@ async function handleStream(type, id, config, workerOrigin) {
         }
 
         // Build search queries (ALWAYS - needed for both live search AND enrichment)
-        const searchQueries = [];
+        // Note: searchQueries declared in outer scope for caching
+        searchQueries = [];
         let finalSearchQueries = []; // Declare here, outside the conditional blocks
 
         // 🧹 Helper function to clean title for search (remove . - : symbols)
@@ -7082,8 +7157,8 @@ async function handleStream(type, id, config, workerOrigin) {
 
         console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
 
-        // ✅ Apply exact matching filters
-        let filteredResults = results;
+        // ✅ Apply exact matching filters (use existing variable from outer scope)
+        filteredResults = results;
 
         // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
         if (config.full_ita) {
@@ -7692,7 +7767,43 @@ async function handleStream(type, id, config, workerOrigin) {
         const maxResults = 30; // Increased limit
         filteredResults = filteredResults.slice(0, maxResults);
 
-        console.log(`🔄 Checking debrid services for ${filteredResults.length} results...`);
+        // ✅ SAVE TO GLOBAL CACHE - raw torrent results for all users
+        if (GLOBAL_CACHE_ENABLED && filteredResults.length > 0) {
+            const cacheData = {
+                filteredResults: filteredResults,
+                mediaDetails: mediaDetails,
+                season: season,
+                episode: episode,
+                imdbId: imdbId,
+                kitsuId: kitsuId,
+                searchQueries: searchQueries || []
+            };
+            
+            // Save to DB cache (persistent)
+            if (USE_DB_CACHE) {
+                try {
+                    await dbHelper.setTorrentSearchCache(globalCacheKey, cacheData);
+                    console.log(`💾 [DB CACHE SAVE] ${filteredResults.length} raw torrents | Key: ${globalCacheKey}`);
+                } catch (dbError) {
+                    console.error(`⚠️ [DB Cache] Error saving: ${dbError.message}`);
+                }
+            }
+            
+            // Also save to in-memory cache (fast fallback)
+            if (globalTorrentCache.size >= MAX_GLOBAL_CACHE_ENTRIES) {
+                const entriesToDelete = Math.floor(MAX_GLOBAL_CACHE_ENTRIES * 0.2);
+                const keysToDelete = Array.from(globalTorrentCache.keys()).slice(0, entriesToDelete);
+                keysToDelete.forEach(key => globalTorrentCache.delete(key));
+            }
+            globalTorrentCache.set(globalCacheKey, {
+                data: cacheData,
+                timestamp: Date.now()
+            });
+        }
+
+        } // END of if (!fromGlobalCache) block
+
+        console.log(`🔄 Checking debrid services for ${filteredResults.length} results... (User: ${configHashForLog})`);
         const hashes = filteredResults.map(t => t.infoHash.toLowerCase()).filter(h => h && h.length >= 32);
 
         if (hashes.length === 0) {
@@ -8966,18 +9077,20 @@ async function handleStream(type, id, config, workerOrigin) {
         const result = {
             streams,
             _debug: {
-                originalQuery: searchQueries[0],
-                totalResults: results.length,
+                originalQuery: searchQueries[0] || 'cached',
+                totalResults: filteredResults.length, // Use filteredResults (works for both cache hit and miss)
                 filteredResults: filteredResults.length,
                 finalStreams: streams.length,
                 cachedStreams: cachedCount,
                 processingTimeMs: totalTime,
                 tmdbData: mediaDetails,
-                fromCache: false
+                fromCache: fromGlobalCache,
+                globalCacheKey: globalCacheKey,
+                userConfig: configHashForLog
             }
         };
 
-        // Only cache if we have valid streams AND cache is enabled
+        // Legacy streamCache disabled (using globalTorrentCache instead)
         if (STREAM_CACHE_ENABLED && streams.length > 0) {
             // Cleanup old entries if cache is too large
             if (streamCache.size >= MAX_STREAM_CACHE_ENTRIES) {

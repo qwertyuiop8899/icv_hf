@@ -17,19 +17,19 @@ const EXTERNAL_ADDONS = {
         baseUrl: TORRENTIO_BASE_DOMAIN ? `${TORRENTIO_BASE_DOMAIN}/oResults=false/aHR0cHM6Ly90b3JyZW50aW8uc3RyZW0uZnVuL3Byb3ZpZGVycz15dHMsZXp0dixyYXJiZywxMzM3eCx0aGVwaXJhdGViYXksa2lja2Fzc3RvcnJlbnRzLHRvcnJlbnRnYWxheHksbWFnbmV0ZGwsaG9ycmlibGVzdWJzLG55YWFzaSx0b2t5b3Rvc2hvLGFuaWRleCxydXRvcixydXRyYWNrZXIsY29tYW5kbyxibHVkdix0b3JyZW50OSxpbGNvcnNhcm9uZXJvLG1lam9ydG9ycmVudCx3b2xmbWF4NGssY2luZWNhbGlkYWQsYmVzdHRvcnJlbnRzfGxhbmd1YWdlPWl0YWxpYW58c29ydD1xdWFsaXR5c2l6ZXxxdWFsaXR5ZmlsdGVyPXRocmVlZCxzY3IsY2FtfGxpbWl0PTc=` : null,
         name: 'Torrentio',
         emoji: '🅣',
-        timeout: 4500
+        timeout: 1500
     },
     mediafusion: {
         baseUrl: 'https://mediafusionfortheweebs.midnightignite.me/D-JsGOdGy5ORD4ALwdnjM8ulgRM6r34Tns_EE8B_VMbNfIk-ZvEuNjmH3hWZWZVhtWYhI2qA5KbFKYEkhjalpr4xLCicz01i9zKOQL3Fhcqv2LkJdyYGjeTUNodJPCEGd_FwpjiJ3IjMqmD6BAVbvtJUOQPS_of8hQP_DbUo9-CCJun7_xJMfNqgaEmbWLXWpc_BLtX-V9d5eDJ-GAJv-i0eg2PyGUPIRaqKhsOlxRA1g',
         name: 'MediaFusion',
         emoji: '🅜',
-        timeout: 4500
+        timeout: 1500
     },
     comet: {
         baseUrl: 'https://cometfortheweebs.midnightignite.me/eyJtYXhSZXN1bHRzUGVyUmVzb2x1dGlvbiI6OCwibWF4U2l6ZSI6MCwiY2FjaGVkT25seSI6ZmFsc2UsInNvcnRDYWNoZWRVbmNhY2hlZFRvZ2V0aGVyIjpmYWxzZSwicmVtb3ZlVHJhc2giOnRydWUsInJlc3VsdEZvcm1hdCI6WyJhbGwiXSwiZGVicmlkU2VydmljZSI6InRvcnJlbnQiLCJkZWJyaWRBcGlLZXkiOiIiLCJkZWJyaWRTdHJlYW1Qcm94eVBhc3N3b3JkIjoiIiwibGFuZ3VhZ2VzIjp7ImV4Y2x1ZGUiOlsiZW4iLCJqYSIsInpoIiwicnUiLCJhciIsInB0IiwiZXMiLCJmciIsImRlIiwia28iLCJoaSIsImJuIiwicGEiLCJtciIsImd1IiwidGEiLCJ0ZSIsImtuIiwibWwiLCJ0aCIsInZpIiwiaWQiLCJ0ciIsImhlIiwiZmEiLCJ1ayIsImVsIiwibHQiLCJsdiIsImV0IiwicGwiLCJjcyIsInNrIiwiaHUiLCJybyIsImJnIiwic3IiLCJociIsInNsIiwibmwiLCJkYSIsImZpIiwic3YiLCJubyIsIm1zIiwibGEiXSwicHJlZmVycmVkIjpbIm11bHRpIiwiaXQiXX0sInJlc29sdXRpb25zIjp7InIzNjBwIjpmYWxzZX0sIm9wdGlvbnMiOnsicmVtb3ZlX3JhbmtzX3VuZGVyIjotMTAwMDAwMDAwMDAsImFsbG93X2VuZ2xpc2hfaW5fbGFuZ3VhZ2VzIjpmYWxzZSwicmVtb3ZlX3Vua25vd25fbGFuZ3VhZ2VzIjpmYWxzZX19',
         name: 'Comet',
         emoji: '🅒',
-        timeout: 4500
+        timeout: 1500
     }
 };
 

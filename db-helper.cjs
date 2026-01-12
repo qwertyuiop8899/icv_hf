@@ -1525,6 +1525,112 @@ async function deletePackFilesCache(infoHash) {
   }
 }
 
+// ============================================================================
+// 🌐 GLOBAL TORRENT SEARCH CACHE - Persistent cache shared across all users
+// ============================================================================
+
+/**
+ * Get cached torrent search results from DB
+ * @param {string} cacheKey - Cache key (format: torrent:type:id:db=boolean)
+ * @param {number} ttlHours - TTL in hours (default 6)
+ * @returns {Promise<Object|null>} Cached data or null if not found/expired
+ */
+async function getTorrentSearchCache(cacheKey, ttlHours = 6) {
+  if (!pool) return null;
+  
+  try {
+    const result = await pool.query(`
+      SELECT filtered_results, media_details, season, episode, imdb_id, created_at
+      FROM torrent_search_cache
+      WHERE cache_key = $1
+        AND created_at > NOW() - INTERVAL '${ttlHours} hours'
+    `, [cacheKey]);
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    const row = result.rows[0];
+    const ageMinutes = Math.round((Date.now() - new Date(row.created_at).getTime()) / 60000);
+    console.log(`💾 [DB CACHE HIT] Key: ${cacheKey.substring(0, 50)}... | Age: ${ageMinutes}m`);
+    
+    return {
+      filteredResults: row.filtered_results,
+      mediaDetails: row.media_details,
+      season: row.season,
+      episode: row.episode,
+      imdbId: row.imdb_id,
+      createdAt: row.created_at
+    };
+  } catch (error) {
+    console.error(`❌ [DB Cache] Error getting cache: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Save torrent search results to DB cache
+ * @param {string} cacheKey - Cache key
+ * @param {Object} data - Data to cache (filteredResults, mediaDetails, etc.)
+ * @returns {Promise<boolean>} Success status
+ */
+async function setTorrentSearchCache(cacheKey, data) {
+  if (!pool) return false;
+  
+  try {
+    await pool.query(`
+      INSERT INTO torrent_search_cache 
+        (cache_key, filtered_results, media_details, season, episode, imdb_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      ON CONFLICT (cache_key) 
+      DO UPDATE SET 
+        filtered_results = EXCLUDED.filtered_results,
+        media_details = EXCLUDED.media_details,
+        season = EXCLUDED.season,
+        episode = EXCLUDED.episode,
+        imdb_id = EXCLUDED.imdb_id,
+        created_at = NOW()
+    `, [
+      cacheKey,
+      JSON.stringify(data.filteredResults || []),
+      JSON.stringify(data.mediaDetails || null),
+      data.season || null,
+      data.episode || null,
+      data.imdbId || null
+    ]);
+    
+    console.log(`💾 [DB CACHE SAVE] Key: ${cacheKey.substring(0, 50)}... | Results: ${data.filteredResults?.length || 0}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ [DB Cache] Error saving cache: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Cleanup expired torrent search cache entries
+ * @param {number} ttlHours - TTL in hours (default 6)
+ * @returns {Promise<number>} Number of deleted entries
+ */
+async function cleanupTorrentSearchCache(ttlHours = 6) {
+  if (!pool) return 0;
+  
+  try {
+    const result = await pool.query(`
+      DELETE FROM torrent_search_cache
+      WHERE created_at < NOW() - INTERVAL '${ttlHours} hours'
+    `);
+    
+    if (result.rowCount > 0) {
+      console.log(`🧹 [DB Cache] Cleaned up ${result.rowCount} expired entries`);
+    }
+    return result.rowCount;
+  } catch (error) {
+    console.error(`❌ [DB Cache] Error cleaning cache: ${error.message}`);
+    return 0;
+  }
+}
+
 module.exports = {
   initDatabase,
   searchByImdbId,
@@ -1551,5 +1657,9 @@ module.exports = {
   insertEpisodeFiles,
   closeDatabase,
   searchFilesByTitle,
-  deletePackFilesCache
+  deletePackFilesCache,
+  // 🌐 Global Torrent Search Cache
+  getTorrentSearchCache,
+  setTorrentSearchCache,
+  cleanupTorrentSearchCache
 };

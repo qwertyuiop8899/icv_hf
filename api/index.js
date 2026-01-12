@@ -5438,11 +5438,17 @@ async function handleStream(type, id, config, workerOrigin) {
                 // 🔧 FIX: Sanity check pack results from DB - verify file_title matches requested movie
                 // This catches corrupted cache entries (e.g., Dumbo IMDb mapped to Basil file)
                 // Also handles cases like "Frozen" vs "Frozen II" by checking year
+                // ✅ CHECK ALL TITLES: English, Italian, Original
                 if (packResults.length > 0 && mediaDetails.title) {
                     const normalizeForMatch = (str) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim() : '';
                     const requestedTitle = normalizeForMatch(mediaDetails.title);
                     const requestedOriginal = mediaDetails.originalName ? normalizeForMatch(mediaDetails.originalName) : '';
-                    const requestedWords = [...new Set([...requestedTitle.split(' '), ...requestedOriginal.split(' ')].filter(w => w.length > 2))];
+                    const requestedItalian = italianTitle ? normalizeForMatch(italianTitle) : '';
+                    const requestedWords = [...new Set([
+                        ...requestedTitle.split(' '), 
+                        ...requestedOriginal.split(' '),
+                        ...requestedItalian.split(' ')  // ✅ Include Italian title!
+                    ].filter(w => w.length > 2))];
                     const requestedYear = mediaDetails.year ? String(mediaDetails.year) : null;
                     
                     const validPackResults = [];
@@ -7326,15 +7332,25 @@ async function handleStream(type, id, config, workerOrigin) {
                     // 🚨 SANITY CHECK: Verify file_title matches the REQUESTED movie!
                     let isClean = false;
                     if (res.fileIndex !== undefined && res.fileIndex !== null && res.file_title) {
-                        // Check if cached file title matches requested movie
-                        const similarity = calculateSimilarity(res.file_title, mediaDetails.title);
-                        // Also check Original Title if available
-                        const similarityOrig = mediaDetails.originalName ? calculateSimilarity(res.file_title, mediaDetails.originalName) : 0;
+                        // ✅ Check ALL titles: English, Italian, Original
+                        const allTitles = [
+                            mediaDetails.title,
+                            mediaDetails.originalName,
+                            italianTitle,  // Use the Italian title we already have!
+                            ...(mediaDetails.titles || [])
+                        ].filter(Boolean);
+                        
+                        // Match if ANY title matches with >40% similarity
+                        let bestSimilarity = 0;
+                        for (const title of allTitles) {
+                            const sim = calculateSimilarity(res.file_title, title);
+                            if (sim > bestSimilarity) bestSimilarity = sim;
+                        }
 
-                        if (similarity > 0.4 || similarityOrig > 0.4) { // 40% threshold for "Same Movie"
+                        if (bestSimilarity > 0.4) { // 40% threshold for "Same Movie"
                             isClean = true;
                         } else {
-                            console.log(`⚠️ [MOVIE SANITY] Cached file "${res.file_title}" does NOT match requested "${mediaDetails.title}" (Sim: ${similarity.toFixed(2)}). Re-verifying pack.`);
+                            console.log(`⚠️ [MOVIE SANITY] Cached file "${res.file_title}" does NOT match any title (best: ${bestSimilarity.toFixed(2)}). Re-verifying pack.`);
                             // 🔧 Mark this hash as having corrupted cache
                             const hash = res.infoHash?.toLowerCase() || res.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
                             if (hash) corruptedCacheHashes.add(hash);
@@ -7355,12 +7371,23 @@ async function handleStream(type, id, config, workerOrigin) {
                 const excluded = [];
                 const needsExternalVerification = [];
 
-                console.log(`🎬 [MOVIE VERIFY] Checking DB cache for ${unverifiedMovies.length} potential packs...`);
-
-                // 1️⃣ FAST PATH: Check DB Cache ONLY (no API calls!) for unverified movies
-                // ✅ FIX: Only use cache if TTL is OK, otherwise queue for external verification
-                const PACK_TTL_DAYS = 30;
+                // ✅ FIRST: Filter to only actual packs (title-based)
+                // Non-pack torrents are assumed valid (single movie = no need to verify)
+                const actualPacks = [];
                 for (const result of unverifiedMovies) {
+                    const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                    if (isPack) {
+                        actualPacks.push(result);
+                    } else {
+                        newlyVerified.push(result); // Not a pack, assume valid single movie
+                    }
+                }
+                
+                console.log(`🎬 [MOVIE VERIFY] Found ${actualPacks.length} actual packs (${unverifiedMovies.length - actualPacks.length} single movies skipped)`);
+
+                // 1️⃣ FAST PATH: Check DB Cache ONLY for actual packs
+                const PACK_TTL_DAYS = 30;
+                for (const result of actualPacks) {
                     const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
                     if (!infoHash) {
                         newlyVerified.push(result);

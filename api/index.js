@@ -4273,20 +4273,15 @@ const MAX_CACHE_ENTRIES = 1000;
 // Different users with different debrid keys/proxies share this cache
 // Each user's streams are rebuilt with their own config on cache hit
 // Cache is now PERSISTENT in DB - survives restarts and HuggingFace sleep!
-const GLOBAL_CACHE_TTL_HOURS = 6; // 6 hours TTL
+const GLOBAL_CACHE_TTL_MOVIE = 18; // 18 hours TTL for movies (stable content)
+const GLOBAL_CACHE_TTL_SERIES = 10; // 10 hours TTL for series (more dynamic)
 const GLOBAL_CACHE_ENABLED = true;
 const USE_DB_CACHE = true; // ✅ Use PostgreSQL instead of in-memory Map
 
 // Legacy in-memory cache (fallback if DB fails)
 const globalTorrentCache = new Map();
-const GLOBAL_CACHE_TTL = GLOBAL_CACHE_TTL_HOURS * 60 * 60 * 1000;
+const GLOBAL_CACHE_TTL = GLOBAL_CACHE_TTL_MOVIE * 60 * 60 * 1000; // Default to movie TTL for in-memory
 const MAX_GLOBAL_CACHE_ENTRIES = 200;
-
-// Legacy streamCache kept for backward compatibility (can be removed later)
-const streamCache = new Map();
-const STREAM_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
-const MAX_STREAM_CACHE_ENTRIES = 200;
-const STREAM_CACHE_ENABLED = false; // ⚠️ DISABLED - replaced by globalTorrentCache
 
 function cleanupCache() {
     const now = Date.now();
@@ -5099,11 +5094,14 @@ async function handleStream(type, id, config, workerOrigin) {
     // ✅ Check global cache FIRST (before any API calls)
     // Only if user has use_global_cache enabled (default: true)
     // db_only users CAN read from cache (but won't save to it)
+    // TTL: 18h for movies (stable), 10h for series (more dynamic)
+    const cacheTtlHours = type === 'movie' ? GLOBAL_CACHE_TTL_MOVIE : GLOBAL_CACHE_TTL_SERIES;
+    
     if (GLOBAL_CACHE_ENABLED && useGlobalCache) {
         // Try DB cache first (persistent across restarts)
         if (USE_DB_CACHE) {
             try {
-                const dbCached = await dbHelper.getTorrentSearchCache(globalCacheKey, GLOBAL_CACHE_TTL_HOURS);
+                const dbCached = await dbHelper.getTorrentSearchCache(globalCacheKey, cacheTtlHours);
                 if (dbCached) {
                     console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
                     cachedData = dbCached;
@@ -5138,25 +5136,6 @@ async function handleStream(type, id, config, workerOrigin) {
         return parts.join('|') || 'p2p';
     })();
     
-    // Legacy streamCache disabled
-    const streamCacheKey = `stream:${type}:${decodedId}:db=${config.db_only || false}`;
-    
-    if (STREAM_CACHE_ENABLED && streamCache.has(streamCacheKey)) {
-        const cached = streamCache.get(streamCacheKey);
-        if (Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
-            const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
-            console.log(`⚡ [CACHE HIT] ${cached.data.streams?.length || 0} streams | Key: ${configHashForLog} | Age: ${cacheAge}s`);
-            // Mark as cached for debug purposes
-            const cachedResult = { ...cached.data };
-            if (cachedResult._debug) {
-                cachedResult._debug = { ...cachedResult._debug, fromCache: true, cacheAgeSeconds: cacheAge };
-            }
-            return cachedResult;
-        } else {
-            streamCache.delete(streamCacheKey);
-        }
-    }
-
     try {
         // ✅ TMDB API Key from config or environment variable
         const tmdbKey = config.tmdb_key || process.env.TMDB_KEY || process.env.TMDB_API_KEY || '5462f78469f3d80bf5201645294c16e4';
@@ -7791,7 +7770,8 @@ async function handleStream(type, id, config, workerOrigin) {
             if (USE_DB_CACHE) {
                 try {
                     await dbHelper.setTorrentSearchCache(globalCacheKey, cacheData);
-                    console.log(`💾 [DB CACHE SAVE] ${filteredResults.length} raw torrents | Key: ${globalCacheKey}`);
+                    const ttlUsed = type === 'movie' ? GLOBAL_CACHE_TTL_MOVIE : GLOBAL_CACHE_TTL_SERIES;
+                    console.log(`💾 [DB CACHE SAVE] Key: ${globalCacheKey}... | Results: ${filteredResults.length} | TTL: ${ttlUsed}h`);
                 } catch (dbError) {
                     console.error(`⚠️ [DB Cache] Error saving: ${dbError.message}`);
                 }
@@ -9144,19 +9124,6 @@ async function handleStream(type, id, config, workerOrigin) {
                 userConfig: configHashForLog
             }
         };
-
-        // Legacy streamCache disabled (using globalTorrentCache instead)
-        if (STREAM_CACHE_ENABLED && streams.length > 0) {
-            // Cleanup old entries if cache is too large
-            if (streamCache.size >= MAX_STREAM_CACHE_ENTRIES) {
-                const entriesToDelete = Math.floor(MAX_STREAM_CACHE_ENTRIES * 0.2); // Delete 20%
-                const keysToDelete = Array.from(streamCache.keys()).slice(0, entriesToDelete);
-                keysToDelete.forEach(key => streamCache.delete(key));
-                console.log(`🧹 [Stream Cache] Cleaned ${entriesToDelete} old entries`);
-            }
-            streamCache.set(streamCacheKey, { data: result, timestamp: Date.now() });
-            console.log(`💾 [CACHE SAVE] Cached ${streams.length} streams | Key: ${configHash} | ID: ${decodedId} (cache size: ${streamCache.size})`);
-        }
 
         return result;
 

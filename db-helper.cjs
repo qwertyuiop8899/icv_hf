@@ -61,6 +61,19 @@ async function runMigrations() {
     }
   }
   
+  // 🚀 SPEEDUP: Add created_at column for TTL management (30 days)
+  try {
+    await pool.query(`
+      ALTER TABLE pack_files 
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()
+    `);
+    console.log('✅ DB Migration: pack_files.created_at column ensured');
+  } catch (error) {
+    if (!error.message.includes('does not exist')) {
+      console.error('⚠️ Migration warning (created_at):', error.message);
+    }
+  }
+  
   // 🔧 FIX: Create unique index on (pack_hash, file_index) for proper bulk insert
   try {
     // First drop the old constraint if it exists (on pack_hash, imdb_id)
@@ -1121,26 +1134,46 @@ async function insertPackFiles(packFiles) {
 }
 
 /**
- * Get pack files for a specific pack
+ * Get pack files for a specific pack with TTL check
  * @param {string} packHash - InfoHash of the pack
- * @returns {Promise<Array>} Array of file mappings
+ * @param {number} ttlDays - TTL in days (default: 30)
+ * @returns {Promise<{files: Array, expired: boolean}>} Files and expiration status
  */
-async function getPackFiles(packHash) {
+async function getPackFiles(packHash, ttlDays = 30) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
     const query = `
-      SELECT imdb_id, file_index, file_path, file_size
+      SELECT imdb_id, file_index, file_path, file_size, created_at
       FROM pack_files
       WHERE pack_hash = $1
       ORDER BY file_index ASC
     `;
 
     const result = await pool.query(query, [packHash]);
-    return result.rows;
+    
+    if (result.rows.length === 0) {
+      return { files: [], expired: false };
+    }
+    
+    // Check TTL using first row's created_at
+    const createdAt = result.rows[0].created_at;
+    const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
+    const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+    const expired = ageMs > ttlMs;
+    
+    if (expired) {
+      console.log(`⏰ [DB] Pack files for ${packHash.substring(0, 8)} expired (${Math.floor(ageMs / 86400000)} days > ${ttlDays})`);
+    }
+    
+    return { 
+      files: result.rows,
+      expired,
+      ageInDays: Math.floor(ageMs / 86400000)
+    };
   } catch (error) {
     console.error(`❌ Error getting pack files for ${packHash}:`, error.message);
-    return [];
+    return { files: [], expired: false };
   }
 }
 

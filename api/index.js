@@ -7444,9 +7444,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     const result = toVerifyExternal[i];
                     const infoHash = result.infoHash?.toLowerCase();
 
-                    // Heuristic: If size < 3GB and no "pack" keywords, assume it's a single movie and valid.
-                    // Skip expensive API call for obvious single files.
-                    const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
+                    // ✅ FIXED: Only check if TITLE indicates pack (trilogia, collection, etc.)
+                    // NOT size-based - a single 4K movie can be >4GB!
+                    const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
 
                     if (!isLikelyPack) {
                         newlyVerified.push(result); // Assume valid single movie
@@ -7508,7 +7508,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 
                 // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
                 // This pre-fetches pack files for future searches
-                // ⚠️ DELAYED: Wait 5 seconds AFTER response is sent to avoid blocking RD API
+                // ⚠️ RUNS AFTER response is sent - 1 second between calls
                 if (skipped.length > 0 && (config.rd_key || config.torbox_key)) {
                     const candidateTitles = [
                         mediaDetails.title,
@@ -7520,17 +7520,23 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Fire and forget - DELAYED to not interfere with response
                     setTimeout(() => {
                         (async () => {
-                            console.log(`🔄 [MOVIE VERIFY BG] Starting background verification for ${skipped.length} packs (delayed 5s)...`);
-                            const BG_DELAY_MS = 1000; // 1 second between each to be gentle on API
+                            console.log(`🔄 [MOVIE VERIFY BG] Starting background verification...`);
+                            const BG_DELAY_MS = 1000; // 1 second between calls (RD: 200/min limit)
+                            let processed = 0;
+                            let skippedNotPack = 0;
                             
                             for (let i = 0; i < skipped.length; i++) {
                                 const result = skipped[i];
                                 const infoHash = result.infoHash?.toLowerCase();
                                 if (!infoHash) continue;
                                 
-                                // Skip if not likely a pack
-                                const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
-                                if (!isLikelyPack) continue;
+                                // ✅ FIXED: Only process if TITLE indicates pack (trilogia, collection, etc.)
+                                // NOT size-based - a single 4K movie can be >4GB!
+                                const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                                if (!isLikelyPack) {
+                                    skippedNotPack++;
+                                    continue;
+                                }
                                 
                                 await new Promise(resolve => setTimeout(resolve, BG_DELAY_MS));
                                 
@@ -7543,12 +7549,13 @@ async function handleStream(type, id, config, workerOrigin) {
                                         mediaDetails.year,
                                         dbHelper
                                     );
+                                    processed++;
                                     console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
                                 } catch (e) {
                                     // Ignore errors in background
                                 }
                             }
-                            console.log(`✅ [MOVIE VERIFY BG] Background verification complete`);
+                            console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified (${skippedNotPack} non-pack skipped)`);
                         })().catch(() => {});
                     }, 5000); // 5 second delay to let response complete first
                 }

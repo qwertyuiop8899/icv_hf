@@ -5086,16 +5086,20 @@ async function handleStream(type, id, config, workerOrigin) {
 
     const startTime = Date.now();
 
-    // ✅ GLOBAL TORRENT CACHE - key is type:id:db_only (NO user-specific keys!)
+    // ✅ Check if user wants to use global cache (default: true)
+    const useGlobalCache = config.use_global_cache !== false;
+    
+    // ✅ GLOBAL TORRENT CACHE - key is type:id (NO user-specific keys!)
     // This allows different users to share the same torrent search results
     // Each user's debrid cache check and stream URLs are rebuilt with their own config
-    const globalCacheKey = `torrent:${type}:${decodedId}:db=${config.db_only || false}`;
+    const globalCacheKey = `torrent:${type}:${decodedId}`;
     let fromGlobalCache = false;
     let cachedData = null;
     
     // ✅ Check global cache FIRST (before any API calls)
-    // Priority: 1) DB cache (persistent), 2) In-memory cache (fallback)
-    if (GLOBAL_CACHE_ENABLED) {
+    // Only if user has use_global_cache enabled (default: true)
+    // db_only users CAN read from cache (but won't save to it)
+    if (GLOBAL_CACHE_ENABLED && useGlobalCache) {
         // Try DB cache first (persistent across restarts)
         if (USE_DB_CACHE) {
             try {
@@ -7166,36 +7170,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // ✅ Apply exact matching filters (use existing variable from outer scope)
         filteredResults = results;
 
-        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
-        if (config.full_ita) {
-            const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
-            const beforeCount = filteredResults.length;
-
-            filteredResults = filteredResults.filter(result => {
-                const provider = (result.source || result.externalAddon || '').toLowerCase();
-
-                // Extract MAIN provider only (before parentheses) to avoid false positives
-                // e.g., "comet (torrentio)" → "comet" (NOT exempt)
-                // e.g., "torrentio" → "torrentio" (exempt)
-                const mainProvider = provider.split('(')[0].trim();
-
-                // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
-                const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
-                if (isExempt) return true;
-
-                // For all other providers, check for strict ITA in title
-                const title = (result.title || result.websiteTitle || '').toLowerCase();
-                const hasIta = /\bita\b|italian|italiano/i.test(title);
-
-                if (!hasIta) {
-                    console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${provider})`);
-                }
-
-                return hasIta;
-            });
-
-            console.log(`🇮🇹 [FULL ITA] Filtered ${beforeCount} → ${filteredResults.length} results (strict ITA mode)`);
-        }
+        // ⚠️ FULL ITA FILTER MOVED: Applied AFTER cache block (so cache contains ALL results)
 
         if (type === 'series') {
             const originalCount = filteredResults.length;
@@ -7769,12 +7744,37 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         }
 
-        // Limit results for performance
-        const maxResults = 30; // Increased limit
-        filteredResults = filteredResults.slice(0, maxResults);
+        // ⚠️ LIMIT + LANG FILTER MOVED: Applied AFTER cache block (so cache contains complete results)
 
-        // ✅ SAVE TO GLOBAL CACHE - raw torrent results for all users
-        if (GLOBAL_CACHE_ENABLED && filteredResults.length > 0) {
+        // ✅ SAVE TO GLOBAL CACHE - raw torrent results for all users (BEFORE full_ita filter)
+        // Conditions to save:
+        // 1. Global cache must be enabled
+        // 2. Must have results
+        // 3. User must have use_global_cache enabled (default: true)
+        // 4. User must NOT be db_only (db_only can read but never saves)
+        // 5. User must have ALL essential providers enabled (UIndex is optional)
+        // 6. User must NOT have full_ita=true (cache stores COMPLETE results)
+        const hasAllEssentialProviders = (
+            config.use_corsaronero !== false &&
+            config.use_knaben !== false &&
+            config.use_torrentgalaxy === true &&
+            config.use_rarbg !== false &&
+            config.use_torrentio !== false &&
+            config.use_mediafusion !== false &&
+            config.use_comet !== false
+            // UIndex is intentionally NOT required
+        );
+        
+        const canSaveToCache = (
+            GLOBAL_CACHE_ENABLED &&
+            filteredResults.length > 0 &&
+            useGlobalCache &&
+            !config.db_only &&
+            !config.full_ita &&  // ✅ Only save if full_ita=false (cache stores COMPLETE results)
+            hasAllEssentialProviders
+        );
+        
+        if (canSaveToCache) {
             const cacheData = {
                 filteredResults: filteredResults,
                 mediaDetails: mediaDetails,
@@ -7807,9 +7807,56 @@ async function handleStream(type, id, config, workerOrigin) {
                 data: cacheData,
                 timestamp: Date.now()
             });
+        } else if (filteredResults.length > 0) {
+            // Log why we're not saving
+            const reasons = [];
+            if (!useGlobalCache) reasons.push('use_global_cache=false');
+            if (config.db_only) reasons.push('db_only=true');
+            if (config.full_ita) reasons.push('full_ita=true (need complete results)');
+            if (!hasAllEssentialProviders) reasons.push('missing providers');
+            console.log(`⏭️ [CACHE SKIP] Not saving to cache: ${reasons.join(', ')}`);
         }
 
         } // END of if (!fromGlobalCache) block
+
+        // ═══════════════════════════════════════════════════════════════════════════════
+        // ✅ POST-CACHE FILTERS: Applied to BOTH cache hit AND cache miss results
+        // ═══════════════════════════════════════════════════════════════════════════════
+
+        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
+        if (config.full_ita) {
+            const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
+            const beforeCount = filteredResults.length;
+
+            filteredResults = filteredResults.filter(result => {
+                const provider = (result.source || result.externalAddon || '').toLowerCase();
+
+                // Extract MAIN provider only (before parentheses) to avoid false positives
+                // e.g., "comet (torrentio)" → "comet" (NOT exempt)
+                // e.g., "torrentio" → "torrentio" (exempt)
+                const mainProvider = provider.split('(')[0].trim();
+
+                // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
+                const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
+                if (isExempt) return true;
+
+                // For all other providers, check for strict ITA in title
+                const title = (result.title || result.websiteTitle || '').toLowerCase();
+                const hasIta = /\bita\b|italian|italiano/i.test(title);
+
+                if (!hasIta) {
+                    console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${provider})`);
+                }
+
+                return hasIta;
+            });
+
+            console.log(`🇮🇹 [FULL ITA] Filtered ${beforeCount} → ${filteredResults.length} results (strict ITA mode)`);
+        }
+
+        // Limit results for performance (after all filters)
+        const maxResults = 30;
+        filteredResults = filteredResults.slice(0, maxResults);
 
         console.log(`🔄 Checking debrid services for ${filteredResults.length} results... (User: ${configHashForLog})`);
         const hashes = filteredResults.map(t => t.infoHash.toLowerCase()).filter(h => h && h.length >= 32);

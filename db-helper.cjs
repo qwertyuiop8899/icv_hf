@@ -1314,6 +1314,79 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
   const { movieImdbId = null, excludeSeries = false, year = null } = options;
 
+  // 🔧 Helper function for ILIKE search (fallback)
+  const runIlikeSearch = async () => {
+    let query = `
+      SELECT 
+        f.file_index,
+        f.title as file_title,
+        f.size as file_size,
+        t.info_hash,
+        t.provider,
+        t.title as torrent_title,
+        t.size as torrent_size,
+        t.seeders,
+        t.imdb_id,
+        t.cached_rd,
+        t.type as torrent_type,
+        f.imdb_id as file_imdb_id
+      FROM files f
+      JOIN torrents t ON f.info_hash = t.info_hash
+      WHERE f.title ILIKE $1
+    `;
+    const params = [`%${titleQuery}%`];
+    let paramIndex = 2;
+
+    // 🎬 FILTER: Year in filename
+    if (year) {
+      query += ` AND f.title ~ $${paramIndex}`;
+      params.push(`(\\(${year}\\)|[^0-9]${year}[^0-9])`);
+      paramIndex++;
+    }
+
+    // 🎬 FILTER 1: Exclude series torrents when searching for movies
+    if (excludeSeries) {
+      query += ` AND (t.type IS NULL OR t.type != 'series')`;
+    }
+
+    // 🎬 FILTER 2: Only include files with matching IMDb or NULL
+    if (movieImdbId) {
+      query += ` AND (f.imdb_id IS NULL OR f.imdb_id = $${paramIndex})`;
+      params.push(movieImdbId);
+      paramIndex++;
+    }
+
+    if (providers && Array.isArray(providers) && providers.length > 0) {
+      const patterns = providers.map((p, i) => `t.provider ILIKE $${paramIndex + i}`).join(' OR ');
+      query += ` AND (${patterns})`;
+      params.push(...providers.map(p => `%${p}%`));
+    }
+
+    query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
+    const result = await pool.query(query, params);
+    console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
+    
+    // 🔧 AUTO-INDEX: Update files.imdb_id when we find matches by title
+    // This allows future searches to find files directly by IMDb ID
+    if (result.rows.length > 0 && movieImdbId) {
+      for (const row of result.rows) {
+        if (!row.file_imdb_id) {
+          try {
+            await pool.query(
+              'UPDATE files SET imdb_id = $1 WHERE info_hash = $2 AND file_index = $3 AND imdb_id IS NULL',
+              [movieImdbId, row.info_hash, row.file_index]
+            );
+            console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
+          } catch (updateErr) {
+            // Ignore update errors
+          }
+        }
+      }
+    }
+    
+    return result.rows;
+  };
+
   try {
     // Basic sanitation
     const cleanQuery = titleQuery.replace(/[^\w\s]/g, ' ').trim().replace(/\s+/g, ' & ');
@@ -1369,63 +1442,21 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} file-matches for "${titleQuery}"`);
-    return result.rows;
+    console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
+    
+    // 🔧 FIX: If FTS returns 0 results, also try ILIKE fallback
+    // This is needed for file titles like "(2013) Frozen.mkv" where FTS doesn't index well
+    if (result.rows.length > 0) {
+      return result.rows;
+    }
+    console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
+    return await runIlikeSearch();
 
   } catch (error) {
     // Fallback if FTS syntax error (e.g. strict chars)
     console.warn(`⚠️ [DB] FTS File Search failed, trying simple ILIKE. Error: ${error.message}`);
     try {
-      let query = `
-          SELECT 
-            f.file_index,
-            f.title as file_title,
-            f.size as file_size,
-            t.info_hash,
-            t.provider,
-            t.title as torrent_title,
-            t.size as torrent_size,
-            t.seeders,
-            t.imdb_id,
-            t.cached_rd,
-            t.type as torrent_type,
-            f.imdb_id as file_imdb_id
-          FROM files f
-          JOIN torrents t ON f.info_hash = t.info_hash
-          WHERE f.title ILIKE $1
-        `;
-      const params = [`%${titleQuery}%`];
-      let paramIndex = 2;
-
-      // 🎬 FILTER: Year in filename
-      if (year) {
-        query += ` AND f.title ~ $${paramIndex}`;
-        params.push(`(\\(${year}\\)|[^0-9]${year}[^0-9])`);
-        paramIndex++;
-      }
-
-      // 🎬 FILTER 1: Exclude series torrents when searching for movies
-      if (excludeSeries) {
-        query += ` AND (t.type IS NULL OR t.type != 'series')`;
-      }
-
-      // 🎬 FILTER 2: Only include files with matching IMDb or NULL
-      if (movieImdbId) {
-        query += ` AND (f.imdb_id IS NULL OR f.imdb_id = $${paramIndex})`;
-        params.push(movieImdbId);
-        paramIndex++;
-      }
-
-      if (providers && Array.isArray(providers) && providers.length > 0) {
-        const patterns = providers.map((p, i) => `t.provider ILIKE $${paramIndex + i}`).join(' OR ');
-        query += ` AND (${patterns})`;
-        params.push(...providers.map(p => `%${p}%`));
-      }
-
-      query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
-      const result = await pool.query(query, params);
-      console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
-      return result.rows;
+      return await runIlikeSearch();
     } catch (err2) {
       console.error(`❌ [DB] Error searching files by title:`, err2.message);
       return [];

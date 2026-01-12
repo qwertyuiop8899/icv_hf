@@ -3667,6 +3667,34 @@ async function getIMDbDetailsDirectly(imdbId) {
     }
 }
 
+// ✅ Get episode air_date from TMDB (for cache freshness check)
+async function getEpisodeAirDate(tmdbId, season, episode, tmdbApiKey) {
+    if (!tmdbId || !season || !episode || !tmdbApiKey) return null;
+    try {
+        const url = `${TMDB_BASE_URL}/tv/${tmdbId}/season/${season}/episode/${episode}?api_key=${tmdbApiKey}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data.air_date || null;
+    } catch (error) {
+        console.error(`⚠️ [TMDB Episode] Failed to get air_date for S${season}E${episode}: ${error.message}`);
+        return null;
+    }
+}
+
+// ✅ Check if content is too recent (< 2 days) - don't cache fresh releases
+function isContentTooRecent(releaseDate) {
+    if (!releaseDate) return false; // If no date, allow caching
+    try {
+        const release = new Date(releaseDate);
+        const now = new Date();
+        const diffHours = (now - release) / (1000 * 60 * 60);
+        return diffHours < 48; // Less than 48 hours = too recent
+    } catch {
+        return false;
+    }
+}
+
 async function getTMDBDetailsByImdb(imdbId, tmdbApiKey) {
     try {
         const response = await fetch(`${TMDB_BASE_URL}/find/${imdbId}?api_key=${tmdbApiKey}&external_source=imdb_id`, {
@@ -3686,8 +3714,9 @@ async function getTMDBDetailsByImdb(imdbId, tmdbApiKey) {
                 title: movie.title,
                 year: year,
                 type: 'movie',
-                imdbId: imdbId,  // ✅ FIX: Include imdbId
-                tmdbId: movie.id
+                imdbId: imdbId,
+                tmdbId: movie.id,
+                releaseDate: movie.release_date || null  // ✅ For cache freshness check
             };
         }
 
@@ -3739,7 +3768,8 @@ async function getTMDBDetailsByTmdb(tmdbId, type, tmdbApiKey) {
             year: year,
             type: type,
             tmdbId: tmdbId,
-            imdbId: imdbId // ✅ Include IMDb from external_ids
+            imdbId: imdbId,
+            releaseDate: releaseDate || null  // ✅ For cache freshness check
         };
     } catch (error) {
         console.error(`❌ TMDB fetch error for ${type} ${tmdbId}:`, error);
@@ -7734,6 +7764,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // 4. User must NOT be db_only (db_only can read but never saves)
         // 5. User must have ALL essential providers enabled (UIndex is optional)
         // 6. User must NOT have full_ita=true (cache stores COMPLETE results)
+        // 7. Content must NOT be too recent (< 48 hours) - fresh releases get incomplete results
         const hasAllEssentialProviders = (
             config.use_corsaronero !== false &&
             config.use_knaben !== false &&
@@ -7745,13 +7776,35 @@ async function handleStream(type, id, config, workerOrigin) {
             // UIndex is intentionally NOT required
         );
         
+        // ✅ Check if content is too recent (< 48 hours since release)
+        let contentReleaseDate = null;
+        let isTooRecent = false;
+        
+        if (type === 'series' && season && episode && mediaDetails?.tmdbId) {
+            // For series: get episode air_date
+            contentReleaseDate = await getEpisodeAirDate(mediaDetails.tmdbId, season, episode, tmdbKey);
+        } else if (type === 'movie' && mediaDetails?.releaseDate) {
+            // For movies: use release_date from mediaDetails
+            contentReleaseDate = mediaDetails.releaseDate;
+        }
+        
+        if (contentReleaseDate) {
+            isTooRecent = isContentTooRecent(contentReleaseDate);
+            if (isTooRecent) {
+                const release = new Date(contentReleaseDate);
+                const hoursAgo = Math.round((new Date() - release) / (1000 * 60 * 60));
+                console.log(`📅 [CACHE] Content released ${hoursAgo}h ago (${contentReleaseDate}) - too recent for cache`);
+            }
+        }
+        
         const canSaveToCache = (
             GLOBAL_CACHE_ENABLED &&
             filteredResults.length > 0 &&
             useGlobalCache &&
             !config.db_only &&
             !config.full_ita &&  // ✅ Only save if full_ita=false (cache stores COMPLETE results)
-            hasAllEssentialProviders
+            hasAllEssentialProviders &&
+            !isTooRecent  // ✅ Don't cache fresh releases (< 48 hours)
         );
         
         if (canSaveToCache) {
@@ -7795,6 +7848,7 @@ async function handleStream(type, id, config, workerOrigin) {
             if (config.db_only) reasons.push('db_only=true');
             if (config.full_ita) reasons.push('full_ita=true (need complete results)');
             if (!hasAllEssentialProviders) reasons.push('missing providers');
+            if (isTooRecent) reasons.push(`too recent (< 48h since release: ${contentReleaseDate})`);
             console.log(`⏭️ [CACHE SKIP] Not saving to cache: ${reasons.join(', ')}`);
         }
 

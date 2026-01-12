@@ -5179,6 +5179,8 @@ async function handleStream(type, id, config, workerOrigin) {
         let mediaDetails = null;
         let filteredResults = [];
         let searchQueries = [];
+        let italianTitle = null;
+        let originalTitle = null;
 
         // ✅ GLOBAL CACHE HIT: Load data from cache, skip search
         if (fromGlobalCache && cachedData) {
@@ -5190,7 +5192,18 @@ async function handleStream(type, id, config, workerOrigin) {
             imdbId = cachedData.imdbId || null;
             kitsuId = cachedData.kitsuId || null;
             searchQueries = cachedData.searchQueries || [];
+            italianTitle = cachedData.italianTitle || null;
+            originalTitle = cachedData.originalTitle || null;
             console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
+        }
+        
+        // ✅ Initialize DB connection (needed for debrid cache check even on cache hit)
+        let dbEnabled = false;
+        try {
+            dbHelper.initDatabase();
+            dbEnabled = true;
+        } catch (error) {
+            console.error('❌ [DB] Failed to initialize database:', error.message);
         }
         
         // ✅ GLOBAL CACHE MISS: Do the full search
@@ -5297,8 +5310,7 @@ async function handleStream(type, id, config, workerOrigin) {
         }
 
         // --- NUOVA MODIFICA: Ottieni il titolo in italiano ---
-        let italianTitle = null;
-        let originalTitle = null;
+        // (italianTitle and originalTitle already declared outside this block)
         if (mediaDetails.tmdbId && !kitsuId) { // Solo per film/serie da TMDB
             try {
                 // Convert 'series' to 'tv' for TMDB API
@@ -5399,16 +5411,10 @@ async function handleStream(type, id, config, workerOrigin) {
         const displayTitle = Array.isArray(mediaDetails.titles) ? mediaDetails.titles[0] : mediaDetails.title;
         console.log(`✅ Found: ${displayTitle} (${mediaDetails.year})`);
 
-        // ✅ STEP 1: INITIALIZE DATABASE (always try, fallback to hardcoded credentials)
-        let dbEnabled = false;
-        try {
-            // Call initDatabase WITHOUT parameters to use hardcoded fallback credentials
-            dbHelper.initDatabase();
-            dbEnabled = true;
-            console.log('💾 [DB] Database connection initialized');
-        } catch (error) {
-            console.error('❌ [DB] Failed to initialize database:', error.message);
-            console.error('❌ [DB] Will continue without database');
+        // ✅ STEP 1: DATABASE already initialized outside if block
+        // (dbEnabled is already set)
+        if (dbEnabled) {
+            console.log('💾 [DB] Database connection active');
         }
 
         // ✅ STEP 2: SEARCH DATABASE FIRST (if enabled)
@@ -7776,7 +7782,9 @@ async function handleStream(type, id, config, workerOrigin) {
                 episode: episode,
                 imdbId: imdbId,
                 kitsuId: kitsuId,
-                searchQueries: searchQueries || []
+                searchQueries: searchQueries || [],
+                italianTitle: italianTitle,
+                originalTitle: originalTitle
             };
             
             // Save to DB cache (persistent)

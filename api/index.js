@@ -6035,7 +6035,8 @@ async function handleStream(type, id, config, workerOrigin) {
         if (useUIndex) {
             parallelSearchTasks.push(async () => {
                 const uindexQueries = [];
-                const seasonStr = String(season).padStart(2, '0');
+                const isMovie = type === 'movie';
+                const seasonStr = season ? String(season).padStart(2, '0') : null;
 
                 // ✅ Costruisci validationMetadata per UIndex (come Knaben)
                 const uindexValidationMetadata = {
@@ -6046,30 +6047,49 @@ async function handleStream(type, id, config, workerOrigin) {
                 };
                 console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
 
-                // 🇮🇹 PRIORITY: Italian title first (cleaned, without symbols)
-                if (italianTitle) {
-                    const cleanedItalian = cleanTitleForSearch(italianTitle);
-                    // Most specific to least specific
-                    uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
-                    uindexQueries.push(`${cleanedItalian} ita`);
-                    uindexQueries.push(`${cleanedItalian} S${seasonStr}`);
-                    uindexQueries.push(`${cleanedItalian}`);
-                }
-
-                // 🌍 FALLBACK: English title (only if different from Italian)
-                const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
-                const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-                if (cleanedEnglish !== cleanedItalian) {
-                    uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
-                    uindexQueries.push(`${cleanedEnglish} ita`);
+                // 🎬 FILM: Solo 2 query semplici
+                if (isMovie) {
+                    // Query 1: Titolo italiano + ita
+                    if (italianTitle) {
+                        const cleanedItalian = cleanTitleForSearch(italianTitle);
+                        uindexQueries.push(`${cleanedItalian} ita`);
+                    }
+                    // Query 2: Titolo inglese + ita (se diverso)
+                    const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
+                    const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                    if (cleanedEnglish !== cleanedItalian) {
+                        uindexQueries.push(`${cleanedEnglish} ita`);
+                    }
+                } else {
+                    // 📺 SERIE TV: Solo 2 query (come film)
+                    // Query 1: Titolo italiano + stagione + ita
+                    if (italianTitle) {
+                        const cleanedItalian = cleanTitleForSearch(italianTitle);
+                        if (seasonStr) {
+                            uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
+                        } else {
+                            uindexQueries.push(`${cleanedItalian} ita`);
+                        }
+                    }
+                    // Query 2: Titolo inglese + stagione + ita (se diverso)
+                    const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
+                    const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                    if (cleanedEnglish !== cleanedItalian) {
+                        if (seasonStr) {
+                            uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
+                        } else {
+                            uindexQueries.push(`${cleanedEnglish} ita`);
+                        }
+                    }
                 }
 
                 const uniqueUindexQueries = [...new Set(uindexQueries)];
-                console.log(`📊 [UIndex] Running optimized queries (ITA priority):`, uniqueUindexQueries);
+                console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
 
                 // Track if we found results with Italian title (to enable early-exit)
                 let foundWithItalianTitle = false;
-                const italianQueryCount = italianTitle ? 4 : 0; // First 4 queries are Italian title
+                // Now we always have max 1 Italian query + 1 English query (if different)
+                const italianQueryCount = italianTitle ? 1 : 0;
 
                 for (let i = 0; i < uniqueUindexQueries.length; i++) {
                     const q = uniqueUindexQueries[i];

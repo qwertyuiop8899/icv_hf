@@ -5384,22 +5384,24 @@ async function handleStream(type, id, config, workerOrigin) {
                 // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
                 // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
                 // 🎬 FILTRO DOPPIO: excludeSeries=true + movieImdbId per evitare risultati di serie TV con parole simili nel titolo episodio
+                // 🔧 FIX: Also filter by year to match exact movie (e.g., Frozen 2013 vs Frozen II 2019)
                 const fileSearchOptions = {
                     movieImdbId: mediaDetails.imdbId,
-                    excludeSeries: true
+                    excludeSeries: true,
+                    year: mediaDetails.year ? String(mediaDetails.year) : null
                 };
 
                 if (mediaDetails.title) {
                     const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders, fileSearchOptions);
                     if (titleMatches && titleMatches.length > 0) {
-                        console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}"`);
+                        console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}" (${mediaDetails.year})`);
                         packResults.push(...titleMatches);
                     }
                 }
                 if (mediaDetails.originalName && mediaDetails.originalName !== mediaDetails.title) {
                     const origMatches = await dbHelper.searchFilesByTitle(mediaDetails.originalName, selectedProviders, fileSearchOptions);
                     if (origMatches && origMatches.length > 0) {
-                        console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}"`);
+                        console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
                         packResults.push(...origMatches);
                     }
                 }

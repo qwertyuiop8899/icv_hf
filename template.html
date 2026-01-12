@@ -686,6 +686,10 @@
                         <input type="checkbox" id="full_ita">
                         <span>🇮🇹 FULL ITA (Solo risultati con "ITA" nel nome)</span>
                     </label>
+                    <label style="background: rgba(100, 100, 200, 0.15); border-color: rgba(150, 150, 255, 0.4);">
+                        <input type="checkbox" id="use_global_cache" checked>
+                        <span>💾 Usa Cache Globale (Ricerche più veloci, condivise)</span>
+                    </label>
                     <label>
                         <input type="checkbox" id="use_max_res_limit">
                         <span>✂️ Limita Risultati per Risoluzione</span>
@@ -845,6 +849,7 @@
         const useRarbgCheckbox = document.getElementById("use_rarbg");
         const fullItaCheckbox = document.getElementById("full_ita");
         const dbOnlyCheckbox = document.getElementById("db_only");
+        const useGlobalCacheCheckbox = document.getElementById("use_global_cache");
         const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
         const maxResLimitSelect = document.getElementById("max_res_limit");
 
@@ -880,6 +885,36 @@
             updateInstallLink();
         });
 
+        // Disable/gray-out provider checkboxes when db_only is active
+        function updateProviderState() {
+            const isDbOnly = dbOnlyCheckbox.checked;
+            const providerCheckboxes = [
+                useCorsaroNeroCheckbox,
+                useUIndexCheckbox,
+                useKnabenCheckbox,
+                useTorrentGalaxyCheckbox,
+                useTorrentioCheckbox,
+                useMediaFusionCheckbox,
+                useCometCheckbox,
+                useRarbgCheckbox
+            ];
+            
+            providerCheckboxes.forEach(checkbox => {
+                if (checkbox) {
+                    checkbox.disabled = isDbOnly;
+                    checkbox.parentElement.style.opacity = isDbOnly ? '0.5' : '1';
+                    checkbox.parentElement.style.pointerEvents = isDbOnly ? 'none' : 'auto';
+                }
+            });
+        }
+        
+        dbOnlyCheckbox.addEventListener('change', () => {
+            updateProviderState();
+            updateInstallLink();
+        });
+        
+        // Initialize provider state on page load
+        updateProviderState();
 
 
         function updateInstallLink() {
@@ -949,6 +984,7 @@
             config.use_rarbg = useRarbgCheckbox.checked;
             config.full_ita = fullItaCheckbox.checked;
             config.db_only = dbOnlyCheckbox.checked;
+            config.use_global_cache = useGlobalCacheCheckbox.checked;
 
             // Max Resolution Limit (only if checkbox is checked)
             if (useMaxResLimitCheckbox.checked) {
@@ -1178,6 +1214,10 @@
                     const el = document.getElementById('db_only');
                     if (el) el.checked = cfg.db_only;
                 }
+                if (cfg.use_global_cache !== undefined) {
+                    const el = document.getElementById('use_global_cache');
+                    if (el) el.checked = cfg.use_global_cache;
+                }
 
                 // Max Resolution Limit
                 if (cfg.max_res_limit) {
@@ -1278,6 +1318,7 @@
         useCometCheckbox.addEventListener('change', updateInstallLink);
         useRarbgCheckbox.addEventListener('change', updateInstallLink);
         fullItaCheckbox.addEventListener('change', updateInstallLink);
+        useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
         useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
         maxResLimitSelect.addEventListener('change', updateInstallLink);
 

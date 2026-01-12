@@ -546,23 +546,57 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
     let totalPackSize = 0;
     let videoFiles = [];
     let dbCacheCorrupted = forceRefresh; // If forceRefresh, treat cache as corrupted
+    const PACK_TTL_DAYS = 30; // TTL for pack files cache
 
-    // 1️⃣ CHECK DB CACHE Logic (Reused from Series) - SKIP if forceRefresh
-    if (!forceRefresh && dbHelper && typeof dbHelper.getSeriesPackFiles === 'function') {
+    // 1️⃣ CHECK DB CACHE Logic with TTL - SKIP if forceRefresh
+    // 🚀 SPEEDUP: First try getPackFiles (with TTL check), then fallback to getSeriesPackFiles
+    if (!forceRefresh && dbHelper) {
         try {
-            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
-            if (cachedFiles && cachedFiles.length > 0) {
-                console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
+            // 🚀 SPEEDUP: Try new getPackFiles with TTL first
+            if (typeof dbHelper.getPackFiles === 'function') {
+                const { files: cachedFiles, expired } = await dbHelper.getPackFiles(infoHash.toLowerCase(), PACK_TTL_DAYS);
                 
-                // 🔧 FIX: Check if cache is corrupted (too few files - likely from old bug)
-                // A real movie pack should have at least 2 video files
-                const cachedVideoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-                if (cachedVideoFiles.length < 2) {
-                    console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching from debrid...`);
+                if (cachedFiles && cachedFiles.length > 0 && !expired) {
+                    console.log(`💾 [PACK-HANDLER] 🚀 SPEEDUP: Using ${cachedFiles.length} cached pack files (TTL OK)`);
+                    
+                    // Convert to expected format
+                    const cachedVideoFiles = cachedFiles
+                        .filter(f => isVideoFile(f.file_path) && f.file_size > 25 * 1024 * 1024)
+                        .map(f => ({
+                            id: f.file_index,
+                            path: f.file_path,
+                            bytes: parseInt(f.file_size) || 0
+                        }));
+                    
+                    if (cachedVideoFiles.length >= 2) {
+                        videoFiles = cachedVideoFiles;
+                        totalPackSize = cachedFiles.reduce((acc, f) => acc + (parseInt(f.file_size) || 0), 0);
+                        console.log(`🚀 [PACK-HANDLER] SPEEDUP: Skipped RD API call! Using ${videoFiles.length} files from DB`);
+                    } else {
+                        console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching...`);
+                        dbCacheCorrupted = true;
+                    }
+                } else if (expired) {
+                    console.log(`⏰ [PACK-HANDLER] Pack files TTL expired (>${PACK_TTL_DAYS} days). Re-fetching...`);
                     dbCacheCorrupted = true;
-                } else {
-                    videoFiles = cachedVideoFiles;
-                    totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+                }
+            }
+            
+            // Fallback to old method if new method didn't find files
+            if (videoFiles.length === 0 && !dbCacheCorrupted && typeof dbHelper.getSeriesPackFiles === 'function') {
+                const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                if (cachedFiles && cachedFiles.length > 0) {
+                    console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE (fallback) for ${infoHash.substring(0, 8)}`);
+                    
+                    // 🔧 FIX: Check if cache is corrupted (too few files - likely from old bug)
+                    const cachedVideoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
+                    if (cachedVideoFiles.length < 2) {
+                        console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching from debrid...`);
+                        dbCacheCorrupted = true;
+                    } else {
+                        videoFiles = cachedVideoFiles;
+                        totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+                    }
                 }
             }
         } catch (err) {

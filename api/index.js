@@ -432,7 +432,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             },
             addon: {
                 name: 'IlCorsaroViola',
-                version: '4.0.0',
+                version: '5.0.0',
                 presetId: preset,
                 manifestUrl: null
             },
@@ -9630,7 +9630,7 @@ export default async function handler(req, res) {
 
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '4.0.0',
+                version: '5.0.0',
                 name: addonName,
                 description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
@@ -11929,7 +11929,7 @@ export default async function handler(req, res) {
             const health = {
                 status: 'OK',
                 addon: 'IlCorsaroViola',
-                version: '2.0.0',
+                version: '5.0.0',
                 uptime: Date.now(),
                 cache: {
                     entries: cache.size,

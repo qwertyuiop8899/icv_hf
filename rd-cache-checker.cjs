@@ -247,17 +247,18 @@ async function enrichCacheBackground(items, token, dbHelper) {
 
     console.log(`🔄 [RD Cache Background] Starting enrichment for ${items.length} hashes...`);
 
-    // Process in background - don't await from caller
-    (async () => {
-        try {
-            const results = [];
+    // ⚠️ DELAYED: Wait 3 seconds before starting to not interfere with main response
+    setTimeout(() => {
+        (async () => {
+            try {
+                const results = [];
 
-            for (const item of items) {
-                const result = await checkSingleHash(item.hash, item.magnet, token);
-                results.push(result);
+                for (const item of items) {
+                    const result = await checkSingleHash(item.hash, item.magnet, token);
+                    results.push(result);
 
-                // Longer delay for background processing to be extra gentle on API
-                await sleep(500);
+                    // Longer delay for background processing to be extra gentle on API
+                    await sleep(1000);
             }
 
             // Save all results to DB
@@ -299,7 +300,8 @@ async function enrichCacheBackground(items, token, dbHelper) {
         } catch (error) {
             console.error(`❌ [RD Cache Background] Error:`, error.message);
         }
-    })();
+        })();
+    }, 3000); // 3 second delay to let response complete first
 }
 
 // Export for Node.js

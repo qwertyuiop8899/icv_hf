@@ -4268,6 +4268,12 @@ const cache = new Map();
 const CACHE_TTL = 1800000; // 30 minutes
 const MAX_CACHE_ENTRIES = 1000;
 
+// ✅ Stream results cache - caches final stream results for repeated requests
+const streamCache = new Map();
+const STREAM_CACHE_TTL = 3 * 60 * 60 * 1000; // 3 hours
+const MAX_STREAM_CACHE_ENTRIES = 200;
+const STREAM_CACHE_ENABLED = false; // ⚠️ DISABLED FOR TESTING - set to true for production
+
 function cleanupCache() {
     const now = Date.now();
     const entries = Array.from(cache.entries());
@@ -5056,6 +5062,29 @@ async function handleStream(type, id, config, workerOrigin) {
     console.log(`\n🎯 Processing ${type} with ID: ${decodedId}`);
 
     const startTime = Date.now();
+
+    // ✅ Stream cache - check if we have recent results for this request
+    // Cache key includes: type, id, debrid services enabled, and db_only flag
+    const useRD = config.use_rd && config.rd_key;
+    const useTB = config.use_torbox && config.torbox_key;
+    const useAD = config.use_alldebrid && config.ad_key;
+    const streamCacheKey = `stream:${type}:${decodedId}:rd=${useRD}:tb=${useTB}:ad=${useAD}:db=${config.db_only || false}`;
+    
+    if (STREAM_CACHE_ENABLED && streamCache.has(streamCacheKey)) {
+        const cached = streamCache.get(streamCacheKey);
+        if (Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
+            const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
+            console.log(`⚡ [CACHE HIT] Using cached stream results (${cacheAge}s old, ${cached.data.streams?.length || 0} streams)`);
+            // Mark as cached for debug purposes
+            const cachedResult = { ...cached.data };
+            if (cachedResult._debug) {
+                cachedResult._debug = { ...cachedResult._debug, fromCache: true, cacheAgeSeconds: cacheAge };
+            }
+            return cachedResult;
+        } else {
+            streamCache.delete(streamCacheKey);
+        }
+    }
 
     try {
         // ✅ TMDB API Key from config or environment variable
@@ -8790,7 +8819,8 @@ async function handleStream(type, id, config, workerOrigin) {
             console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
         }
 
-        return {
+        // ✅ Cache successful results for faster repeated searches
+        const result = {
             streams,
             _debug: {
                 originalQuery: searchQueries[0],
@@ -8799,9 +8829,25 @@ async function handleStream(type, id, config, workerOrigin) {
                 finalStreams: streams.length,
                 cachedStreams: cachedCount,
                 processingTimeMs: totalTime,
-                tmdbData: mediaDetails
+                tmdbData: mediaDetails,
+                fromCache: false
             }
         };
+
+        // Only cache if we have valid streams AND cache is enabled
+        if (STREAM_CACHE_ENABLED && streams.length > 0) {
+            // Cleanup old entries if cache is too large
+            if (streamCache.size >= MAX_STREAM_CACHE_ENTRIES) {
+                const entriesToDelete = Math.floor(MAX_STREAM_CACHE_ENTRIES * 0.2); // Delete 20%
+                const keysToDelete = Array.from(streamCache.keys()).slice(0, entriesToDelete);
+                keysToDelete.forEach(key => streamCache.delete(key));
+                console.log(`🧹 [Stream Cache] Cleaned ${entriesToDelete} old entries`);
+            }
+            streamCache.set(streamCacheKey, { data: result, timestamp: Date.now() });
+            console.log(`💾 [CACHE SAVE] Cached ${streams.length} streams for key: ${type}:${decodedId} (cache size: ${streamCache.size})`);
+        }
+
+        return result;
 
     } catch (error) {
         const totalTime = Date.now() - startTime;

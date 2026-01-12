@@ -3689,7 +3689,7 @@ function isContentTooRecent(releaseDate) {
         const release = new Date(releaseDate);
         const now = new Date();
         const diffHours = (now - release) / (1000 * 60 * 60);
-        return diffHours < 48; // Less than 48 hours = too recent
+        return diffHours < 120; // Less than 48 hours = too recent
     } catch {
         return false;
     }

@@ -81,6 +81,11 @@ async function runMigrations() {
       ALTER TABLE pack_files DROP CONSTRAINT IF EXISTS pack_files_pack_hash_imdb_id_key
     `);
     
+    // 🔧 FIX: Drop foreign key constraint that causes errors when pack not in torrents yet
+    await pool.query(`
+      ALTER TABLE pack_files DROP CONSTRAINT IF EXISTS fk_pack_hash
+    `);
+    
     // Create new unique index on (pack_hash, file_index)
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS pack_files_hash_fileindex_idx 

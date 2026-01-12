@@ -568,12 +568,13 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
                             bytes: parseInt(f.file_size) || 0
                         }));
                     
-                    if (cachedVideoFiles.length >= 2) {
+                    // ✅ FIX: Accept 1+ files (single movie in pack is valid)
+                    if (cachedVideoFiles.length >= 1) {
                         videoFiles = cachedVideoFiles;
                         totalPackSize = cachedFiles.reduce((acc, f) => acc + (parseInt(f.file_size) || 0), 0);
                         console.log(`🚀 [PACK-HANDLER] SPEEDUP: Skipped RD API call! Using ${videoFiles.length} files from DB`);
                     } else {
-                        console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching...`);
+                        console.log(`⚠️ [PACK-HANDLER] DB cache empty (0 video files). Fetching from debrid...`);
                         dbCacheCorrupted = true;
                     }
                 } else if (expired) {
@@ -588,14 +589,14 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
                 if (cachedFiles && cachedFiles.length > 0) {
                     console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE (fallback) for ${infoHash.substring(0, 8)}`);
                     
-                    // 🔧 FIX: Check if cache is corrupted (too few files - likely from old bug)
+                    // 🔧 FIX: Check if cache is corrupted (0 files)
                     const cachedVideoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-                    if (cachedVideoFiles.length < 2) {
-                        console.log(`⚠️ [PACK-HANDLER] DB cache seems corrupted (only ${cachedVideoFiles.length} video files). Re-fetching from debrid...`);
-                        dbCacheCorrupted = true;
-                    } else {
+                    if (cachedVideoFiles.length >= 1) {
                         videoFiles = cachedVideoFiles;
                         totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
+                    } else {
+                        console.log(`⚠️ [PACK-HANDLER] DB cache empty (0 video files). Fetching from debrid...`);
+                        dbCacheCorrupted = true;
                     }
                 }
             }

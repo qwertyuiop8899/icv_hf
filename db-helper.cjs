@@ -1312,12 +1312,12 @@ async function getSeriesPackFiles(infoHash) {
 async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   if (!pool) throw new Error('Database not initialized');
 
-  const { movieImdbId = null, excludeSeries = false } = options;
+  const { movieImdbId = null, excludeSeries = false, year = null } = options;
 
   try {
     // Basic sanitation
     const cleanQuery = titleQuery.replace(/[^\w\s]/g, ' ').trim().replace(/\s+/g, ' & ');
-    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}" (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
+    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
 
     let query = `
       SELECT 
@@ -1340,6 +1340,13 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
     const params = [cleanQuery];
     let paramIndex = 2;
+
+    // 🎬 FILTER: Year in filename (e.g. "(2013)" or ".2013.")
+    if (year) {
+      query += ` AND f.title ~ $${paramIndex}`;
+      params.push(`(\\(${year}\\)|[^0-9]${year}[^0-9])`);
+      paramIndex++;
+    }
 
     // 🎬 FILTER 1: Exclude series torrents when searching for movies
     if (excludeSeries) {
@@ -1389,6 +1396,13 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
         `;
       const params = [`%${titleQuery}%`];
       let paramIndex = 2;
+
+      // 🎬 FILTER: Year in filename
+      if (year) {
+        query += ` AND f.title ~ $${paramIndex}`;
+        params.push(`(\\(${year}\\)|[^0-9]${year}[^0-9])`);
+        paramIndex++;
+      }
 
       // 🎬 FILTER 1: Exclude series torrents when searching for movies
       if (excludeSeries) {

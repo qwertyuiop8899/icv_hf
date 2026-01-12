@@ -253,24 +253,27 @@ async function enrichCacheBackground(items, token, dbHelper) {
 
     console.log(`🔄 [RD Cache Background] Queued ${items.length} hashes for background enrichment...`);
 
-    // ⚠️ TRUE BACKGROUND: Runs AFTER response is sent
-    // Sequential processing with 1 second delay between calls
+    // ⚠️ TRUE BACKGROUND: Runs 5s AFTER response is sent
+    // This gives time for the HTTP response to complete
     setTimeout(() => {
         (async () => {
-            console.log(`🔄 [RD Cache Background] Starting enrichment...`);
+            console.log(`🔄 [RD Cache Background] Starting enrichment (delayed 5s)...`);
             try {
                 const results = [];
                 let skippedAlreadyCached = 0;
 
+                // 🚀 SPEEDUP: Check ALL hashes at once in DB, not one by one
+                let alreadyCachedHashes = {};
+                if (dbHelper && typeof dbHelper.getRdCachedAvailability === 'function') {
+                    const allHashes = items.map(i => i.hash);
+                    alreadyCachedHashes = await dbHelper.getRdCachedAvailability(allHashes);
+                }
+
                 for (const item of items) {
-                    // ✅ CHECK DB FIRST: Skip if already checked
-                    if (dbHelper && typeof dbHelper.getRdCachedAvailability === 'function') {
-                        const existing = await dbHelper.getRdCachedAvailability([item.hash]);
-                        if (existing[item.hash] !== undefined) {
-                            // Already in DB (cached true or false), skip
-                            skippedAlreadyCached++;
-                            continue;
-                        }
+                    // ✅ CHECK from pre-fetched map: Skip if already checked
+                    if (alreadyCachedHashes[item.hash] !== undefined) {
+                        skippedAlreadyCached++;
+                        continue;
                     }
                     
                     // 1 second delay BEFORE each call (RD allows 200/min = 1 every 300ms, but be safe)

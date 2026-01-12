@@ -7508,6 +7508,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 
                 // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
                 // This pre-fetches pack files for future searches
+                // ⚠️ DELAYED: Wait 5 seconds AFTER response is sent to avoid blocking RD API
                 if (skipped.length > 0 && (config.rd_key || config.torbox_key)) {
                     const candidateTitles = [
                         mediaDetails.title,
@@ -7516,38 +7517,40 @@ async function handleStream(type, id, config, workerOrigin) {
                     ].filter(Boolean);
                     const uniqueTitles = [...new Set(candidateTitles)];
                     
-                    // Fire and forget - don't await
-                    (async () => {
-                        console.log(`🔄 [MOVIE VERIFY BG] Starting background verification for ${skipped.length} packs...`);
-                        const BG_DELAY_MS = 500; // Slower to avoid rate limits
-                        
-                        for (let i = 0; i < skipped.length; i++) {
-                            const result = skipped[i];
-                            const infoHash = result.infoHash?.toLowerCase();
-                            if (!infoHash) continue;
+                    // Fire and forget - DELAYED to not interfere with response
+                    setTimeout(() => {
+                        (async () => {
+                            console.log(`🔄 [MOVIE VERIFY BG] Starting background verification for ${skipped.length} packs (delayed 5s)...`);
+                            const BG_DELAY_MS = 1000; // 1 second between each to be gentle on API
                             
-                            // Skip if not likely a pack
-                            const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
-                            if (!isLikelyPack) continue;
-                            
-                            await new Promise(resolve => setTimeout(resolve, BG_DELAY_MS));
-                            
-                            try {
-                                await packFilesHandler.resolveMoviePackFile(
-                                    infoHash,
-                                    config,
-                                    mediaDetails.imdbId,
-                                    uniqueTitles,
-                                    mediaDetails.year,
-                                    dbHelper
-                                );
-                                console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
-                            } catch (e) {
-                                // Ignore errors in background
+                            for (let i = 0; i < skipped.length; i++) {
+                                const result = skipped[i];
+                                const infoHash = result.infoHash?.toLowerCase();
+                                if (!infoHash) continue;
+                                
+                                // Skip if not likely a pack
+                                const isLikelyPack = packFilesHandler.isSeasonPack(result.title) || (result.sizeInBytes > 4 * 1024 * 1024 * 1024);
+                                if (!isLikelyPack) continue;
+                                
+                                await new Promise(resolve => setTimeout(resolve, BG_DELAY_MS));
+                                
+                                try {
+                                    await packFilesHandler.resolveMoviePackFile(
+                                        infoHash,
+                                        config,
+                                        mediaDetails.imdbId,
+                                        uniqueTitles,
+                                        mediaDetails.year,
+                                        dbHelper
+                                    );
+                                    console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
+                                } catch (e) {
+                                    // Ignore errors in background
+                                }
                             }
-                        }
-                        console.log(`✅ [MOVIE VERIFY BG] Background verification complete`);
-                    })().catch(() => {});
+                            console.log(`✅ [MOVIE VERIFY BG] Background verification complete`);
+                        })().catch(() => {});
+                    }, 5000); // 5 second delay to let response complete first
                 }
             }
         }

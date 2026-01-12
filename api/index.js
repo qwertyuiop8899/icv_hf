@@ -7737,7 +7737,7 @@ async function handleStream(type, id, config, workerOrigin) {
         const hasAllEssentialProviders = (
             config.use_corsaronero !== false &&
             config.use_knaben !== false &&
-            config.use_torrentgalaxy === true &&
+            config.use_torrentgalaxy !== false &&
             config.use_rarbg !== false &&
             config.use_torrentio !== false &&
             config.use_mediafusion !== false &&

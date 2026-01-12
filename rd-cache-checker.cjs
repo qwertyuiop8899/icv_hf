@@ -135,6 +135,9 @@ async function checkSingleHash(infoHash, magnet, token) {
         let mainFileSize = 0;
         let torrentTitle = info.filename || ''; // Get torrent title
         let torrentSize = info.bytes || 0;     // Get total torrent size
+        
+        // 🚀 SPEEDUP: Extract ALL video files for pack support
+        let allVideoFiles = [];
 
         if (info?.files && Array.isArray(info.files)) {
             // Video extensions to look for
@@ -144,6 +147,15 @@ async function checkSingleHash(infoHash, magnet, token) {
             const videoFiles = info.files
                 .filter(f => videoExtensions.test(f.path))
                 .sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+            
+            // 🚀 SPEEDUP: Save all video files (>25MB) for pack resolution
+            allVideoFiles = info.files
+                .filter(f => videoExtensions.test(f.path) && f.bytes > 25 * 1024 * 1024)
+                .map(f => ({
+                    id: f.id,
+                    path: f.path,
+                    bytes: f.bytes
+                }));
 
             if (videoFiles.length > 0) {
                 // Get filename from path (remove leading slashes/folders)
@@ -151,6 +163,11 @@ async function checkSingleHash(infoHash, magnet, token) {
                 mainFileName = fullPath.split('/').pop() || fullPath;
                 mainFileSize = videoFiles[0].bytes || 0; // ✅ Capture file size
                 console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}... (${(mainFileSize / 1024 / 1024).toFixed(2)} MB)`);
+            }
+            
+            // 🚀 SPEEDUP: Log pack info
+            if (allVideoFiles.length > 1) {
+                console.log(`📦 [RD Cache] Pack detected: ${allVideoFiles.length} video files`);
             }
         }
 
@@ -165,7 +182,8 @@ async function checkSingleHash(infoHash, magnet, token) {
             torrent_title: torrentTitle, // ✅ Return torrent title
             size: torrentSize,           // ✅ Return total size
             file_title: mainFileName || null,
-            file_size: mainFileSize || null
+            file_size: mainFileSize || null,
+            files: allVideoFiles         // 🚀 SPEEDUP: Return all video files for pack resolution
         };
 
     } catch (error) {
@@ -218,6 +236,7 @@ async function checkCacheSync(items, token, limit = 5) {
 /**
  * Enrich cache in background (non-blocking)
  * Checks remaining hashes and saves results to DB for future queries
+ * 🚀 SPEEDUP: Also saves pack files to DB for instant pack resolution
  * 
  * @param {Array<{hash: string, magnet: string}>} items - Array of {hash, magnet} objects
  * @param {string} token - RealDebrid API token
@@ -254,6 +273,28 @@ async function enrichCacheBackground(items, token, dbHelper) {
 
                 await dbHelper.updateRdCacheStatus(cacheUpdates);
                 console.log(`✅ [RD Cache Background] Enriched ${results.length} hashes in DB`);
+            }
+            
+            // 🚀 SPEEDUP: Save pack files to DB for instant pack resolution
+            if (dbHelper && typeof dbHelper.insertPackFiles === 'function') {
+                for (const result of results) {
+                    // Only save if it's a pack (>1 video file) and cached
+                    if (result.cached && result.files && result.files.length > 1) {
+                        try {
+                            const packFilesData = result.files.map(f => ({
+                                pack_hash: result.hash.toLowerCase(),
+                                imdb_id: null, // Will be filled when matched
+                                file_index: f.id,
+                                file_path: f.path,
+                                file_size: f.bytes || 0
+                            }));
+                            await dbHelper.insertPackFiles(packFilesData);
+                            console.log(`📦 [RD Cache Background] Saved ${result.files.length} pack files for ${result.hash.substring(0, 8)}`);
+                        } catch (packErr) {
+                            console.warn(`⚠️ [RD Cache Background] Failed to save pack files: ${packErr.message}`);
+                        }
+                    }
+                }
             }
         } catch (error) {
             console.error(`❌ [RD Cache Background] Error:`, error.message);

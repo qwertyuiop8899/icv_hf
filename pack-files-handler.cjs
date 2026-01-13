@@ -12,6 +12,7 @@
  */
 
 const axios = require('axios');
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
 // Video file extensions
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
@@ -95,7 +96,7 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
 
     try {
         // 1. Aggiungi magnet link
-        console.log(`📦 [PACK-HANDLER] Adding magnet to RD for file list: ${infoHash.substring(0, 8)}...`);
+        if (DEBUG_MODE) console.log(`📦 [PACK-HANDLER] Adding magnet to RD for file list: ${infoHash.substring(0, 8)}...`);
         const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
 
         const addResponse = await axios.post(
@@ -134,15 +135,15 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
             selected: f.selected
         }));
         
-        console.log(`📊 [PACK-HANDLER] RD file order: ${files.slice(0, 5).map(f => `id=${f.id}:${f.path.split('/').pop().substring(0, 30)}`).join(', ')}...`);
+        if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] RD file order: ${files.slice(0, 5).map(f => `id=${f.id}:${f.path.split('/').pop().substring(0, 30)}`).join(', ')}...`);
 
         // 3. Cancella torrent (era solo per leggere file list)
-        console.log(`🗑️ [PACK-HANDLER] Deleting temporary torrent ${torrentId}`);
+        if (DEBUG_MODE) console.log(`🗑️ [PACK-HANDLER] Deleting temporary torrent ${torrentId}`);
         await axios.delete(`${baseUrl}/torrents/delete/${torrentId}`, { headers }).catch(err => {
             console.warn(`⚠️ [PACK-HANDLER] Failed to delete torrent: ${err.message}`);
         });
 
-        console.log(`✅ [PACK-HANDLER] Got ${files.length} files from RD`);
+        if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from RD`);
         return { torrentId, files };
 
     } catch (error) {
@@ -166,7 +167,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
 
     try {
         // ✅ STEP 1: Try checkcached with list_files=true (FAST PATH - 1 API call)
-        console.log(`📦 [PACK-HANDLER] Checking Torbox cache for file list: ${infoHash.substring(0, 8)}...`);
+        if (DEBUG_MODE) console.log(`📦 [PACK-HANDLER] Checking Torbox cache for file list: ${infoHash.substring(0, 8)}...`);
 
         try {
             const cacheResponse = await axios.get(
@@ -200,17 +201,17 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                         bytes: f.size || 0,
                         selected: 1
                     }));
-                    console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path - alphabetical order)`);
+                    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path - alphabetical order)`);
                     return { torrentId: 'cached', files };
                 }
             }
-            console.log(`⚠️ [PACK-HANDLER] Not in cache or no files, trying slow path...`);
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Not in cache or no files, trying slow path...`);
         } catch (cacheError) {
-            console.log(`⚠️ [PACK-HANDLER] Cache check failed: ${cacheError.message}, trying slow path...`);
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache check failed: ${cacheError.message}, trying slow path...`);
         }
 
         // ✅ STEP 2: Fallback - Add torrent to get file list (SLOW PATH - 3 API calls)
-        console.log(`📦 [PACK-HANDLER] Adding magnet to Torbox for file list: ${infoHash.substring(0, 8)}...`);
+        if (DEBUG_MODE) console.log(`📦 [PACK-HANDLER] Adding magnet to Torbox for file list: ${infoHash.substring(0, 8)}...`);
         const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
 
         const addResponse = await axios.post(
@@ -256,7 +257,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                 bytes: f.size,
                 selected: 1
             }));
-            console.log(`📊 [PACK-HANDLER] Torbox file order (original IDs): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
+            if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] Torbox file order (original IDs): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
         } else {
             // Fallback to alphabetical - best effort
             const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
@@ -266,10 +267,10 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                 bytes: f.size,
                 selected: 1
             }));
-            console.log(`📊 [PACK-HANDLER] Torbox file order (alphabetical fallback): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
+            if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] Torbox file order (alphabetical fallback): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
         }
 
-        console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
+        if (DEBUG_MODE) console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
         await axios.get(`${baseUrl}/torrents/controltorrent`, {
             headers,
             params: { torrent_id: torrentId, operation: 'delete' }
@@ -277,7 +278,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             console.warn(`⚠️ [PACK-HANDLER] Failed to delete Torbox torrent: ${err.message}`);
         });
 
-        console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox (slow path)`);
+        if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox (slow path)`);
         return { torrentId, files };
 
     } catch (error) {
@@ -301,12 +302,12 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
     const videoFiles = files.filter(f => isVideoFile(f.path));
     const processedFiles = [];
 
-    console.log(`🔍 [PACK-HANDLER] Processing ${videoFiles.length} video files from pack`);
+    if (DEBUG_MODE) console.log(`🔍 [PACK-HANDLER] Processing ${videoFiles.length} video files from pack`);
 
     // ✅ FIX: Use the file.id directly - it's already the correct torrent index
     // The fetch functions (fetchFilesFromRealDebrid, fetchFilesFromTorbox) now return
     // the original torrent file index in file.id
-    console.log(`📊 [PACK-HANDLER] Using ORIGINAL file indices from API`);
+    if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] Using ORIGINAL file indices from API`);
 
     for (const file of videoFiles) {
         // 🗑️ FILTER: Ignore small files (samples, extras) < 25MB
@@ -329,7 +330,7 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
                 imdb_episode: parsed.episode
             });
 
-            console.log(`   📄 ${filename} → S${parsed.season}E${parsed.episode} (idx=${torrentIndex}, ${(file.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
+            if (DEBUG_MODE) console.log(`   📄 ${filename} → S${parsed.season}E${parsed.episode} (idx=${torrentIndex}, ${(file.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
         }
     }
 
@@ -357,7 +358,7 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
     if (processedFiles.length > 0 && dbHelper && typeof dbHelper.insertEpisodeFiles === 'function') {
         try {
             const inserted = await dbHelper.insertEpisodeFiles(processedFiles);
-            console.log(`💾 [PACK-HANDLER] Saved ${inserted} episode files to DB`);
+            if (DEBUG_MODE) console.log(`💾 [PACK-HANDLER] Saved ${inserted} episode files to DB`);
         } catch (error) {
             console.error(`❌ [PACK-HANDLER] Failed to save to DB: ${error.message}`);
         }
@@ -387,7 +388,7 @@ function findEpisodeFile(files, targetEpisode) {
  * @returns {Promise<{fileIndex: number, fileName: string, fileSize: number, source: string}|null>}
  */
 async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, episode, dbHelper) {
-    console.log(`🎬 [PACK-HANDLER] Resolving S${season}E${episode} from pack ${infoHash.substring(0, 8)}...`);
+    if (DEBUG_MODE) console.log(`🎬 [PACK-HANDLER] Resolving S${season}E${episode} from pack ${infoHash.substring(0, 8)}...`);
 
     // Variable to track total pack size
     let totalPackSize = 0;
@@ -398,7 +399,7 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
         try {
             const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
             if (cachedFiles && cachedFiles.length > 0) {
-                console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
+                if (DEBUG_MODE) console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE for ${infoHash.substring(0, 8)}`);
 
                 // Calculate total pack size from cached files (approximate)
                 totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
@@ -410,7 +411,7 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
                 const match = findEpisodeFile(processed, episode);
 
                 if (match) {
-                    console.log(`✅ [PACK-HANDLER] Cache Hit! Found matching file: ${match.title}`);
+                    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Cache Hit! Found matching file: ${match.title}`);
                     return {
                         fileIndex: match.file_index,
                         fileName: match.title,
@@ -419,7 +420,7 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
                         totalPackSize
                     };
                 } else {
-                    console.log(`⚠️ [PACK-HANDLER] Cache Miss: Pack is indexed but S${season}E${episode} not found. Skipping external lookup.`);
+                    if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss: Pack is indexed but S${season}E${episode} not found. Skipping external lookup.`);
                     // If we have index but no file, assume pack doesn't contain it. 
                     // Do NOT fall back to RD to avoid rate limits on incomplete packs.
                     return null;

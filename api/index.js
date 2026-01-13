@@ -647,7 +647,7 @@ function isItalian(title, italianMovieTitle = null) {
             // Se almeno il 60% delle parole del titolo italiano sono presenti, è probabile che sia in italiano.
             const percentageMatch = matchingWords.length / italianWords.length;
             if (percentageMatch > 0.6) { // Soglia alzata per essere più precisi ed evitare falsi positivi
-                console.log(`🇮🇹 Matched Italian title words in "${title}" (score: ${percentageMatch.toFixed(2)})`);
+                if (DEBUG_MODE) console.log(`🇮🇹 Matched Italian title words in "${title}" (score: ${percentageMatch.toFixed(2)})`);
                 return true;
             }
         }
@@ -2678,7 +2678,7 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
 
         // Basic validation
         if (!html.includes('<table') || !html.includes('magnet:')) {
-            console.log('⚠️ Page doesn\'t contain expected torrent table');
+            if (DEBUG_MODE) console.log('⚠️ Page doesn\'t contain expected torrent table');
             return [];
         }
 
@@ -4794,7 +4794,7 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
     // ✅ Use lightCleanedTitle for regex checks to preserve punctuation (dots, dashes)
     const exactMatch = exactEpisodePatterns.some(pattern => pattern.test(lightCleanedTitle));
     if (exactMatch) {
-        console.log(`✅ [EXACT] Episode match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
+        if (DEBUG_MODE) console.log(`✅ [EXACT] Episode match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
         return true;
     }
 
@@ -5063,7 +5063,7 @@ function isExactMovieMatch(torrentTitle, movieTitle, year) {
         const percentageMatch = matchingWords.length / movieWords.length;
         hasEnoughMovieWords = percentageMatch >= 0.7;
         if (!hasEnoughMovieWords) {
-            console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
+            if (DEBUG_MODE) console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
         }
     }
 
@@ -5199,7 +5199,12 @@ async function handleStream(type, id, config, workerOrigin) {
             try {
                 const dbCached = await dbHelper.getTorrentSearchCache(globalCacheKey, cacheTtlHours);
                 if (dbCached) {
-                    console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
+                    // Extract title info for logging
+                    const cacheTitle = dbCached.mediaDetails?.title || dbCached.mediaDetails?.titles?.[0] || dbCached.italianTitle || null;
+                    const cacheYear = dbCached.mediaDetails?.year ? ` (${dbCached.mediaDetails.year})` : '';
+                    const cacheEpisode = type === 'series' && dbCached.season && dbCached.episode ? ` S${String(dbCached.season).padStart(2, '0')}E${String(dbCached.episode).padStart(2, '0')}` : '';
+                    if (DEBUG_MODE) console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
+                    if (DEBUG_MODE && cacheTitle) console.log(`📽️ [DB CACHE] Title: ${cacheTitle}${cacheYear}${cacheEpisode}`);
                     cachedData = dbCached;
                     fromGlobalCache = true;
                 }
@@ -5213,7 +5218,12 @@ async function handleStream(type, id, config, workerOrigin) {
             const cached = globalTorrentCache.get(globalCacheKey);
             if (Date.now() - cached.timestamp < GLOBAL_CACHE_TTL) {
                 const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
-                console.log(`⚡ [MEMORY CACHE HIT] ${cached.data.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey} | Age: ${cacheAge}s`);
+                // Extract title info for logging
+                const memTitle = cached.data.mediaDetails?.title || cached.data.mediaDetails?.titles?.[0] || cached.data.italianTitle || null;
+                const memYear = cached.data.mediaDetails?.year ? ` (${cached.data.mediaDetails.year})` : '';
+                const memEpisode = type === 'series' && cached.data.season && cached.data.episode ? ` S${String(cached.data.season).padStart(2, '0')}E${String(cached.data.episode).padStart(2, '0')}` : '';
+                if (DEBUG_MODE) console.log(`⚡ [MEMORY CACHE HIT] ${cached.data.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey} | Age: ${cacheAge}s`);
+                if (DEBUG_MODE && memTitle) console.log(`📽️ [MEMORY CACHE] Title: ${memTitle}${memYear}${memEpisode}`);
                 cachedData = cached.data;
                 fromGlobalCache = true;
             } else {
@@ -5273,6 +5283,11 @@ async function handleStream(type, id, config, workerOrigin) {
             searchQueries = cachedData.searchQueries || [];
             italianTitle = cachedData.italianTitle || null;
             originalTitle = cachedData.originalTitle || null;
+            // Show title on cache hit for better log readability
+            const displayTitle = mediaDetails?.title || mediaDetails?.titles?.[0] || italianTitle || decodedId;
+            const displayYear = mediaDetails?.year ? ` (${mediaDetails.year})` : '';
+            const episodeStr = type === 'series' && season && episode ? ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}` : '';
+            console.log(`✅ Found: ${displayTitle}${displayYear}${episodeStr} [CACHE]`);
             if (DEBUG_MODE) console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
         }
         
@@ -6080,7 +6095,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 searchQueries.push(cleanedShortTitle);
             }
 
-            if (label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
+            if (DEBUG_MODE && label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
         };
 
         // Always build queries (needed for enrichment even when skipping live search)
@@ -6089,7 +6104,7 @@ async function handleStream(type, id, config, workerOrigin) {
             if (kitsuId) { // Anime search strategy
                 const uniqueQueries = new Set();
                 const absEpisode = mediaDetails.absoluteEpisode || episode;
-                console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
+                if (DEBUG_MODE) console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
 
                 // Use all available titles from Kitsu to build search queries
                 for (const title of mediaDetails.titles) {
@@ -7314,7 +7329,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Sort by size (largest first)
                 unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
 
-                console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
                 // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
                 const needsExternalVerification = [];
@@ -7322,7 +7337,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const excluded = [];
 
                 // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
 
                 for (const result of unverifiedPacks) {
                     const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
@@ -7348,7 +7363,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                                 result.file_size = fileInfo.fileSize;
                                 result.fileIndex = fileInfo.fileIndex;
@@ -7357,7 +7372,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.size = formatBytes(fileInfo.fileSize);
                                 newlyVerified.push(result);
                             } else {
-                                console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
                                 excluded.push(result);
                             }
                         } else {
@@ -7374,7 +7389,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
                 const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
 
-                console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
 
                 for (let i = 0; i < toVerifyExternal.length; i++) {
                     const result = toVerifyExternal[i];
@@ -7383,7 +7398,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
 
-                    console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
 
                     const originalPackSize = result.sizeInBytes || 0;
 
@@ -7398,7 +7413,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                            if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                             result.packSize = fileInfo.totalPackSize || originalPackSize;
                             result.file_size = fileInfo.fileSize;
                             result.fileIndex = fileInfo.fileIndex;
@@ -7407,7 +7422,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             result.size = formatBytes(fileInfo.fileSize);
                             newlyVerified.push(result);
                         } else {
-                            console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                            if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
                             excluded.push(result);
                         }
                     } catch (err) {
@@ -7418,10 +7433,10 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 3️⃣ STRICT FILTERING: Exclude skipped packs!
                 if (skippedSize > 0) {
-                    console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    if (DEBUG_MODE) console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
                 }
 
-                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
 
                 // Combine results SKIPPED ARE EXCLUDED
                 filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];

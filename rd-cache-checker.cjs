@@ -6,6 +6,7 @@
 
 const RD_BASE_URL = 'https://api.real-debrid.com/rest/1.0';
 const RD_TIMEOUT = 30000;
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
 /**
  * Sleep helper
@@ -77,9 +78,9 @@ async function deleteTorrent(token, torrentId) {
     try {
         const result = await rdRequest('DELETE', `${RD_BASE_URL}/torrents/delete/${torrentId}`, token);
         if (result && result.success) {
-            console.log(`🗑️ [RD Delete] Successfully deleted torrent ${torrentId}`);
+            if (DEBUG_MODE) console.log(`🗑️ [RD Delete] Successfully deleted torrent ${torrentId}`);
         } else {
-            console.log(`🗑️ [RD Delete] Delete request sent for ${torrentId} (no confirmation)`);
+            if (DEBUG_MODE) console.log(`🗑️ [RD Delete] Delete request sent for ${torrentId} (no confirmation)`);
         }
     } catch (e) {
         console.error(`⚠️ [RD Delete] FAILED to delete torrent ${torrentId}:`, e.message);
@@ -162,19 +163,19 @@ async function checkSingleHash(infoHash, magnet, token) {
                 const fullPath = videoFiles[0].path;
                 mainFileName = fullPath.split('/').pop() || fullPath;
                 mainFileSize = videoFiles[0].bytes || 0; // ✅ Capture file size
-                console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}... (${(mainFileSize / 1024 / 1024).toFixed(2)} MB)`);
+                if (DEBUG_MODE) console.log(`📄 [RD Cache] Main file: ${mainFileName.substring(0, 50)}... (${(mainFileSize / 1024 / 1024).toFixed(2)} MB)`);
             }
             
             // 🚀 SPEEDUP: Log pack info
             if (allVideoFiles.length > 1) {
-                console.log(`📦 [RD Cache] Pack detected: ${allVideoFiles.length} video files`);
+                if (DEBUG_MODE) console.log(`📦 [RD Cache] Pack detected: ${allVideoFiles.length} video files`);
             }
         }
 
         // 6. Clean up - Always delete the torrent we just added
         await deleteTorrent(token, torrentId);
 
-        console.log(`🔍 [RD Cache Check] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'} (status: ${info?.status})`);
+        if (DEBUG_MODE) console.log(`🔍 [RD Cache Check] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'} (status: ${info?.status})`);
 
         return {
             hash: infoHash,
@@ -208,7 +209,7 @@ async function checkCacheSync(items, token, limit = 5) {
     const results = {};
     const toCheck = items.slice(0, limit);
 
-    console.log(`🔄 [RD Cache] Checking ${toCheck.length} hashes synchronously...`);
+    if (DEBUG_MODE) console.log(`🔄 [RD Cache] Checking ${toCheck.length} hashes synchronously...`);
 
     // Check sequentially to avoid rate limiting issues
     for (const item of toCheck) {
@@ -228,7 +229,7 @@ async function checkCacheSync(items, token, limit = 5) {
         }
     }
 
-    console.log(`✅ [RD Cache] Sync check complete. ${Object.values(results).filter(r => r.cached).length}/${toCheck.length} cached`);
+    if (DEBUG_MODE) console.log(`✅ [RD Cache] Sync check complete. ${Object.values(results).filter(r => r.cached).length}/${toCheck.length} cached`);
 
     return results;
 }
@@ -251,13 +252,13 @@ function isPackTitle(title) {
 async function enrichCacheBackground(items, token, dbHelper) {
     if (!items || items.length === 0) return;
 
-    console.log(`🔄 [RD Cache Background] Queued ${items.length} hashes for background enrichment...`);
+    if (DEBUG_MODE) console.log(`🔄 [RD Cache Background] Queued ${items.length} hashes for background enrichment...`);
 
     // ⚠️ TRUE BACKGROUND: Runs 5s AFTER response is sent
     // This gives time for the HTTP response to complete
     setTimeout(() => {
         (async () => {
-            console.log(`🔄 [RD Cache Background] Starting enrichment (delayed 5s)...`);
+            if (DEBUG_MODE) console.log(`🔄 [RD Cache Background] Starting enrichment (delayed 5s)...`);
             try {
                 const results = [];
                 let skippedAlreadyCached = 0;
@@ -295,7 +296,7 @@ async function enrichCacheBackground(items, token, dbHelper) {
                 }));
 
                 await dbHelper.updateRdCacheStatus(cacheUpdates);
-                console.log(`✅ [RD Cache Background] Enriched ${results.length} hashes (skipped ${skippedAlreadyCached} already in DB)`);
+                if (DEBUG_MODE) console.log(`✅ [RD Cache Background] Enriched ${results.length} hashes (skipped ${skippedAlreadyCached} already in DB)`);
             }
             
             // 🚀 SPEEDUP: Save pack files ONLY if title indicates a pack
@@ -315,7 +316,7 @@ async function enrichCacheBackground(items, token, dbHelper) {
                                 file_size: f.bytes || 0
                             }));
                             await dbHelper.insertPackFiles(packFilesData);
-                            console.log(`📦 [RD Cache Background] Saved ${result.files.length} pack files for ${result.hash.substring(0, 8)}`);
+                            if (DEBUG_MODE) console.log(`📦 [RD Cache Background] Saved ${result.files.length} pack files for ${result.hash.substring(0, 8)}`);
                         } catch (packErr) {
                             console.warn(`⚠️ [RD Cache Background] Failed to save pack files: ${packErr.message}`);
                         }

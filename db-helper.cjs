@@ -384,21 +384,15 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
         continue; // Don't create garbage record
       }
       
+      // ✅ FIX: Never create new records without a real title
+      // Only UPDATE existing records, never INSERT garbage placeholders
       if (!existsInDb && !realTitle) {
-        // Only create new record if cached=true (might be useful later)
-        if (cachedValue !== true) {
-          skipped++;
-          continue;
-        }
-        // Even if cached=true, skip if no useful info at all
-        if (!torrentSize) {
-          skipped++;
-          continue;
-        }
+        skipped++;
+        continue; // Don't create RD-xxx garbage records
       }
 
-      // Use real title or minimal fallback (only for truly cached items)
-      const titleToSave = realTitle || `RD-${hashLower.substring(0, 8)}`;
+      // Use real title (required for new records, optional for updates)
+      const titleToSave = realTitle || null;
 
       // ✅ UPSERT: Insert if not exists, then update cache status and size
       const upsertQuery = `
@@ -416,9 +410,10 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
           type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
+      // For updates without a title, keep existing title in DB
       const params = [
         hashLower,                           // $1 info_hash
-        titleToSave,                         // $2 title  
+        titleToSave || 'PLACEHOLDER',        // $2 title (will be replaced by existing on UPDATE)
         cachedValue,                         // $3 cached_rd
         result.file_title || null,           // $4 file_title
         torrentSize,                         // $5 size

@@ -8215,6 +8215,12 @@ async function handleStream(type, id, config, workerOrigin) {
 
         for (const result of filteredResults) {
             try {
+                // ✅ FIX: Skip results without magnetLink to prevent /undefined/ in URLs
+                if (!result.magnetLink) {
+                    console.warn(`⚠️ [Stream] Skipping result without magnetLink: ${result.title?.substring(0, 50)}...`);
+                    continue;
+                }
+                
                 const qualityDisplay = result.quality ? result.quality.toUpperCase() : 'Unknown';
                 const qualitySymbol = getQualitySymbol(qualityDisplay);
                 const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle);
@@ -9597,19 +9603,33 @@ export default async function handler(req, res) {
             if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
                 try {
                     const encodedConfigStr = pathParts[1];
-                    let config;
+                    let config = null;
+                    
+                    // Try multiple decode strategies for complex configs with emoji/special chars
                     try {
                         config = JSON.parse(atob(encodedConfigStr));
                     } catch (e1) {
-                        console.warn('⚠️ Standard config parsing failed, trying URI decode fallback:', e1.message);
+                        // Fallback 1: URI decode for double-encoded or legacy formats
                         try {
-                            // Fallback for double-encoded or legacy formats
                             const decoded = atob(encodedConfigStr);
                             config = JSON.parse(decodeURIComponent(escape(decoded)));
                         } catch (e2) {
-                            console.error('❌ Config parsing failed completely:', e2.message);
-                            throw e1; // Re-throw original error
+                            // Fallback 2: Try with TextDecoder for UTF-8
+                            try {
+                                const bytes = Uint8Array.from(atob(encodedConfigStr), c => c.charCodeAt(0));
+                                const decoded = new TextDecoder('utf-8').decode(bytes);
+                                config = JSON.parse(decoded);
+                            } catch (e3) {
+                                // Not critical - just use default addon name
+                                if (DEBUG_MODE) console.warn('⚠️ [Manifest] Config parse failed for addon name, using default');
+                                config = null;
+                            }
                         }
+                    }
+                    
+                    if (!config) {
+                        // Skip addon name customization, use default
+                        throw new Error('skip');
                     }
 
                     // Determine which debrid services are configured
@@ -9647,8 +9667,8 @@ export default async function handler(req, res) {
 
                     console.log(`📛 [Manifest] Dynamic addon name: ${addonName}`);
                 } catch (e) {
-                    console.error('Error parsing config for addon name:', e);
-                    // Keep default name on error
+                    // Not critical - just use default addon name silently
+                    // (config parsing for manifest name is optional)
                 }
             }
 

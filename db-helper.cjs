@@ -101,35 +101,6 @@ async function runMigrations() {
       console.error('⚠️ Migration warning (pack_files index):', error.message);
     }
   }
-  
-  // 🔧 FIX: Ensure info_hash columns are large enough (SHA1 = 40 chars, but some sources may have longer)
-  try {
-    await pool.query(`ALTER TABLE torrents ALTER COLUMN info_hash TYPE VARCHAR(64)`);
-    console.log('✅ DB Migration: torrents.info_hash expanded to VARCHAR(64)');
-  } catch (error) {
-    // Ignore if already correct size or other harmless errors
-    if (!error.message.includes('already') && !error.message.includes('does not exist')) {
-      if (DEBUG_MODE) console.log('⚠️ Migration info (torrents.info_hash):', error.message);
-    }
-  }
-  
-  try {
-    await pool.query(`ALTER TABLE pack_files ALTER COLUMN pack_hash TYPE VARCHAR(64)`);
-    console.log('✅ DB Migration: pack_files.pack_hash expanded to VARCHAR(64)');
-  } catch (error) {
-    if (!error.message.includes('already') && !error.message.includes('does not exist')) {
-      if (DEBUG_MODE) console.log('⚠️ Migration info (pack_files.pack_hash):', error.message);
-    }
-  }
-  
-  try {
-    await pool.query(`ALTER TABLE pack_files ALTER COLUMN info_hash TYPE VARCHAR(64)`);
-    console.log('✅ DB Migration: pack_files.info_hash expanded to VARCHAR(64)');
-  } catch (error) {
-    if (!error.message.includes('already') && !error.message.includes('does not exist')) {
-      if (DEBUG_MODE) console.log('⚠️ Migration info (pack_files.info_hash):', error.message);
-    }
-  }
 }
 
 /**

@@ -114,7 +114,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching by IMDb: ${imdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching by IMDb: ${imdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -157,7 +157,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} torrents for IMDb ${imdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} torrents for IMDb ${imdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -177,7 +177,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching by TMDb: ${tmdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching by TMDb: ${tmdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -218,7 +218,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} torrents for TMDb ${tmdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} torrents for TMDb ${tmdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -239,7 +239,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching episode: ${imdbId} S${season}E${episode}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching episode: ${imdbId} S${season}E${episode}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -279,7 +279,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     `;
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} files for S${season}E${episode}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} files for S${season}E${episode}`);
 
     return result.rows;
   } catch (error) {
@@ -482,7 +482,7 @@ async function getRdCachedAvailability(hashes) {
     // Debug: Show which hashes are cached
     const cachedTrue = result.rows.filter(r => r.cached_rd === true).length;
     const cachedFalse = result.rows.filter(r => r.cached_rd === false).length;
-    console.log(`   📊 cached_rd=true: ${cachedTrue}, cached_rd=false: ${cachedFalse}`);
+    if (DEBUG_MODE) console.log(`   📊 cached_rd=true: ${cachedTrue}, cached_rd=false: ${cachedFalse}`);
 
     return cachedMap;
 
@@ -826,11 +826,11 @@ async function getImdbIdByHash(infoHash) {
     const result = await pool.query(query, [infoHash.toLowerCase()]);
 
     if (result.rows.length > 0 && result.rows[0].imdb_id) {
-      console.log(`✅ [DB] Found imdb_id ${result.rows[0].imdb_id} for hash ${infoHash}`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Found imdb_id ${result.rows[0].imdb_id} for hash ${infoHash}`);
       return result.rows[0].imdb_id;
     }
 
-    console.log(`⚠️ [DB] No imdb_id found for hash ${infoHash}`);
+    if (DEBUG_MODE) console.log(`⚠️ [DB] No imdb_id found for hash ${infoHash}`);
     return null;
   } catch (error) {
     console.error(`❌ [DB] Error fetching imdb_id:`, error.message);
@@ -983,7 +983,7 @@ async function searchPacksByImdbId(imdbId) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching packs containing film: ${imdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching packs containing film: ${imdbId}`);
 
     const query = `
       SELECT 
@@ -1007,7 +1007,7 @@ async function searchPacksByImdbId(imdbId) {
     `;
 
     const result = await pool.query(query, [imdbId]);
-    console.log(`   ✅ Found ${result.rows.length} pack(s) containing ${imdbId}`);
+    if (DEBUG_MODE) console.log(`   ✅ Found ${result.rows.length} pack(s) containing ${imdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -1029,7 +1029,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
   if (!title || title.length < 3) return [];
 
   try {
-    console.log(`💾 [DB] Searching packs by title: "${title}" (${year || 'no year'})`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching packs by title: "${title}" (${year || 'no year'})`);
 
     // Build search pattern - clean title for ILIKE matching
     const cleanTitle = title.toLowerCase()
@@ -1308,7 +1308,7 @@ async function getSeriesPackFiles(infoHash) {
     const packResult = await pool.query(packFilesQuery, [hashLower]);
     
     if (packResult.rows.length > 0) {
-      console.log(`💾 [DB] Found ${packResult.rows.length} files in pack_files for ${infoHash.substring(0, 8)}`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResult.rows.length} files in pack_files for ${infoHash.substring(0, 8)}`);
       return packResult.rows.map(row => ({
         id: row.id,
         path: row.path,
@@ -1327,7 +1327,7 @@ async function getSeriesPackFiles(infoHash) {
     const filesResult = await pool.query(filesQuery, [hashLower]);
     
     if (filesResult.rows.length > 0) {
-      console.log(`💾 [DB] Found ${filesResult.rows.length} files in files table for ${infoHash.substring(0, 8)}`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Found ${filesResult.rows.length} files in files table for ${infoHash.substring(0, 8)}`);
     }
     
     return filesResult.rows.map(row => ({
@@ -1405,7 +1405,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
     
     // 🔧 AUTO-INDEX: Update files.imdb_id when we find matches by title
     // This allows future searches to find files directly by IMDb ID
@@ -1431,7 +1431,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   try {
     // Basic sanitation
     const cleanQuery = titleQuery.replace(/[^\w\s]/g, ' ').trim().replace(/\s+/g, ' & ');
-    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
 
     let query = `
       SELECT 
@@ -1483,14 +1483,14 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
     
     // 🔧 FIX: If FTS returns 0 results, also try ILIKE fallback
     // This is needed for file titles like "(2013) Frozen.mkv" where FTS doesn't index well
     if (result.rows.length > 0) {
       return result.rows;
     }
-    console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
+    if (DEBUG_MODE) console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
     return await runIlikeSearch();
 
   } catch (error) {

@@ -1,64 +1,86 @@
 # Changelog
 
-Tutte le modifiche importanti a IlCorsaroViola saranno documentate in questo file.
-
-Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/),
-e questo progetto aderisce a [Semantic Versioning](https://semver.org/lang/it/).
+Tutte le modifiche importanti a IlCorsaroViola sono documentate in questo file.
 
 ---
 
-## [2.0.0] - 2025-12-23
+## [5.0.0] - 2026-01-13
+
+### 🎬 Binge Watch Intelligente
+- **bingeGroup dinamico** basato su qualità/HDR/gruppo release
+- Formato: `icv|servizio|qualità|hdr|gruppo` (es. `icv|rd|2160p|DV-HDR|FLUX`)
+- Continuità automatica: finisci in 4K DV → prossimo episodio in 4K DV
+- Supporto HDR profiles: DV, DV-HDR, HDR10+, HDR10, HDR, SDR
+
+### 🔄 Cache Globale Condivisa
+- **Cache PostgreSQL persistente** per risultati torrent
+- TTL differenziato: Film 18h, Serie 10h (per episodio)
+- Condivisione tra TUTTI gli utenti (chiavi debrid personali)
+- Filtri `full_ita` applicati DOPO lettura cache
+
+### 📅 Fresh Content Skip
+- Contenuti usciti < **96 ore** (4 giorni) NON vengono cachati
+- Risolve problema: cache salva 720p, poi escono versioni 4K
+- Copre ritardo release Italia vs USA
+
+### 📦 Pack Handler Completo
+- **Selezione episodio automatica** da pack stagionali
+- **Selezione film** da collection (es. Trilogia)
+- Cache DB per file dei pack (`pack_files` table)
+- Verifica RD/Torbox cache per pack
+
+### 🧠 Database Self-Filling
+- Ogni ricerca alimenta il database centrale
+- Torrents italiani salvati automaticamente
+- Enrichment webhook per arricchimento asincrono
+- Sistema 3-Tier: Cache → DB → Live Scraping
+
+### 🔧 Refactoring
+- Codebase completamente riorganizzata
+- Parser titoli migliorato (qualità, HDR, gruppo)
+- Logging strutturato con emoji
+- Fix bug provider checks
+
+---
+
+## [4.0.0] - 2025-12
 
 ### ✨ Nuove Funzionalità
-
-#### 🔄 Modalità AIOStreams
-- **Nuova checkbox "Modalità AIOStreams"** nella pagina di configurazione
-- Formatta i nomi degli stream in modo compatibile con l'addon AIOStreams
-- Simboli standard: `RD⚡` (Real-Debrid cached), `TB⏳` (Torbox uncached), `AD⚡` (AllDebrid cached), `P2P`
-- Permette ad AIOStreams di parsare correttamente servizio debrid e stato cache
-
-#### 🎨 Nome Addon Dinamico con Icone
-- Il nome dell'addon in Stremio ora mostra icone per i servizi configurati:
-  - 👑 Real-Debrid
-  - 📦 Torbox
-  - 🅰️ AllDebrid
-  - 🧲 P2P (nessun debrid)
-  - 🕵️ Proxy attivo (MediaFlow/EasyProxy)
-- Esempio: `🕵️ IlCorsaroViola 👑+📦` (RD con proxy + Torbox)
-
-### 🐛 Bug Fix
-
-#### 🔍 Correzione Estrazione Qualità
-- Risolto bug dove TorrentGalaxy e RARBG mostravano "Unknown" per la qualità
-- Regex migliorata per rilevare risoluzioni:
-  - Accetta risoluzioni senza `p` (es. `1080` oltre a `1080p`)
-  - Accetta risoluzioni seguite da codec (es. `1080ph264`)
-  - Matching flessibile ovunque nel titolo
-- Normalizzazione output: `2160p`, `4k`, `uhd` → `4K`; `1080` → `1080p`, ecc.
-
-### 🔧 Miglioramenti Tecnici
-
-#### 📝 Logging Real-Debrid Cache Check
-- Aggiunto logging esplicito per operazioni di delete torrent
-- Conferma che i torrent aggiunti per cache check vengono sempre eliminati
-
-### 📁 File Modificati
-- `api/index.js` - Logica AIOStreams, nome dinamico, fix qualità
-- `aiostreams-formatter.cjs` - **NUOVO** modulo per formattazione AIOStreams
-- `template.html` - Checkbox "Modalità AIOStreams"
-- `rarbg.cjs` - Funzione `extractQuality` migliorata
-- `rd-cache-checker.cjs` - Logging delete operations
-- `package.json` - Versione 2.0.0
+- Supporto AllDebrid
+- Integrazione addon esterni (Torrentio, MediaFusion, Comet)
+- Provider toggle individuale
+- Intro skip detection
 
 ---
 
-## [1.0.0] - 2025-12-XX
+## [3.0.0] - 2025-11
+
+### ✨ Nuove Funzionalità
+- Custom Formatter per template stream personalizzati
+- AIOStreams compatibility mode
+- Nome addon dinamico con icone servizi
+
+---
+
+## [2.0.0] - 2025-10
+
+### ✨ Nuove Funzionalità
+- Modalità AIOStreams
+- MediaFlow/EasyProxy support
+- Full ITA mode
+- DB Only mode
+
+### 🐛 Bug Fix
+- Fix estrazione qualità TorrentGalaxy/RARBG
+- Fix logging Real-Debrid cache check
+
+---
+
+## [1.0.0] - 2025-09
 
 ### 🚀 Release Iniziale
-- Ricerca multi-provider (IlCorsaroNero, UIndex, Knaben, TorrentGalaxy, RARBG)
-- Supporto Jackett per indexer privati
-- Integrazione Real-Debrid, Torbox, AllDebrid
-- MediaFlow Proxy per condivisione account sicura
+- Ricerca multi-provider (CorsaroNero, UIndex, Knaben, TorrentGalaxy, RARBG)
+- Supporto Jackett
+- Integrazione Real-Debrid, Torbox
 - Database PostgreSQL self-filling
-- Cache TTL 20 giorni per risultati debrid
-- Ordinamento intelligente (cached → risoluzione → dimensione → seeders)
+- Ordinamento intelligente

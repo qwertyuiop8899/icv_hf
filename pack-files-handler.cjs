@@ -147,7 +147,7 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         return { torrentId, files };
 
     } catch (error) {
-        console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);
+        if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);
         // return null; // OLD
         throw error; // NEW: Rethrow to allow fail-open in caller
     }
@@ -441,7 +441,7 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
             fetchedData = await fetchFilesFromTorbox(infoHash, config.torbox_key);
         }
     } catch (e) {
-        console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from provider: ${e.message}`);
+        if (DEBUG_MODE) console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from provider: ${e.message}`);
         // ✅ FIX: If rate limited (429), rethrow so caller keeps the pack instead of excluding
         if (e.message?.includes('429') || e.response?.status === 429) {
             throw new Error(`RATE_LIMITED: ${e.message}`);
@@ -475,11 +475,11 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     const targetFile = findEpisodeFile(processedFiles, episode);
 
     if (!targetFile) {
-        console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes)`);
+        if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes)`);
         return null;  // ❌ Episodio non esiste nel pack - NESSUN FALLBACK
     }
 
-    console.log(`✅ [PACK-HANDLER] Found E${episode}: ${targetFile.title} (${(targetFile.size / 1024 / 1024 / 1024).toFixed(2)} GB), pack total: ${(totalPackSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Found E${episode}: ${targetFile.title} (${(targetFile.size / 1024 / 1024 / 1024).toFixed(2)} GB), pack total: ${(totalPackSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
 
     return {
         fileIndex: targetFile.file_index,

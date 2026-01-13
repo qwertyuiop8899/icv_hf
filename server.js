@@ -4,8 +4,20 @@
 import express from 'express';
 import handler from './api/index.js';
 
+// 🔧 Import DB helper for early initialization
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const dbHelper = require('./db-helper.cjs');
+
 const app = express();
 const PORT = process.env.PORT || 7860; // HuggingFace usa porta 7860
+
+// 🚀 Initialize database at startup (before handling requests)
+// This ensures cache lookups work on the first request after restart
+if (process.env.DATABASE_URL) {
+    dbHelper.initDatabase();
+    console.log('✅ Database pre-initialized at startup');
+}
 
 // Middleware per parsing JSON e form data
 app.use(express.json({ limit: '10mb' }));
@@ -20,8 +32,6 @@ app.get('/health', (req, res) => {
 });
 
 // ⏩ IntroSkip HLS Proxy endpoint
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
 const hlsProxy = require('./hls-proxy.cjs');
 
 // Accept both /introskip/hls and /introskip/hls.m3u8

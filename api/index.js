@@ -52,10 +52,9 @@ function decodeHtmlEntities(text) {
     return text.replace(/&[#\w]+;/g, match => entities[match] || match);
 }
 
-// ✅ DEBUG MODE
-const DEBUG_MODE = false;
+// ✅ DEBUG MODE - per log dettagliati (default: false in produzione)
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
-// ✅ Custom Formatter Helper - Full AIOStreams compatible
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
 function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', isCached = false) {
     // If AIOStreams mode is enabled, SKIP custom formatting to preserve AIO format
@@ -458,11 +457,11 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
 
 // ✅ Enhanced Query Cleaning (from uiai.js)
 function cleanSearchQuery(query) {
-    console.log(`🧹 Cleaning query: "${query}"`);
+    if (DEBUG_MODE) console.log(`🧹 Cleaning query: "${query}"`);
 
     // Remove IMDb ID pattern if present
     if (query.match(/^tt\d+$/)) {
-        console.log(`⚠️ Raw IMDb ID detected: ${query}. This should be converted to movie title before calling scraper.`);
+        if (DEBUG_MODE) console.log(`⚠️ Raw IMDb ID detected: ${query}. This should be converted to movie title before calling scraper.`);
         return null;
     }
 
@@ -473,7 +472,7 @@ function cleanSearchQuery(query) {
         .replace(/\s+/g, ' ') // Normalize whitespace
         .trim();
 
-    console.log(`✨ Cleaned query: "${cleaned}"`);
+    if (DEBUG_MODE) console.log(`✨ Cleaned query: "${cleaned}"`);
     return cleaned;
 }
 
@@ -648,7 +647,7 @@ function isItalian(title, italianMovieTitle = null) {
             // Se almeno il 60% delle parole del titolo italiano sono presenti, è probabile che sia in italiano.
             const percentageMatch = matchingWords.length / italianWords.length;
             if (percentageMatch > 0.6) { // Soglia alzata per essere più precisi ed evitare falsi positivi
-                console.log(`🇮🇹 Matched Italian title words in "${title}" (score: ${percentageMatch.toFixed(2)})`);
+                if (DEBUG_MODE) console.log(`🇮🇹 Matched Italian title words in "${title}" (score: ${percentageMatch.toFixed(2)})`);
                 return true;
             }
         }
@@ -1813,11 +1812,11 @@ function buildKnabenQueries(parsedId, metadata, options = {}) {
 async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
     // Global circuit breaker check - if Knaben has failed too many times, skip
     if (Date.now() < knabenCircuitBreakerUntil) {
-        console.log(`⚠️ [Knaben API] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [Knaben API] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
-    console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
 
     // Determina le categorie in base al tipo
     const categories = [];
@@ -1841,7 +1840,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             addSeasonEpisode: true,
             useAllTitles: true,
         });
-        console.log(`🦉 [Knaben API] Built ${queries.length} queries from metadata: ${queries.join(', ')}`);
+        if (DEBUG_MODE) console.log(`🦉 [Knaben API] Built ${queries.length} queries from metadata: ${queries.join(', ')}`);
     }
 
     // Fallback alla query originale se non abbiamo metadata
@@ -1857,7 +1856,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     }
 
     if (queries.length === 0) {
-        console.log('🦉 [Knaben API] No valid queries, skipping search.');
+        if (DEBUG_MODE) console.log('🦉 [Knaben API] No valid queries, skipping search.');
         return [];
     }
 
@@ -1871,7 +1870,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     } : null;
 
     // ✅ PARALLELIZZATO: Esegui TUTTE le query in parallelo
-    console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
     
     const queryResults = await Promise.all(queries.map(async (query) => {
         try {
@@ -1920,7 +1919,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             const hasDownloadUrl = !!hit.link;
 
             if (!hash && !hasDownloadUrl) {
-                console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
+                if (DEBUG_MODE) console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
                 continue;
             }
 
@@ -2021,7 +2020,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         }
     }
 
-    console.log(`🦉 [Knaben API] Search completed. Found ${allHits.length} unique results.`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Search completed. Found ${allHits.length} unique results.`);
     return allHits;
 }
 
@@ -2049,11 +2048,11 @@ const TorrentGalaxyCategory = {
 async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
     // Global circuit breaker check
     if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
-        console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
-    console.log(`🌌 [TorrentGalaxy] Starting search for: "${searchQuery}" (type: ${type})`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Starting search for: "${searchQuery}" (type: ${type})`);
 
     const allResults = [];
     const seenHashes = new Set();
@@ -2082,12 +2081,12 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
 
     // Deduplicate queries
     const uniqueQueries = [...new Set(queries)];
-    console.log(`🌌 [TorrentGalaxy] Built ${uniqueQueries.length} queries: ${uniqueQueries.join(', ')}`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Built ${uniqueQueries.length} queries: ${uniqueQueries.join(', ')}`);
 
     for (const query of uniqueQueries) {
         // Check circuit breaker before each query
         if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
-            console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping remaining queries`);
+            if (DEBUG_MODE) console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping remaining queries`);
             break;
         }
 
@@ -2166,7 +2165,7 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
                         magnetLink: `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(item.n || '')}&tr=udp://tracker.opentrackr.org:1337/announce`
                     });
                 }
-                console.log(`🌌 [TorrentGalaxy] Query "${query}" returned ${data.results.length} results, ${allResults.length} total unique`);
+                if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Query "${query}" returned ${data.results.length} results, ${allResults.length} total unique`);
             }
 
         } catch (error) {
@@ -2186,7 +2185,7 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
         }
     }
 
-    console.log(`🌌 [TorrentGalaxy] Search completed. Found ${allResults.length} unique results.`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Search completed. Found ${allResults.length} unique results.`);
     return allResults;
 }
 
@@ -2416,7 +2415,7 @@ function parseUIndexHTML(html) {
         row.includes('<td')
     );
 
-    console.log(`📊 Processing ${rows.length} potential torrent rows`);
+    if (DEBUG_MODE) console.log(`📊 Processing ${rows.length} potential torrent rows`);
 
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -2513,7 +2512,7 @@ function parseUIndexHTML(html) {
                 source: 'UIndex'
             });
 
-            console.log(`✅ Parsed: ${title} (${sizeStr}) - ${infoHash}`);
+            if (DEBUG_MODE) console.log(`✅ Parsed: ${title} (${sizeStr}) - ${infoHash}`);
 
         } catch (error) {
             console.error(`❌ Error parsing row ${i}:`, error.message);
@@ -2521,7 +2520,7 @@ function parseUIndexHTML(html) {
         }
     }
 
-    console.log(`📊 Successfully parsed ${results.length} torrents`);
+    if (DEBUG_MODE) console.log(`📊 Successfully parsed ${results.length} torrents`);
     return results;
 }
 
@@ -2586,7 +2585,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
     for (const strategy of searchStrategies) {
         if (!strategy.query) continue;
 
-        console.log(`🔍 [UIndex] Strategy: ${strategy.description} - "${strategy.query}"`);
+        if (DEBUG_MODE) console.log(`🔍 [UIndex] Strategy: ${strategy.description} - "${strategy.query}"`);
 
         try {
             const results = await fetchUIndexSingle(strategy.query, type, validationMetadata);
@@ -2598,7 +2597,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
                 return true;
             });
 
-            console.log(`📊 [UIndex] Strategy "${strategy.description}" found ${newResults.length} unique results`);
+            if (DEBUG_MODE) console.log(`📊 [UIndex] Strategy "${strategy.description}" found ${newResults.length} unique results`);
             allResults.push(...newResults);
 
             // If we got good results, don't try more strategies
@@ -2613,7 +2612,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
         await new Promise(resolve => setTimeout(resolve, 50));
     }
 
-    console.log(`🎉 Multi-strategy search found ${allResults.length} total unique results`);
+    if (DEBUG_MODE) console.log(`🎉 Multi-strategy search found ${allResults.length} total unique results`);
     return allResults;
 }
 
@@ -2621,12 +2620,12 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
 async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata = null) {
     // Global circuit breaker check for UIndex
     if (Date.now() < uindexCircuitBreakerUntil) {
-        console.log(`⚠️ [UIndex] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [UIndex] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
     try {
-        console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
+        if (DEBUG_MODE) console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
 
         let category = 0; // Default to 'All'
         if (type === 'movie') {
@@ -2679,7 +2678,7 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
 
         // Basic validation
         if (!html.includes('<table') || !html.includes('magnet:')) {
-            console.log('⚠️ Page doesn\'t contain expected torrent table');
+            if (DEBUG_MODE) console.log('⚠️ Page doesn\'t contain expected torrent table');
             return [];
         }
 
@@ -2731,7 +2730,7 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
             filteredResults.push(result);
         }
 
-        console.log(`🔍 [UIndex] Filtered to ${filteredResults.length}/${rawResults.length} Italian results`);
+        if (DEBUG_MODE) console.log(`🔍 [UIndex] Filtered to ${filteredResults.length}/${rawResults.length} Italian results`);
         return filteredResults;
 
     } catch (error) {
@@ -4422,14 +4421,14 @@ function maybeCleanupCache() {
 
 // ✅ Enhanced main fetch function
 async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null, validationMetadata = null) {
-    console.log(`🔄 Fetching UIndex results for: "${searchQuery}" (type: ${type})`);
+    if (DEBUG_MODE) console.log(`🔄 Fetching UIndex results for: "${searchQuery}" (type: ${type})`);
 
     // Check cache first
     const cacheKey = `uindex:${searchQuery}:${type}`;
     if (cache.has(cacheKey)) {
         const cached = cache.get(cacheKey);
         if (Date.now() - cached.timestamp < CACHE_TTL) {
-            console.log(`⚡ Using cached results for UIndex: "${searchQuery}"`);
+            if (DEBUG_MODE) console.log(`⚡ Using cached results for UIndex: "${searchQuery}"`);
             return cached.data;
         } else {
             cache.delete(cacheKey);
@@ -4441,7 +4440,7 @@ async function fetchUIndexData(searchQuery, type = 'movie', italianTitle = null,
         const rawResults = await searchUIndexMultiStrategy(searchQuery, type, validationMetadata);
 
         if (!rawResults.length) {
-            console.log('⚠️ No results found from any search strategy for UIndex');
+            if (DEBUG_MODE) console.log('⚠️ No results found from any search strategy for UIndex');
             return [];
         }
 
@@ -4517,17 +4516,17 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
             // If torrent has year and it differs by more than 1 year, REJECT
             // (Strict for series to avoid "Spartacus" vs "Spartacus: Gods of the Arena")
             if (diff > 1) {
-                console.log(`❌ [YEAR FILTER] Rejected "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
+                if (DEBUG_MODE) console.log(`❌ [YEAR FILTER] Rejected "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
                 return false;
             } else {
-                console.log(`✅ [YEAR FILTER] Passed "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
+                if (DEBUG_MODE) console.log(`✅ [YEAR FILTER] Passed "${torrentTitle}" (Year: ${torrentYear}, Required: ${requiredYear})`);
             }
         }
     }
 
     // DEBUG: Log rejected single episodes
-    if (torrentTitle.includes('155da22a') || torrentTitle.includes('3d700a66') ||
-        (torrentTitle.toLowerCase().includes('scissione') && torrentTitle.toLowerCase().includes('s01e01') && torrentTitle.toLowerCase().includes('2160p'))) {
+    if (DEBUG_MODE && (torrentTitle.includes('155da22a') || torrentTitle.includes('3d700a66') ||
+        (torrentTitle.toLowerCase().includes('scissione') && torrentTitle.toLowerCase().includes('s01e01') && torrentTitle.toLowerCase().includes('2160p')))) {
         console.log(`🔍 [Match Debug] Checking: "${torrentTitle.substring(0, 80)}" for S${seasonNum}E${episodeNum}`);
     }
 
@@ -4795,7 +4794,7 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
     // ✅ Use lightCleanedTitle for regex checks to preserve punctuation (dots, dashes)
     const exactMatch = exactEpisodePatterns.some(pattern => pattern.test(lightCleanedTitle));
     if (exactMatch) {
-        console.log(`✅ [EXACT] Episode match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
+        if (DEBUG_MODE) console.log(`✅ [EXACT] Episode match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
         return true;
     }
 
@@ -4882,15 +4881,15 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
             const isSecondHalf = episodeNum >= 5;
             
             if (partNum === 1 && isSecondHalf) {
-                console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 1 doesn't contain E${episodeNum})`);
+                if (DEBUG_MODE) console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 1 doesn't contain E${episodeNum})`);
                 return false;
             }
             if (partNum === 2 && isFirstHalf) {
-                console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 2 doesn't contain E${episodeNum})`);
+                if (DEBUG_MODE) console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 2 doesn't contain E${episodeNum})`);
                 return false;
             }
         }
-        console.log(`✅ [SEASON PACK] Match for "${torrentTitle}" contains Season ${seasonNum}`);
+        if (DEBUG_MODE) console.log(`✅ [SEASON PACK] Match for "${torrentTitle}" contains Season ${seasonNum}`);
         return true;
     }
 
@@ -4902,7 +4901,7 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
         // Only match if there's NO explicit season number (avoids false positives like "S02 COMPLETA")
         const hasExplicitSeason = /(?:stagione|season|s)\s*\d{1,2}/i.test(normalizedTorrentTitle);
         if (!hasExplicitSeason) {
-            console.log(`✅ [COMPLETE SERIES] Match for "${torrentTitle}" - complete series pack (no explicit season)`);
+            if (DEBUG_MODE) console.log(`✅ [COMPLETE SERIES] Match for "${torrentTitle}" - complete series pack (no explicit season)`);
             return true;
         }
     }
@@ -4915,16 +4914,16 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
     if (seasonRangeMatch) {
         const startSeason = parseInt(seasonRangeMatch[1]);
         const endSeason = parseInt(seasonRangeMatch[2]);
-        console.log(`🔍 [MULTI-SEASON CHECK] "${torrentTitle}" has range S${startSeason}-S${endSeason}, checking if Season ${seasonNum} is included...`);
+        if (DEBUG_MODE) console.log(`🔍 [MULTI-SEASON CHECK] "${torrentTitle}" has range S${startSeason}-S${endSeason}, checking if Season ${seasonNum} is included...`);
         if (seasonNum >= startSeason && seasonNum <= endSeason) {
-            console.log(`✅ [MULTI-SEASON RANGE] Match for "${torrentTitle}" S${startSeason}-S${endSeason} contains Season ${seasonNum}`);
+            if (DEBUG_MODE) console.log(`✅ [MULTI-SEASON RANGE] Match for "${torrentTitle}" S${startSeason}-S${endSeason} contains Season ${seasonNum}`);
             return true;
         } else {
-            console.log(`❌ [MULTI-SEASON RANGE] Season ${seasonNum} is NOT in range S${startSeason}-S${endSeason}`);
+            if (DEBUG_MODE) console.log(`❌ [MULTI-SEASON RANGE] Season ${seasonNum} is NOT in range S${startSeason}-S${endSeason}`);
         }
     }
 
-    console.log(`❌ No match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
+    if (DEBUG_MODE) console.log(`❌ No match for "${torrentTitle}" S${seasonStr}E${episodeStr}`);
     return false;
 }
 
@@ -5064,7 +5063,7 @@ function isExactMovieMatch(torrentTitle, movieTitle, year) {
         const percentageMatch = matchingWords.length / movieWords.length;
         hasEnoughMovieWords = percentageMatch >= 0.7;
         if (!hasEnoughMovieWords) {
-            console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
+            if (DEBUG_MODE) console.log(`❌ Movie match failed for "${torrentTitle}" - ${percentageMatch.toFixed(2)} match`);
         }
     }
 
@@ -5078,7 +5077,7 @@ function isExactMovieMatch(torrentTitle, movieTitle, year) {
         yearMatch[0] === year.toString() ||
         Math.abs(parseInt(yearMatch[0]) - parseInt(year)) <= 1;
 
-    console.log(`${yearMatches ? '✅' : '❌'} Year match for "${torrentTitle}" (${year})`);
+    if (DEBUG_MODE) console.log(`${yearMatches ? '✅' : '❌'} Year match for "${torrentTitle}" (${year})`);
     return yearMatches;
 }
 
@@ -5200,7 +5199,12 @@ async function handleStream(type, id, config, workerOrigin) {
             try {
                 const dbCached = await dbHelper.getTorrentSearchCache(globalCacheKey, cacheTtlHours);
                 if (dbCached) {
-                    console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
+                    // Extract title info for logging
+                    const cacheTitle = dbCached.mediaDetails?.title || dbCached.mediaDetails?.titles?.[0] || dbCached.italianTitle || null;
+                    const cacheYear = dbCached.mediaDetails?.year ? ` (${dbCached.mediaDetails.year})` : '';
+                    const cacheEpisode = type === 'series' && dbCached.season && dbCached.episode ? ` S${String(dbCached.season).padStart(2, '0')}E${String(dbCached.episode).padStart(2, '0')}` : '';
+                    if (DEBUG_MODE) console.log(`⚡ [DB CACHE HIT] ${dbCached.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey}`);
+                    if (DEBUG_MODE && cacheTitle) console.log(`📽️ [DB CACHE] Title: ${cacheTitle}${cacheYear}${cacheEpisode}`);
                     cachedData = dbCached;
                     fromGlobalCache = true;
                 }
@@ -5214,7 +5218,12 @@ async function handleStream(type, id, config, workerOrigin) {
             const cached = globalTorrentCache.get(globalCacheKey);
             if (Date.now() - cached.timestamp < GLOBAL_CACHE_TTL) {
                 const cacheAge = Math.round((Date.now() - cached.timestamp) / 1000);
-                console.log(`⚡ [MEMORY CACHE HIT] ${cached.data.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey} | Age: ${cacheAge}s`);
+                // Extract title info for logging
+                const memTitle = cached.data.mediaDetails?.title || cached.data.mediaDetails?.titles?.[0] || cached.data.italianTitle || null;
+                const memYear = cached.data.mediaDetails?.year ? ` (${cached.data.mediaDetails.year})` : '';
+                const memEpisode = type === 'series' && cached.data.season && cached.data.episode ? ` S${String(cached.data.season).padStart(2, '0')}E${String(cached.data.episode).padStart(2, '0')}` : '';
+                if (DEBUG_MODE) console.log(`⚡ [MEMORY CACHE HIT] ${cached.data.filteredResults?.length || 0} raw torrents | Key: ${globalCacheKey} | Age: ${cacheAge}s`);
+                if (DEBUG_MODE && memTitle) console.log(`📽️ [MEMORY CACHE] Title: ${memTitle}${memYear}${memEpisode}`);
                 cachedData = cached.data;
                 fromGlobalCache = true;
             } else {
@@ -5264,7 +5273,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // ✅ GLOBAL CACHE HIT: Load data from cache, skip search
         if (fromGlobalCache && cachedData) {
-            console.log(`⚡ [GLOBAL CACHE] Loading ${cachedData.filteredResults?.length || 0} torrents from cache...`);
+            if (DEBUG_MODE) console.log(`⚡ [GLOBAL CACHE] Loading ${cachedData.filteredResults?.length || 0} torrents from cache...`);
             filteredResults = cachedData.filteredResults || [];
             mediaDetails = cachedData.mediaDetails || null;
             season = cachedData.season || null;
@@ -5274,7 +5283,12 @@ async function handleStream(type, id, config, workerOrigin) {
             searchQueries = cachedData.searchQueries || [];
             italianTitle = cachedData.italianTitle || null;
             originalTitle = cachedData.originalTitle || null;
-            console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
+            // Show title on cache hit for better log readability
+            const displayTitle = mediaDetails?.title || mediaDetails?.titles?.[0] || italianTitle || decodedId;
+            const displayYear = mediaDetails?.year ? ` (${mediaDetails.year})` : '';
+            const episodeStr = type === 'series' && season && episode ? ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}` : '';
+            console.log(`✅ Found: ${displayTitle}${displayYear}${episodeStr} [CACHE]`);
+            if (DEBUG_MODE) console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
         }
         
         // ✅ Initialize DB connection (needed for debrid cache check even on cache hit)
@@ -5363,12 +5377,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     return { streams: [] };
                 }
 
-                console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
+                if (DEBUG_MODE) console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
                 mediaDetails = await getTMDBDetailsByImdb(cleanImdbId, tmdbKey);
             } else if (/^\d+$/.test(imdbId)) {
                 // TMDb ID format (pure number)
                 const tmdbId = parseInt(imdbId);
-                console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
+                if (DEBUG_MODE) console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
                 mediaDetails = await getTMDBDetailsByTmdb(tmdbId, type, tmdbKey);
             } else {
                 console.log('❌ Invalid ID format (not IMDb or TMDb)');
@@ -5395,22 +5409,22 @@ async function handleStream(type, id, config, workerOrigin) {
             try {
                 // Convert 'series' to 'tv' for TMDB API
                 const tmdbType = mediaDetails.type === 'series' ? 'tv' : 'movie';
-                console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
+                if (DEBUG_MODE) console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
 
                 // 1. Prima chiamata: ottieni dettagli in italiano (language=it-IT)
                 const italianDetails = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'external_ids', 'it-IT');
-                console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
+                if (DEBUG_MODE) console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
 
                 if (italianDetails) {
                     const italianTitleFromResponse = italianDetails.title || italianDetails.name;
-                    console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
 
                     // Usa il titolo italiano se è diverso da quello inglese
                     if (italianTitleFromResponse && italianTitleFromResponse.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                         italianTitle = italianTitleFromResponse;
-                        console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
+                        if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
                     } else if (italianTitleFromResponse) {
-                        console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
+                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
                     }
 
                     // Salva anche l'original_title/original_name
@@ -5418,37 +5432,37 @@ async function handleStream(type, id, config, workerOrigin) {
                         const foundOriginalTitle = italianDetails.original_title || italianDetails.original_name;
                         if (foundOriginalTitle && foundOriginalTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                             originalTitle = foundOriginalTitle;
-                            console.log(`� Found original title: "${originalTitle}"`);
+                            if (DEBUG_MODE) console.log(`🎬 Found original title: "${originalTitle}"`);
                         }
                     }
                 }
 
                 // 2. Fallback: se non abbiamo trovato il titolo italiano, prova con translations
                 if (!italianTitle) {
-                    console.log(`🔍 [Italian Title] Trying translations as fallback...`);
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Trying translations as fallback...`);
                     const detailsWithTranslations = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'translations', 'en-US');
 
                     if (detailsWithTranslations?.translations?.translations) {
-                        console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
+                        if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
                         const italianTranslation = detailsWithTranslations.translations.translations.find(t => t.iso_639_1 === 'it');
 
                         if (italianTranslation) {
-                            console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
+                            if (DEBUG_MODE) console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
                             const foundTitle = italianTranslation.data.title || italianTranslation.data.name;
                             if (foundTitle && foundTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                                 italianTitle = foundTitle;
-                                console.log(`🇮� Found Italian title from translations: "${italianTitle}"`);
+                                if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from translations: "${italianTitle}"`);
                             }
                         } else {
-                            console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
+                            if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
                         }
                     } else {
-                        console.log(`⚠️ [Italian Title] No translations data available`);
+                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No translations data available`);
                     }
                 }
 
                 if (!italianTitle) {
-                    console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
+                    if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
                 }
             } catch (e) {
                 console.warn("⚠️ Could not fetch Italian title from TMDB:", e.message);
@@ -5485,7 +5499,7 @@ async function handleStream(type, id, config, workerOrigin) {
             }
 
             mediaDetails.titles = Array.from(allTitles);
-            console.log(`📝 Built titles array: ${JSON.stringify(mediaDetails.titles)}`);
+            if (DEBUG_MODE) console.log(`📝 Built titles array: ${JSON.stringify(mediaDetails.titles)}`);
         }
 
         const displayTitle = Array.isArray(mediaDetails.titles) ? mediaDetails.titles[0] : mediaDetails.title;
@@ -5493,7 +5507,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // ✅ STEP 1: DATABASE already initialized outside if block
         // (dbEnabled is already set)
-        if (dbEnabled) {
+        if (dbEnabled && DEBUG_MODE) {
             console.log('💾 [DB] Database connection active');
         }
 
@@ -5507,7 +5521,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
         if (config.db_only) {
             selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'torrentio', 'mediafusion', 'comet'];
-            console.log(`💾 [DB Only] Querying ALL providers in database`);
+            if (DEBUG_MODE) console.log(`💾 [DB Only] Querying ALL providers in database`);
         } else {
             if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
             if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
@@ -5523,14 +5537,14 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (config.use_comet !== false) selectedProviders.push('comet');
             }
         }
-        console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
+        if (DEBUG_MODE) console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
 
         if (dbEnabled && mediaDetails.imdbId) {
             if (type === 'series') {
                 // ✅ SOLUZIONE KITSU 6: Use converted season/episode if available (from absolute episode)
                 if (season !== null && episode !== null) {
                     // We have season/episode (either from original request or Kitsu conversion)
-                    console.log(`💾 [DB] Searching for S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} with IMDb ${mediaDetails.imdbId}`);
+                    if (DEBUG_MODE) console.log(`💾 [DB] Searching for S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} with IMDb ${mediaDetails.imdbId}`);
 
                     // Search for specific episode files (with file_index)
                     dbResults = await dbHelper.searchEpisodeFiles(
@@ -5542,7 +5556,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // 🔥 ALSO search for season packs and complete packs (they don't have file_index)
                     const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
-                    console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
+                    if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
 
                     // ✅ FIX: Remove file_index from pack results!
                     // The file_index in torrents table is from the LAST played episode, not the current one.
@@ -5577,7 +5591,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         mediaDetails.imdbId  // Auto-index if found
                     );
                     if (titlePackMatches && titlePackMatches.length > 0) {
-                        console.log(`💾 [DB] Found ${titlePackMatches.length} pack file(s) via Title Search: "${mediaDetails.title}"`);
+                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${titlePackMatches.length} pack file(s) via Title Search: "${mediaDetails.title}"`);
                         packResults.push(...titlePackMatches);
                     }
                 }
@@ -5595,14 +5609,14 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (mediaDetails.title) {
                     const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders, fileSearchOptions);
                     if (titleMatches && titleMatches.length > 0) {
-                        console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}" (${mediaDetails.year})`);
+                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}" (${mediaDetails.year})`);
                         packResults.push(...titleMatches);
                     }
                 }
                 if (mediaDetails.originalName && mediaDetails.originalName !== mediaDetails.title) {
                     const origMatches = await dbHelper.searchFilesByTitle(mediaDetails.originalName, selectedProviders, fileSearchOptions);
                     if (origMatches && origMatches.length > 0) {
-                        console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
+                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
                         packResults.push(...origMatches);
                     }
                 }
@@ -5686,7 +5700,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 for (const result of regularResults) {
                     if (result.all_imdb_ids && Array.isArray(result.all_imdb_ids) && result.all_imdb_ids.length > 1) {
                         if (result.file_index !== null && result.file_index !== undefined) {
-                            console.log(`🔧 [PACK FIX] Removing stale file_index=${result.file_index} from multi-film pack ${result.info_hash?.substring(0,8)}`);
+                            if (DEBUG_MODE) console.log(`🔧 [PACK FIX] Removing stale file_index=${result.file_index} from multi-film pack ${result.info_hash?.substring(0,8)}`);
                             result.file_index = null;
                             result.file_title = null;
                         }
@@ -5700,13 +5714,13 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // If found in DB, check if IDs are complete and convert if needed
         if (dbResults.length > 0) {
-            console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
+            if (DEBUG_MODE) console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
 
             // ✅ SOLUZIONE 3: Check if we need to complete IDs and update DB
             const firstResult = dbResults[0];
             if ((firstResult.imdb_id && !firstResult.tmdb_id) ||
                 (!firstResult.imdb_id && firstResult.tmdb_id)) {
-                console.log(`💾 [DB] Completing missing IDs for database results...`);
+                if (DEBUG_MODE) console.log(`💾 [DB] Completing missing IDs for database results...`);
                 const completed = await completeIds(
                     firstResult.imdb_id,
                     firstResult.tmdb_id,
@@ -5716,16 +5730,16 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Update mediaDetails with completed IDs
                 if (completed.tmdbId && !mediaDetails.tmdbId) {
                     mediaDetails.tmdbId = completed.tmdbId;
-                    console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
+                    if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
                 }
                 if (completed.imdbId && !mediaDetails.imdbId) {
                     mediaDetails.imdbId = completed.imdbId;
-                    console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
+                    if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
                 }
 
                 // ✅ SOLUZIONE 3: Update DB with completed IDs (auto-repair)
                 if (completed.imdbId || completed.tmdbId) {
-                    console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
+                    if (DEBUG_MODE) console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
                     // Extract all info_hash from dbResults
                     const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
                     if (infoHashes.length > 0) {
@@ -5735,7 +5749,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             completed.tmdbId      // Populate missing tmdb_id
                         );
                         if (updatedCount > 0) {
-                            console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
+                            if (DEBUG_MODE) console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
                         }
                     }
                 }
@@ -5946,7 +5960,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     `[Ss](0?${season})(?![0-9])([Ee\\s]|$|[^0-9])|[Ss]tagione\\s*${season}(?![0-9])|[Ss]eason\\s*${season}(?![0-9])`, 'i'
                 );
                 if (singleSeasonPattern.test(title)) {
-                    console.log(`✅ [TIER CHECK] Single season match for "${title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Single season match for "${title.substring(0, 60)}..."`);
                     return true;
                 }
 
@@ -5956,7 +5970,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     const startSeason = parseInt(rangeMatch[1]);
                     const endSeason = parseInt(rangeMatch[2]);
                     if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        console.log(`✅ [TIER CHECK] Range S${startSeason}-S${endSeason} contains Season ${season}`);
+                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Range S${startSeason}-S${endSeason} contains Season ${season}`);
                         return true;
                     }
                 }
@@ -5967,7 +5981,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     const startSeason = parseInt(stagioniMatch[1]);
                     const endSeason = parseInt(stagioniMatch[2]);
                     if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        console.log(`✅ [TIER CHECK] Stagioni ${startSeason}-${endSeason} contains Season ${season}`);
+                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Stagioni ${startSeason}-${endSeason} contains Season ${season}`);
                         return true;
                     }
                 }
@@ -5978,14 +5992,14 @@ async function handleStream(type, id, config, workerOrigin) {
                     const startSeason = parseInt(aRangeMatch[1]);
                     const endSeason = parseInt(aRangeMatch[2]);
                     if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        console.log(`✅ [TIER CHECK] S${startSeason} a S${endSeason} contains Season ${season}`);
+                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] S${startSeason} a S${endSeason} contains Season ${season}`);
                         return true;
                     }
                 }
 
                 // 5. Check serie completa
                 if (/\[COMPLETA\]|Complete\s*Series|Tutte\s*le\s*stagioni|Serie\s*Completa/i.test(title)) {
-                    console.log(`✅ [TIER CHECK] Complete series detected: "${title.substring(0, 60)}..."`);
+                    if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Complete series detected: "${title.substring(0, 60)}..."`);
                     return true;
                 }
 
@@ -5993,7 +6007,7 @@ async function handleStream(type, id, config, workerOrigin) {
             });
 
             if (!hasMatchingSeason) {
-                console.log(`⚠️ [3-Tier] Found ${dbResults.length} results but none match Season ${season} - will do live search for Corsaro`);
+                if (DEBUG_MODE) console.log(`⚠️ [3-Tier] Found ${dbResults.length} results but none match Season ${season} - will do live search for Corsaro`);
                 skipLiveSearch = false;
             }
         }
@@ -6001,13 +6015,13 @@ async function handleStream(type, id, config, workerOrigin) {
         // 💾 DB-Only Mode: Skip ALL live searches (but keep enrichment for background DB growth)
         if (config.db_only) {
             skipLiveSearch = true;
-            console.log(`💾 [DB Only] Mode enabled - skipping all live searches`);
+            if (DEBUG_MODE) console.log(`💾 [DB Only] Mode enabled - skipping all live searches`);
         }
 
         if (skipLiveSearch) {
-            console.log(`✅ [3-Tier] Found ${dbResults.length} results from DB/FTS. Skipping Corsaro live search.`);
+            if (DEBUG_MODE) console.log(`✅ [3-Tier] Found ${dbResults.length} results from DB/FTS. Skipping Corsaro live search.`);
         } else {
-            console.log(`🔍 [3-Tier] No results from DB/FTS. Proceeding to Corsaro live search.`);
+            if (DEBUG_MODE) console.log(`🔍 [3-Tier] No results from DB/FTS. Proceeding to Corsaro live search.`);
         }
 
         // Build search queries (ALWAYS - needed for both live search AND enrichment)
@@ -6081,16 +6095,16 @@ async function handleStream(type, id, config, workerOrigin) {
                 searchQueries.push(cleanedShortTitle);
             }
 
-            if (label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
+            if (DEBUG_MODE && label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
         };
 
         // Always build queries (needed for enrichment even when skipping live search)
-        console.log(`📝 [Queries] Building search queries for enrichment and live search...`);
+        if (DEBUG_MODE) console.log(`📝 [Queries] Building search queries for enrichment and live search...`);
         if (type === 'series') {
             if (kitsuId) { // Anime search strategy
                 const uniqueQueries = new Set();
                 const absEpisode = mediaDetails.absoluteEpisode || episode;
-                console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
+                if (DEBUG_MODE) console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
 
                 // Use all available titles from Kitsu to build search queries
                 for (const title of mediaDetails.titles) {
@@ -6154,7 +6168,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // Rimuovi duplicati e logga
         finalSearchQueries = [...new Set(searchQueries)];
-        console.log(`📚 Final search queries (${finalSearchQueries.length} total):`, finalSearchQueries);
+        if (DEBUG_MODE) console.log(`📚 Final search queries (${finalSearchQueries.length} total):`, finalSearchQueries);
         // --- FINE MODIFICA ---
 
         // --- NUOVA LOGICA DI AGGREGAZIONE E DEDUPLICAZIONE ---
@@ -6185,11 +6199,13 @@ async function handleStream(type, id, config, workerOrigin) {
             if (config.use_mediafusion !== false) enabledExternalAddons.push('mediafusion');
             if (config.use_comet !== false) enabledExternalAddons.push('comet');
         }
-        console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
-        console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
+        if (DEBUG_MODE) {
+            console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
+            console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
+        }
 
         // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
-        console.log(`🔍 Starting parallel live search...`);
+        if (DEBUG_MODE) console.log(`🔍 Starting parallel live search...`);
 
         // ✅ Initialize Jackettio if ENV vars are set
         let jackettioInstance = null;
@@ -6218,7 +6234,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     season: season ? parseInt(season, 10) : undefined,
                     episode: episode ? parseInt(episode, 10) : undefined,
                 };
-                console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
+                if (DEBUG_MODE) console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
 
                 // 🎬 FILM: Solo 2 query semplici
                 if (isMovie) {
@@ -6257,7 +6273,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 const uniqueUindexQueries = [...new Set(uindexQueries)];
-                console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
+                if (DEBUG_MODE) console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
 
                 // Track if we found results with Italian title (to enable early-exit)
                 let foundWithItalianTitle = false;
@@ -6269,14 +6285,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
                     if (foundWithItalianTitle && i >= italianQueryCount) {
-                        console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
+                        if (DEBUG_MODE) console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
                         break;
                     }
 
                     try {
                         const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
                         if (res && res.length > 0) {
-                            console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
+                            if (DEBUG_MODE) console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
                             rawResultsByProvider.UIndex.push(...res);
 
                             // Mark that we found results with Italian title queries
@@ -6306,16 +6322,16 @@ async function handleStream(type, id, config, workerOrigin) {
                     !query.toLowerCase().includes(cleanedItalianTitle);
 
                 if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
-                    console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
+                    if (DEBUG_MODE) console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
                     continue; // Skip this query, don't break - we might have more ITA queries after
                 }
 
-                console.log(`\n🔍 Searching sources for: "${query}"`);
+                if (DEBUG_MODE) console.log(`\n🔍 Searching sources for: "${query}"`);
 
                 // Stop searching if we have a good number of results (checking total accumulated)
                 const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
                 if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
-                    console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
+                    if (DEBUG_MODE) console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
                     break;
                 }
 
@@ -6394,7 +6410,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 results.forEach((result, index) => {
                     const sourceName = searchPromises[index].name;
                     if (result.status === 'fulfilled' && result.value) {
-                        console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
+                        if (DEBUG_MODE) console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
                         if (rawResultsByProvider[sourceName]) {
                             rawResultsByProvider[sourceName].push(...result.value);
                         }
@@ -6404,7 +6420,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             query.toLowerCase().includes(cleanedItalianTitle);
                         if (isItalianTitleQuery && result.value.length > 0) {
                             foundWithItalianTitleQueries += result.value.length;
-                            console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                            if (DEBUG_MODE) console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
                         }
                     } else if (result.status === 'rejected') {
                         console.error(`❌ ${sourceName} search failed:`, result.reason);
@@ -6421,7 +6437,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // 3️⃣ TASK: External Addons (skip in db_only mode)
         if (enabledExternalAddons.length > 0 && !config.db_only) {
             parallelSearchTasks.push(async () => {
-                console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+                if (DEBUG_MODE) console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
 
                 // Build Stremio-format ID for addon APIs
                 let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
@@ -6433,10 +6449,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
 
                     if (externalResults.length > 0) {
-                        console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                        if (DEBUG_MODE) console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
                         rawResultsByProvider.ExternalAddons.push(...externalResults);
                     } else {
-                        console.log(`⚠️ [External Addons] No results received`);
+                        if (DEBUG_MODE) console.log(`⚠️ [External Addons] No results received`);
                     }
                 } catch (externalError) {
                     console.error(`❌ [External Addons] Error:`, externalError.message);
@@ -6449,7 +6465,7 @@ async function handleStream(type, id, config, workerOrigin) {
             parallelSearchTasks.push(async () => {
                 // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
                 const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
-                console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
+                if (DEBUG_MODE) console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
                 try {
                     // Timeout 4500ms come richiesto
                     // Build Stremio-format ID
@@ -6460,7 +6476,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
                     if (rarbgRes && rarbgRes.length > 0) {
-                        console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
+                        if (DEBUG_MODE) console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
                         rawResultsByProvider.RARBG = rarbgRes.map(r => ({
                             title: r.title,
                             link: r.magnet,
@@ -6478,9 +6494,9 @@ async function handleStream(type, id, config, workerOrigin) {
         }
 
         // 🚀 EXECUTE ALL TASKS PARALLELY
-        console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
+        if (DEBUG_MODE) console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
         await Promise.allSettled(parallelSearchTasks.map(task => task()));
-        console.log(`🏁 All parallel search tasks completed.`);
+        if (DEBUG_MODE) console.log(`🏁 All parallel search tasks completed.`);
 
         // Merge finale
         const allRawResults = [
@@ -6493,15 +6509,15 @@ async function handleStream(type, id, config, workerOrigin) {
             ...rawResultsByProvider.Jackettio
         ];
 
-        console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
+        if (DEBUG_MODE) console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
 
         // ✅ ADD DATABASE RESULTS TO RAW RESULTS (if any)
         if (dbResults.length > 0) {
-            console.log(`💾 [DB] Adding ${dbResults.length} database results to aggregation...`);
+            if (DEBUG_MODE) console.log(`💾 [DB] Adding ${dbResults.length} database results to aggregation...`);
 
             // DEBUG: Log all unique hashes BEFORE filtering
             const uniqueHashes = [...new Set(dbResults.map(r => r.info_hash))];
-            console.log(`💾 [DB] Found ${uniqueHashes.length} unique torrents from ${dbResults.length} total DB results`);
+            if (DEBUG_MODE) console.log(`💾 [DB] Found ${uniqueHashes.length} unique torrents from ${dbResults.length} total DB results`);
             // uniqueHashes.forEach(hash => {
             //     const torrents = dbResults.filter(r => r.info_hash === hash);
             //     const firstTorrent = torrents[0];
@@ -6540,7 +6556,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     return match;
                 });
 
-                console.log(`💾 [DB] Filtered to ${filteredDbResults.length}/${dbResults.length} torrents matching S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`);
+                if (DEBUG_MODE) console.log(`💾 [DB] Filtered to ${filteredDbResults.length}/${dbResults.length} torrents matching S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`);
             }
 
             // ✅ DEDUPLICATE by info_hash (prefer entries with file_index for episode files)
@@ -6566,7 +6582,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
             }
             filteredDbResults = Array.from(deduplicatedMap.values());
-            console.log(`💾 [DB] Deduplicated to ${filteredDbResults.length} unique torrents`);
+            if (DEBUG_MODE) console.log(`💾 [DB] Deduplicated to ${filteredDbResults.length} unique torrents`);
 
             // ✅ PACK FILES VERIFICATION: Verify season packs contain the requested episode
             // - Max 20 packs verified per search
@@ -6596,10 +6612,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         // 🚨 SANITY CHECK: Verify that the "Verified" file matches the episode
                         // This fixes "Poisoned" DB entries (e.g. Index 1 maps to E1, but file is actually E6)
                         let isClean = false;
-                        console.log(`🔍 [SANITY] Checking Verified Pack: "${torrentTitle.substring(0, 30)}..." | File: "${dbResult.file_title}"`);
+                        if (DEBUG_MODE) console.log(`🔍 [SANITY] Checking Verified Pack: "${torrentTitle.substring(0, 30)}..." | File: "${dbResult.file_title}"`);
                         const parsed = packFilesHandler.parseSeasonEpisode(dbResult.file_title, seasonNum);
-                        if (parsed) console.log(`   -> Parsed: S${parsed.season}E${parsed.episode}`);
-                        else console.log(`   -> Parsed: NULL`);
+                        if (DEBUG_MODE) {
+                            if (parsed) console.log(`   -> Parsed: S${parsed.season}E${parsed.episode}`);
+                            else console.log(`   -> Parsed: NULL`);
+                        }
 
                         if (parsed && parsed.episode === episodeNum) {
                             isClean = true;
@@ -6621,7 +6639,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const torrentSize = (r) => r.torrent_size || r.size || 0;
                 unverifiedPacks.sort((a, b) => torrentSize(b) - torrentSize(a));
 
-                console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
                 // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
                 const needsExternalVerification = [];
@@ -6630,7 +6648,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
                 // This ensures "Part 2" packs are excluded if we already know their content
-                console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
 
                 for (const dbResult of unverifiedPacks) {
                     try {
@@ -6651,14 +6669,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                                 dbResult.file_index = fileInfo.fileIndex;
                                 dbResult.file_title = fileInfo.fileName;
                                 dbResult.file_size = fileInfo.fileSize;
                                 newlyVerified.push(dbResult);
                             } else {
-                                console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
                                 excluded.push(dbResult);
                             }
                         } else {
@@ -6675,7 +6693,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
                 const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
 
-                console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
 
                 for (let i = 0; i < toVerifyExternal.length; i++) {
                     const dbResult = toVerifyExternal[i];
@@ -6684,7 +6702,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Delay for external calls
                     if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
 
-                    console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
 
                     try {
                         const fileInfo = await packFilesHandler.resolveSeriesPackFile(
@@ -6697,14 +6715,14 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                            if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                             dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                             dbResult.file_index = fileInfo.fileIndex;
                             dbResult.file_title = fileInfo.fileName;
                             dbResult.file_size = fileInfo.fileSize;
                             newlyVerified.push(dbResult);
                         } else {
-                            console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                            if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
                             excluded.push(dbResult);
                         }
                     } catch (err) {
@@ -6722,7 +6740,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 3️⃣ STRICT FILTERING: Exclude skipped packs!
                 if (skippedSize > 0) {
-                    console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    if (DEBUG_MODE) console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
                 }
 
                 // Combine results: nonPacks + verifiedPacks + newlyVerified
@@ -6797,7 +6815,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
 
                 // DEBUG: Log what we're adding
-                console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${finalFileSize ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
+                if (DEBUG_MODE) console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${finalFileSize ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
 
                 // Add to raw results with high priority
                 allRawResults.push({
@@ -6819,12 +6837,12 @@ async function handleStream(type, id, config, workerOrigin) {
                 });
 
                 // DEBUG: Log file info from DB
-                if (finalFileIndex !== undefined && finalFileIndex !== null) {
+                if (DEBUG_MODE && finalFileIndex !== undefined && finalFileIndex !== null) {
                     console.log(`   📁 Has file: fileIndex=${finalFileIndex}, file_title=${fileName}`);
                 }
             }
 
-            console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
+            if (DEBUG_MODE) console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
         }
 
 
@@ -7181,7 +7199,7 @@ async function handleStream(type, id, config, workerOrigin) {
         }
 
         let results = Array.from(bestResults.values());
-        console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
+        if (DEBUG_MODE) console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
         // --- FINE NUOVA LOGICA ---
 
         // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
@@ -7205,7 +7223,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             (mainAddon && /^torrentio$/i.test(mainAddon));
 
                         if (!isItalian && !isTrustedProvider) {
-                            console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
+                            if (DEBUG_MODE) console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
                             return false;
                         }
                         return true;
@@ -7229,7 +7247,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
                         .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
                 } else {
-                    console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
+                    if (DEBUG_MODE) console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
                 }
             } catch (dbSaveError) {
                 console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
@@ -7237,11 +7255,11 @@ async function handleStream(type, id, config, workerOrigin) {
         }
 
         if (!results || results.length === 0) {
-            console.log('❌ No results found from any source after all fallbacks');
+            if (DEBUG_MODE) console.log('❌ No results found from any source after all fallbacks');
             return { streams: [] };
         }
 
-        console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
+        if (DEBUG_MODE) console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
 
         // ✅ Apply exact matching filters (use existing variable from outer scope)
         filteredResults = results;
@@ -7253,7 +7271,7 @@ async function handleStream(type, id, config, workerOrigin) {
             const displayEpisode = kitsuId && mediaDetails.absoluteEpisode
                 ? `absolute ${mediaDetails.absoluteEpisode} (S${season}E${episode})`
                 : `S${season}E${episode}`;
-            console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
+            if (DEBUG_MODE) console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
 
             filteredResults = filteredResults.filter(result => {
                 // For Kitsu anime, we need to check BOTH:
@@ -7274,13 +7292,13 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (!match) {
                     if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
                 } else {
-                    console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
+                    if (DEBUG_MODE) console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
                 }
 
                 return match;
             });
 
-            console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
+            if (DEBUG_MODE) console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
 
             // ✅ PACK FILES VERIFICATION for scraped results
             if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
@@ -7311,7 +7329,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Sort by size (largest first)
                 unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
 
-                console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
                 // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
                 const needsExternalVerification = [];
@@ -7319,7 +7337,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const excluded = [];
 
                 // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
 
                 for (const result of unverifiedPacks) {
                     const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
@@ -7345,7 +7363,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                                 result.file_size = fileInfo.fileSize;
                                 result.fileIndex = fileInfo.fileIndex;
@@ -7354,7 +7372,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.size = formatBytes(fileInfo.fileSize);
                                 newlyVerified.push(result);
                             } else {
-                                console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
                                 excluded.push(result);
                             }
                         } else {
@@ -7371,7 +7389,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
                 const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
 
-                console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
 
                 for (let i = 0; i < toVerifyExternal.length; i++) {
                     const result = toVerifyExternal[i];
@@ -7380,7 +7398,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
 
-                    console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
 
                     const originalPackSize = result.sizeInBytes || 0;
 
@@ -7395,7 +7413,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                            if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                             result.packSize = fileInfo.totalPackSize || originalPackSize;
                             result.file_size = fileInfo.fileSize;
                             result.fileIndex = fileInfo.fileIndex;
@@ -7404,7 +7422,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             result.size = formatBytes(fileInfo.fileSize);
                             newlyVerified.push(result);
                         } else {
-                            console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                            if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
                             excluded.push(result);
                         }
                     } catch (err) {
@@ -7415,10 +7433,10 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 3️⃣ STRICT FILTERING: Exclude skipped packs!
                 if (skippedSize > 0) {
-                    console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    if (DEBUG_MODE) console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
                 }
 
-                console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
+                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
 
                 // Combine results SKIPPED ARE EXCLUDED
                 filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
@@ -7426,7 +7444,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
             // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
             if (filteredResults.length === 0 && originalCount > 0) {
-                console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
+                if (DEBUG_MODE) console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
             }
         } else if (type === 'movie') {
             const originalCount = filteredResults.length;
@@ -7440,7 +7458,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
                 // Packs are identified by having a fileIndex (from pack_files table)
                 if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                    console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
+                    if (DEBUG_MODE) console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
                     return true; // Always keep packs, they're already filtered by IMDb ID in DB query
                 }
 
@@ -7472,11 +7490,11 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
                 return false;
             });
-            console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
+            if (DEBUG_MODE) console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
 
             // If exact matching removed too many results, be more lenient
             if (filteredResults.length === 0 && originalCount > 0) {
-                console.log('⚠️ Exact filtering removed all results, using broader match');
+                if (DEBUG_MODE) console.log('⚠️ Exact filtering removed all results, using broader match');
                 filteredResults = results.slice(0, Math.min(15, results.length));
             }
 
@@ -7570,7 +7588,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
                 }
                 
-                console.log(`🎬 [MOVIE VERIFY] Found ${actualPacks.length} actual packs (${unverifiedMovies.length - actualPacks.length} single movies skipped)`);
+                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Found ${actualPacks.length} actual packs (${unverifiedMovies.length - actualPacks.length} single movies skipped)`);
 
                 // 1️⃣ FAST PATH: Check DB Cache ONLY for actual packs
                 const PACK_TTL_DAYS = 30;
@@ -7587,7 +7605,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         
                         // If corrupted cache, delete it first
                         if (needsForceRefresh && typeof dbHelper.deletePackFilesCache === 'function') {
-                            console.log(`🗑️ [MOVIE VERIFY] Deleting corrupted cache for ${infoHash.substring(0, 8)}...`);
+                            if (DEBUG_MODE) console.log(`🗑️ [MOVIE VERIFY] Deleting corrupted cache for ${infoHash.substring(0, 8)}...`);
                             await dbHelper.deletePackFilesCache(infoHash);
                         }
                         
@@ -7597,7 +7615,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (!needsForceRefresh && typeof dbHelper.getPackFiles === 'function') {
                             const { files: packFiles, expired } = await dbHelper.getPackFiles(infoHash, PACK_TTL_DAYS);
                             hasFreshCache = packFiles && packFiles.length > 0 && !expired;
-                            if (expired) {
+                            if (expired && DEBUG_MODE) {
                                 console.log(`⏰ [MOVIE VERIFY] Pack ${infoHash.substring(0, 8)} TTL expired - queue for refresh`);
                             }
                         }
@@ -7627,7 +7645,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
                                 result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                                 result.file_size = fileInfo.fileSize;
                                 result.fileIndex = fileInfo.fileIndex;
@@ -7636,7 +7654,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.size = formatBytes(fileInfo.fileSize);
                                 newlyVerified.push(result);
                             } else {
-                                console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
                                 excluded.push(result);
                             }
                         } else {
@@ -7652,7 +7670,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 const toVerifyExternal = needsExternalVerification.slice(0, MAX_MOVIE_VERIFY);
                 const skipped = needsExternalVerification.slice(MAX_MOVIE_VERIFY);
 
-                console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
+                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
 
                 for (let i = 0; i < toVerifyExternal.length; i++) {
                     const result = toVerifyExternal[i];
@@ -7668,7 +7686,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     }
 
                     if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-                    console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
 
                     try {
                         // Construct array of ALL possible titles to match against
@@ -7680,7 +7698,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         // Dedup
                         const uniqueTitles = [...new Set(candidateTitles)];
 
-                        console.log(`🎬 [MOVIE VERIFY] Resolving pack using titles: ${JSON.stringify(uniqueTitles)}`);
+                        if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Resolving pack using titles: ${JSON.stringify(uniqueTitles)}`);
 
                         const fileInfo = await packFilesHandler.resolveMoviePackFile(
                             infoHash,
@@ -7692,7 +7710,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         );
 
                         if (fileInfo) {
-                            console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
+                            if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
                             result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                             result.file_size = fileInfo.fileSize;
                             result.fileIndex = fileInfo.fileIndex;
@@ -7703,7 +7721,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         } else {
                             // If resolve returns null, it means it's a pack but movie NOT found.
                             // OR fetch failed.
-                            console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
+                            if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
                             excluded.push(result);
                         }
                     } catch (err) {
@@ -7718,7 +7736,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 // but likely it IS the movie itself (single file).
                 // We only exclude if we POSITIVELY identified it as a pack missing the file.
                 filteredResults = [...verifiedMovies, ...newlyVerified, ...skipped];
-                console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results (${skipped.length} unverified in background)`);
+                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results (${skipped.length} unverified in background)`);
                 
                 // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
                 // This pre-fetches pack files for future searches
@@ -8023,7 +8041,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         if (userCacheToSave.length > 0) {
                             await dbHelper.updateRdCacheStatus(userCacheToSave, type);
-                            console.log(`💾 [GLOBAL CACHE] Saved ${userCacheToSave.length} RD personal torrents to DB (now available for all users)`);
+                            if (DEBUG_MODE) console.log(`💾 [GLOBAL CACHE] Saved ${userCacheToSave.length} RD personal torrents to DB (now available for all users)`);
                         }
                     }
 
@@ -8070,12 +8088,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             const syncLimit = Math.max(0, 5 - dbCachedCount);
                             const syncItems = itemsToCheck.slice(0, syncLimit);
 
-                            console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
+                            if (DEBUG_MODE) console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
 
                             if (syncItems.length > 0) {
                                 // 🚀 Fire-and-forget: Check RD cache in background (add/delete is slow!)
                                 // Users won't see "⚡" immediately for NEW items, but searching again instantly will show it.
-                                console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
+                                if (DEBUG_MODE) console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
                                 rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
                                     .then(async (liveCheckResults) => {
                                         // Save results to DB
@@ -8105,14 +8123,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             const asyncItems = itemsToCheck.slice(syncLimit);
                             if (asyncItems.length > 0) {
                                 rdCacheChecker.enrichCacheBackground(asyncItems, config.rd_key, dbHelper);
-                                console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
+                                if (DEBUG_MODE) console.log(`🔄 [RD Background] Local enrichment for ${asyncItems.length} additional hashes`);
                             }
                         }
                     }
 
                     // ✅ ONE-TIME: Enrich file_title for cached items that never had it checked
                     if (needsFileTitleEnrichment.length > 0 && config.rd_key) {
-                        console.log(`📝 [File Title] Background enrichment for ${needsFileTitleEnrichment.length} cached items missing file_title...`);
+                        if (DEBUG_MODE) console.log(`📝 [File Title] Background enrichment for ${needsFileTitleEnrichment.length} cached items missing file_title...`);
                         const enrichItems = needsFileTitleEnrichment.map(hash => {
                             const result = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
                             return result ? { hash, magnet: result.magnetLink } : null;
@@ -8181,7 +8199,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     /\b(19[2-9]\d|20[0-3]\d)-(19[2-9]\d|20[0-3]\d)\b/.test(result.title);
 
                 if (isPack) {
-                    console.log(`📦 [Pack] Detected pack: "${result.title}"`);
+                    if (DEBUG_MODE) console.log(`📦 [Pack] Detected pack: "${result.title}"`);
 
                     // Try to get torrent info to access file list
                     // We'll do this lazily when user clicks, but we can mark it as a pack
@@ -8236,9 +8254,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (type === 'movie') {
                         if (!result.file_title && rdCacheData?.file_title) {
                             result.file_title = rdCacheData.file_title;
-                            console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                            if (DEBUG_MODE) console.log(`📄 [RD] Using cached file_title (movie): ${result.file_title.substring(0, 40)}...`);
                         } else if (result.file_title) {
-                            console.log(`📄 [RD] Using DB file_title (movie): ${result.file_title.substring(0, 40)}...`);
+                            if (DEBUG_MODE) console.log(`📄 [RD] Using DB file_title (movie): ${result.file_title.substring(0, 40)}...`);
                         }
                     }
 
@@ -8269,16 +8287,16 @@ async function handleStream(type, id, config, workerOrigin) {
                     // 3. No cache available
 
                     // DEBUG: Log cache lookup
-                    if (rdCacheData) {
+                    if (DEBUG_MODE && rdCacheData) {
                         console.log(`🔍 [Cache Debug] ${infoHashLower.substring(0, 8)}: cached=${rdCacheData.cached}, file_title=${rdCacheData.file_title?.substring(0, 30) || 'null'}`);
                     }
 
                     if (rdCacheData?.cached) {
                         cacheType = 'global';
-                        console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title.substring(0, 50)}...`);
+                        if (DEBUG_MODE) console.log(`👑 ⚡ RD GLOBAL cache (DB): ${result.title.substring(0, 50)}...`);
                     } else if (rdUserTorrent && rdUserTorrent.status === 'downloaded') {
                         cacheType = 'personal';
-                        console.log(`👑 👤 Found in RD PERSONAL cache: ${result.title}`);
+                        if (DEBUG_MODE) console.log(`👑 👤 Found in RD PERSONAL cache: ${result.title}`);
                     } else {
                         cacheType = 'none';
                     }
@@ -8489,19 +8507,19 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Include pack/fileIndex for movie packs to select correct file
                     if (type === 'series' && season && episode) {
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/${season}/${episode}`;
-                        console.log(`📦 [Torbox] Stream URL with S${season}E${episode}: ${result.title}`);
+                        if (DEBUG_MODE) console.log(`📦 [Torbox] Stream URL with S${season}E${episode}: ${result.title}`);
                     } else if (type === 'movie' && result.fileIndex !== undefined && result.fileIndex !== null) {
                         // Movie pack: pass filename for matching (since Torbox IDs differ from RD)
                         const packFileName = result.file_title || result.file_path || '';
                         const encodedFileName = encodeURIComponent(packFileName.split('/').pop()); // Just the filename
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/packfile/${encodedFileName}`;
-                        console.log(`📦 [Torbox] Stream URL with pack filename "${packFileName}": ${result.title}`);
+                        if (DEBUG_MODE) console.log(`📦 [Torbox] Stream URL with pack filename "${packFileName}": ${result.title}`);
                     } else if (type === 'movie' && result.packSize && result.packSize > 5 * 1024 * 1024 * 1024) {
                         // ✅ Movie pack WITHOUT verified fileIndex - pass title+year for runtime resolution
                         const movieTitle = encodeURIComponent(mediaDetails.title || '');
                         const movieYear = mediaDetails.year || '';
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}/movie/${movieTitle}/${movieYear}`;
-                        console.log(`📦 [Torbox] Stream URL with movie title match: ${result.title}`);
+                        if (DEBUG_MODE) console.log(`📦 [Torbox] Stream URL with movie title match: ${result.title}`);
                     } else {
                         streamUrl = `${workerOrigin}/torbox-stream/${encodedConfig}/${encodeURIComponent(result.magnetLink)}`;
                     }
@@ -8509,10 +8527,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     // ✅ EXACT TORRENTIO LOGIC: If Torbox says cached, show as cached
                     if (torboxCacheData?.cached) {
                         cacheType = 'global';
-                        console.log(`📦 ⚡ Torbox GLOBAL cache available: ${result.title}`);
+                        if (DEBUG_MODE) console.log(`📦 ⚡ Torbox GLOBAL cache available: ${result.title}`);
                     } else if (torboxUserTorrent && torboxUserTorrent.download_finished === true) {
                         cacheType = 'personal';
-                        console.log(`📦 👤 Found in Torbox PERSONAL cache: ${result.title}`);
+                        if (DEBUG_MODE) console.log(`📦 👤 Found in Torbox PERSONAL cache: ${result.title}`);
                     } else {
                         cacheType = 'none';
                     }
@@ -9171,11 +9189,13 @@ async function handleStream(type, id, config, workerOrigin) {
         console.log(`⚡ ${cachedCount} cached streams available for instant playback`);
 
         // 🔥 ENRICHMENT: VPS webhook with load balancing (must complete BEFORE returning response)
-        console.log(`🔍 [Background Check] dbEnabled=${dbEnabled}, mediaDetails=${!!mediaDetails}, tmdbId=${mediaDetails?.tmdbId}, imdbId=${mediaDetails?.imdbId}, kitsuId=${mediaDetails?.kitsuId}`);
+        if (DEBUG_MODE) console.log(`🔍 [Background Check] dbEnabled=${dbEnabled}, mediaDetails=${!!mediaDetails}, tmdbId=${mediaDetails?.tmdbId}, imdbId=${mediaDetails?.imdbId}, kitsuId=${mediaDetails?.kitsuId}`);
 
         if (dbEnabled && mediaDetails && (mediaDetails.tmdbId || mediaDetails.imdbId || mediaDetails.kitsuId)) {
-            console.log(`🔍 [Enrichment] Preparing webhook for "${mediaDetails.title}"`);
-            console.log(`🔍 [Enrichment Titles] Italian: "${italianTitle || 'N/A'}", Original: "${originalTitle || 'N/A'}", English: "${mediaDetails.title}"`);
+            if (DEBUG_MODE) {
+                console.log(`🔍 [Enrichment] Preparing webhook for "${mediaDetails.title}"`);
+                console.log(`🔍 [Enrichment Titles] Italian: "${italianTitle || 'N/A'}", Original: "${originalTitle || 'N/A'}", English: "${mediaDetails.title}"`);
+            }
 
             // 🔄 Load balancing: Round-robin between VPS1 and VPS2
             const enrichmentServers = [
@@ -9197,7 +9217,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
             const enrichmentApiKey = process.env.ENRICHMENT_API_KEY || 'change-me-in-production';
 
-            console.log(`🚀 [Webhook] Calling VPS enrichment (server ${global.enrichmentServerIndex === 0 ? 2 : 1}): ${enrichmentUrl}`);
+            if (DEBUG_MODE) console.log(`🚀 [Webhook] Calling VPS enrichment (server ${global.enrichmentServerIndex === 0 ? 2 : 1}): ${enrichmentUrl}`);
 
             try {
                 const webhookResponse = await fetch(enrichmentUrl, {
@@ -9219,7 +9239,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 });
 
                 if (webhookResponse.ok) {
-                    console.log(`✅ [Webhook] Enrichment queued (${webhookResponse.status})`);
+                    if (DEBUG_MODE) console.log(`✅ [Webhook] Enrichment queued (${webhookResponse.status})`);
                 } else {
                     console.warn(`⚠️ [Webhook] Failed: ${webhookResponse.status}`);
                 }
@@ -9227,7 +9247,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 console.warn(`⚠️ [Webhook] Unreachable:`, err.message);
             }
         } else {
-            console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
+            if (DEBUG_MODE) console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
         }
 
         // ✅ Cache successful results for faster repeated searches
@@ -9268,18 +9288,18 @@ async function handleStream(type, id, config, workerOrigin) {
 async function getTMDBDetails(tmdbId, type = 'movie', tmdbApiKey, append = 'external_ids', language = 'it-IT') {
     try {
         const url = `${TMDB_BASE_URL}/${type}/${tmdbId}?api_key=${tmdbApiKey}&language=${language}&append_to_response=${append}`;
-        console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
+        if (DEBUG_MODE) console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
         const response = await fetch(url, {
             signal: AbortSignal.timeout(8000)
         });
-        console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
+        if (DEBUG_MODE) console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
         if (!response.ok) {
             const errorText = await response.text().catch(() => 'Unable to read error');
             console.error(`❌ [TMDB] Error response: ${errorText.substring(0, 200)}`);
             throw new Error(`TMDB API error: ${response.status}`);
         }
         const data = await response.json();
-        console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
+        if (DEBUG_MODE) console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
         return data;
     } catch (error) {
         console.warn('⚠️ TMDB fetch warning (will use fallback):', error.message);

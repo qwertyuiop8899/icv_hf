@@ -15,6 +15,8 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const https = require("https");
 
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+
 // ============================================
 // CONFIGURAZIONE
 // ============================================
@@ -362,7 +364,7 @@ async function tryMirror(mirror, query, options = {}) {
     // Also removed order params temporarily to match browser behavior that works
     const searchUrl = `${mirror}/search/?search=${encodeURIComponent(query)}`;
 
-    console.log(`[RARBG] 🔍 Trying: ${mirror}`);
+    if (DEBUG_MODE) console.log(`[RARBG] 🔍 Trying: ${mirror}`);
 
     const response = await stealthRequest(searchUrl, { timeout: options.timeout || RARBG_CONFIG.TIMEOUT });
 
@@ -454,7 +456,7 @@ async function tryMirror(mirror, query, options = {}) {
         throw new Error("No results found");
     }
 
-    console.log(`[RARBG] ✅ Found ${candidates.length} candidates on ${mirror}`);
+    if (DEBUG_MODE) console.log(`[RARBG] ✅ Found ${candidates.length} candidates on ${mirror}`);
     return { mirror, candidates };
 }
 
@@ -524,7 +526,7 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
         query += " ITA";
     }
 
-    console.log(`[RARBG] 🎬 Searching: "${query}" (${type}, ${year || 'N/A'})`);
+    if (DEBUG_MODE) console.log(`[RARBG] 🎬 Searching: "${query}" (${type}, ${year || 'N/A'})`);
 
     let workingMirror = null;
     let filtered = [];
@@ -547,11 +549,11 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
             if (currentFiltered.length > 0) {
                 workingMirror = result.mirror;
                 filtered = currentFiltered;
-                console.log(`[RARBG] ✅ Mirror ${mirror} provided ${filtered.length} valid results.`);
+                if (DEBUG_MODE) console.log(`[RARBG] ✅ Mirror ${mirror} provided ${filtered.length} valid results.`);
                 break; // Successo, esci dal loop
             }
 
-            console.log(`[RARBG] ⚠️ Mirror ${mirror} returned ${candidates.length} results but all were filtered (junk/spam). Trying next...`);
+            if (DEBUG_MODE) console.log(`[RARBG] ⚠️ Mirror ${mirror} returned ${candidates.length} results but all were filtered (junk/spam). Trying next...`);
 
             // Salva campioni di scartati per debug finale
             if (allDiscarded.length < 10) {
@@ -559,14 +561,14 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
             }
 
         } catch (err) {
-            console.log(`[RARBG] ❌ ${mirror} failed: ${err.message}`);
+            if (DEBUG_MODE) console.log(`[RARBG] ❌ ${mirror} failed: ${err.message}`);
             continue;
         }
     }
 
     if (!workingMirror || filtered.length === 0) {
-        console.log(`[RARBG] ⚠️ All mirrors failed or no valid results found.`);
-        if (allDiscarded.length > 0) {
+        if (DEBUG_MODE) console.log(`[RARBG] ⚠️ All mirrors failed or no valid results found.`);
+        if (DEBUG_MODE && allDiscarded.length > 0) {
             console.log(`[RARBG] Examples of discarded (Junk/Mismatch):`);
             allDiscarded.forEach(c => {
                 const valid = isValidResult(c.name, allowEng);
@@ -577,7 +579,7 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
         return [];
     }
 
-    console.log(`[RARBG] 📋 Outputting ${filtered.length} valid results`);
+    if (DEBUG_MODE) console.log(`[RARBG] 📋 Outputting ${filtered.length} valid results`);
 
     // Ordina per seeders e limita
     const toProcess = filtered
@@ -592,7 +594,7 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
             const magnet = await extractMagnet(candidate.detailUrl, workingMirror, options.timeout);
 
             if (!magnet) {
-                console.log(`[RARBG] ⚠️ No magnet for: ${candidate.name.substring(0, 50)}...`);
+                if (DEBUG_MODE) console.log(`[RARBG] ⚠️ No magnet for: ${candidate.name.substring(0, 50)}...`);
                 return null;
             }
 
@@ -620,12 +622,14 @@ async function searchRARBG(title, year, type, imdbId = null, options = {}) {
         return true;
     });
 
-    console.log(`[RARBG] ✅ Final: ${uniqueResults.length} unique torrents`);
+    if (DEBUG_MODE) console.log(`[RARBG] ✅ Final: ${uniqueResults.length} unique torrents`);
 
     // Log dettagliato
-    uniqueResults.slice(0, 10).forEach((r, i) => {
-        console.log(`   ${i + 1}. [${r.size}] S:${r.seeders} | ${r.title.substring(0, 60)}...`);
-    });
+    if (DEBUG_MODE) {
+        uniqueResults.slice(0, 10).forEach((r, i) => {
+            console.log(`   ${i + 1}. [${r.size}] S:${r.seeders} | ${r.title.substring(0, 60)}...`);
+        });
+    }
 
     return uniqueResults;
 }

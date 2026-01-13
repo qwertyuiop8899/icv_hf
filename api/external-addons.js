@@ -5,6 +5,9 @@
  * Gestisce chiamate parallele, normalizzazione e deduplicazione.
  */
 
+// ✅ VERBOSE LOGGING - configurabile via ENV
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+
 // ============================================================================
 // CONFIGURATION - URL completi degli addon esterni con configurazione base64
 // ============================================================================
@@ -162,12 +165,12 @@ async function fetchExternalAddon(addonKey, type, id) {
 
     // Skip if baseUrl is not configured (env variable not set)
     if (!addon.baseUrl) {
-        console.log(`⏭️ [${addon.name}] Skipped - base URL not configured`);
+        if (DEBUG_MODE) console.log(`⏭️ [${addon.name}] Skipped - base URL not configured`);
         return [];
     }
 
     const url = `${addon.baseUrl}/stream/${type}/${id}.json`;
-    console.log(`🌐 [${addon.name}] Fetching: ${type}/${id}`);
+    if (DEBUG_MODE) console.log(`🌐 [${addon.name}] Fetching: ${type}/${id}`);
 
     try {
         const controller = new AbortController();
@@ -191,10 +194,10 @@ async function fetchExternalAddon(addonKey, type, id) {
         const data = await response.json();
         const streams = data.streams || [];
 
-        console.log(`✅ [${addon.name}] Received ${streams.length} streams`);
+        if (DEBUG_MODE) console.log(`✅ [${addon.name}] Received ${streams.length} streams`);
 
         // Debug: log first stream to see its structure
-        if (streams.length > 0) {
+        if (DEBUG_MODE && streams.length > 0) {
             console.log(`🔍 [${addon.name}] First stream sample:`, JSON.stringify(streams[0], null, 2).substring(0, 500));
         }
 
@@ -224,8 +227,8 @@ function normalizeExternalStream(stream, addonKey) {
 
     const infoHash = extractInfoHash(stream);
 
-    // Debug: log infoHash extraction result
-    console.log(`🔍 [Normalize] infoHash=${infoHash ? infoHash.substring(0, 8) + '...' : 'NULL'}, url=${stream.url?.substring(0, 60) || 'none'}...`);
+    // Debug: log infoHash extraction result (solo in verbose mode)
+    if (DEBUG_MODE) console.log(`🔍 [Normalize] infoHash=${infoHash ? infoHash.substring(0, 8) + '...' : 'NULL'}, url=${stream.url?.substring(0, 60) || 'none'}...`);
 
     const filename = extractFilename(stream);
     const quality = extractQuality(stream.name || filename || text);
@@ -317,7 +320,7 @@ function buildMagnetLink(infoHash, sources) {
 async function fetchAllExternalAddons(type, id, options = {}) {
     const enabledAddons = options.enabledAddons || Object.keys(EXTERNAL_ADDONS);
 
-    console.log(`\n🔗 [External Addons] Fetching from: ${enabledAddons.join(', ')}`);
+    if (DEBUG_MODE) console.log(`\n🔗 [External Addons] Fetching from: ${enabledAddons.join(', ')}`);
     const startTime = Date.now();
 
     // Crea promise per ogni addon abilitato
@@ -344,7 +347,7 @@ async function fetchAllExternalAddons(type, id, options = {}) {
     }
 
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [External Addons] Total: ${totalResults} results in ${elapsed}ms`);
+    if (DEBUG_MODE) console.log(`✅ [External Addons] Total: ${totalResults} results in ${elapsed}ms`);
 
     return resultsByAddon;
 }

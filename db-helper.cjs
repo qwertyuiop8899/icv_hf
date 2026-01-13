@@ -1,5 +1,8 @@
 const { Pool } = require('pg');
 
+// ✅ VERBOSE LOGGING - configurabile via ENV
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+
 // Database connection pool
 let pool = null;
 
@@ -111,7 +114,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching by IMDb: ${imdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching by IMDb: ${imdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -154,7 +157,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} torrents for IMDb ${imdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} torrents for IMDb ${imdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -174,7 +177,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching by TMDb: ${tmdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching by TMDb: ${tmdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -215,7 +218,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     query += ' ORDER BY cached_rd DESC NULLS LAST, seeders DESC LIMIT 50';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} torrents for TMDb ${tmdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} torrents for TMDb ${tmdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -236,7 +239,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching episode: ${imdbId} S${season}E${episode}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching episode: ${imdbId} S${season}E${episode}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
       SELECT 
@@ -276,7 +279,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     `;
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} files for S${season}E${episode}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} files for S${season}E${episode}`);
 
     return result.rows;
   } catch (error) {
@@ -305,7 +308,7 @@ async function insertTorrent(torrent) {
     );
 
     if (checkResult.rows.length > 0) {
-      console.log(`💾 [DB] Torrent ${torrent.infoHash} already exists, skipping`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Torrent ${torrent.infoHash} already exists, skipping`);
       await client.query('ROLLBACK');
       return false;
     }
@@ -329,7 +332,7 @@ async function insertTorrent(torrent) {
     );
 
     await client.query('COMMIT');
-    console.log(`✅ [DB] Inserted torrent: ${torrent.title.substring(0, 60)}...`);
+    if (DEBUG_MODE) console.log(`✅ [DB] Inserted torrent: ${torrent.title.substring(0, 60)}...`);
     return true;
 
   } catch (error) {
@@ -427,9 +430,9 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
     }
 
     if (skipped > 0) {
-      console.log(`⏭️  [DB] Skipped ${skipped} useless placeholder(s)`);
+      if (DEBUG_MODE) console.log(`⏭️  [DB] Skipped ${skipped} useless placeholder(s)`);
     }
-    console.log(`✅ [DB] Updated RD cache status for ${updated} torrents`);
+    if (DEBUG_MODE) console.log(`✅ [DB] Updated RD cache status for ${updated} torrents`);
     return updated;
 
   } catch (error) {
@@ -474,12 +477,12 @@ async function getRdCachedAvailability(hashes) {
       };
     });
 
-    console.log(`💾 [DB] Found ${result.rows.length}/${hashes.length} hashes with valid RD cache (< 10 days)`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length}/${hashes.length} hashes with valid RD cache (< 10 days)`);
 
     // Debug: Show which hashes are cached
     const cachedTrue = result.rows.filter(r => r.cached_rd === true).length;
     const cachedFalse = result.rows.filter(r => r.cached_rd === false).length;
-    console.log(`   📊 cached_rd=true: ${cachedTrue}, cached_rd=false: ${cachedFalse}`);
+    if (DEBUG_MODE) console.log(`   📊 cached_rd=true: ${cachedTrue}, cached_rd=false: ${cachedFalse}`);
 
     return cachedMap;
 
@@ -508,7 +511,7 @@ async function refreshRdCacheTimestamp(infoHash) {
     const result = await pool.query(query, [infoHash.toLowerCase()]);
 
     if (result.rowCount > 0) {
-      console.log(`🔄 [DB] Refreshed RD cache timestamp for ${infoHash.substring(0, 8)}... (+10 days)`);
+      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed RD cache timestamp for ${infoHash.substring(0, 8)}... (+10 days)`);
     }
     return result.rowCount > 0;
   } catch (error) {
@@ -590,7 +593,7 @@ async function batchInsertTorrents(torrents) {
       }
     }
 
-    console.log(`✅ [DB] Batch upsert: ${inserted}/${torrents.length} torrents inserted/updated`);
+    if (DEBUG_MODE) console.log(`✅ [DB] Batch upsert: ${inserted}/${torrents.length} torrents inserted/updated`);
     return inserted;
 
   } catch (error) {
@@ -611,15 +614,15 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB updateTorrentFileInfo] Input: hash=${infoHash}, fileIndex=${fileIndex}, size=${fileSize}, filePath=${filePath}, episodeInfo=`, episodeInfo);
+    if (DEBUG_MODE) console.log(`💾 [DB updateTorrentFileInfo] Input: hash=${infoHash}, fileIndex=${fileIndex}, size=${fileSize}, filePath=${filePath}, episodeInfo=`, episodeInfo);
 
     // Extract just the filename from path
     const fileName = filePath.split('/').pop().split('\\').pop();
-    console.log(`💾 [DB updateTorrentFileInfo] Extracted filename: ${fileName}`);
+    if (DEBUG_MODE) console.log(`💾 [DB updateTorrentFileInfo] Extracted filename: ${fileName}`);
 
     // If episodeInfo is provided, save to 'files' table (for series episodes)
     if (episodeInfo && episodeInfo.imdbId && episodeInfo.season && episodeInfo.episode) {
-      console.log(`💾 [DB] Saving episode file: ${episodeInfo.imdbId} S${episodeInfo.season}E${episodeInfo.episode}`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Saving episode file: ${episodeInfo.imdbId} S${episodeInfo.season}E${episodeInfo.episode}`);
 
       // Check if file already exists
       const checkQuery = `
@@ -657,7 +660,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
           episodeInfo.episode,
           fileSize // $7
         ]);
-        console.log(`✅ [DB] Updated file in 'files' table: ${fileName} (rowCount=${res.rowCount})`);
+        if (DEBUG_MODE) console.log(`✅ [DB] Updated file in 'files' table: ${fileName} (rowCount=${res.rowCount})`);
         return res.rowCount > 0;
       } else {
         // Check if this (hash, fileIndex) combo exists for a DIFFERENT episode
@@ -669,7 +672,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
         if (conflictCheck.rowCount > 0) {
           // This fileIndex is already used for a different episode - skip to avoid conflict
           const existing = conflictCheck.rows[0];
-          console.log(`⚠️ [DB] FileIndex ${fileIndex} already used for S${existing.imdb_season}E${existing.imdb_episode}, skipping S${episodeInfo.season}E${episodeInfo.episode}`);
+          if (DEBUG_MODE) console.log(`⚠️ [DB] FileIndex ${fileIndex} already used for S${existing.imdb_season}E${existing.imdb_episode}, skipping S${episodeInfo.season}E${episodeInfo.episode}`);
           return false;
         }
 
@@ -694,7 +697,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
           fileSize // $7
         ]);
 
-        console.log(`✅ [DB] Upserted file into 'files' table: ${fileName}`);
+        if (DEBUG_MODE) console.log(`✅ [DB] Upserted file into 'files' table: ${fileName}`);
         return true;
       }
     } else {
@@ -707,7 +710,7 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
       `;
 
       const res = await pool.query(query, [fileIndex, fileName, infoHash.toLowerCase()]);
-      console.log(`✅ [DB] Updated torrents table: ${fileName} (rowCount=${res.rowCount})`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Updated torrents table: ${fileName} (rowCount=${res.rowCount})`);
 
       return res.rowCount > 0;
     }
@@ -726,7 +729,7 @@ async function deleteFileInfo(infoHash) {
   try {
     const query = `DELETE FROM files WHERE info_hash = $1`;
     const res = await pool.query(query, [infoHash.toLowerCase()]);
-    console.log(`✅ [DB] Deleted ${res.rowCount} file entries for hash ${infoHash}`);
+    if (DEBUG_MODE) console.log(`✅ [DB] Deleted ${res.rowCount} file entries for hash ${infoHash}`);
     return res.rowCount;
   } catch (error) {
     console.error(`❌ [DB] Error deleting file info:`, error.message);
@@ -754,10 +757,10 @@ async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
     const res = await pool.query(query, [infoHash.toLowerCase(), fileIndex, rdLinkIndex]);
     
     if (res.rowCount > 0) {
-      console.log(`✅ [DB] Saved rd_link_index=${rdLinkIndex} for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Saved rd_link_index=${rdLinkIndex} for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
       return true;
     } else {
-      console.warn(`⚠️ [DB] No file found to update rd_link_index for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      if (DEBUG_MODE) console.warn(`⚠️ [DB] No file found to update rd_link_index for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
       return false;
     }
   } catch (error) {
@@ -788,7 +791,7 @@ async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename)
     const res = await pool.query(query, [infoHash.toLowerCase(), fileId, rdLinkIndex]);
     
     if (res.rowCount > 0) {
-      console.log(`✅ [DB] Pack: Saved rd_link_index=${rdLinkIndex} for file_id=${fileId} (${filename})`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Pack: Saved rd_link_index=${rdLinkIndex} for file_id=${fileId} (${filename})`);
       return true;
     } else {
       // Try to match by filename if file_index doesn't match
@@ -799,7 +802,7 @@ async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename)
       `;
       const filenameRes = await pool.query(filenameQuery, [infoHash.toLowerCase(), rdLinkIndex, filename]);
       if (filenameRes.rowCount > 0) {
-        console.log(`✅ [DB] Pack: Saved rd_link_index=${rdLinkIndex} for ${filename} (by filename match)`);
+        if (DEBUG_MODE) console.log(`✅ [DB] Pack: Saved rd_link_index=${rdLinkIndex} for ${filename} (by filename match)`);
         return true;
       }
       return false;
@@ -823,11 +826,11 @@ async function getImdbIdByHash(infoHash) {
     const result = await pool.query(query, [infoHash.toLowerCase()]);
 
     if (result.rows.length > 0 && result.rows[0].imdb_id) {
-      console.log(`✅ [DB] Found imdb_id ${result.rows[0].imdb_id} for hash ${infoHash}`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Found imdb_id ${result.rows[0].imdb_id} for hash ${infoHash}`);
       return result.rows[0].imdb_id;
     }
 
-    console.log(`⚠️ [DB] No imdb_id found for hash ${infoHash}`);
+    if (DEBUG_MODE) console.log(`⚠️ [DB] No imdb_id found for hash ${infoHash}`);
     return null;
   } catch (error) {
     console.error(`❌ [DB] Error fetching imdb_id:`, error.message);
@@ -980,7 +983,7 @@ async function searchPacksByImdbId(imdbId) {
   if (!pool) throw new Error('Database not initialized');
 
   try {
-    console.log(`💾 [DB] Searching packs containing film: ${imdbId}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching packs containing film: ${imdbId}`);
 
     const query = `
       SELECT 
@@ -1004,7 +1007,7 @@ async function searchPacksByImdbId(imdbId) {
     `;
 
     const result = await pool.query(query, [imdbId]);
-    console.log(`   ✅ Found ${result.rows.length} pack(s) containing ${imdbId}`);
+    if (DEBUG_MODE) console.log(`   ✅ Found ${result.rows.length} pack(s) containing ${imdbId}`);
 
     return result.rows;
   } catch (error) {
@@ -1026,7 +1029,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
   if (!title || title.length < 3) return [];
 
   try {
-    console.log(`💾 [DB] Searching packs by title: "${title}" (${year || 'no year'})`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching packs by title: "${title}" (${year || 'no year'})`);
 
     // Build search pattern - clean title for ILIKE matching
     const cleanTitle = title.toLowerCase()
@@ -1085,7 +1088,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
               AND NOT (COALESCE(all_imdb_ids, '[]'::jsonb) @> $1::jsonb)
           `, [JSON.stringify(imdbId), row.info_hash]);
           
-          console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0,8)}... file_idx=${row.file_index}`);
+          if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0,8)}... file_idx=${row.file_index}`);
         } catch (updateErr) {
           // Ignore update errors (e.g., constraint violations)
         }
@@ -1274,7 +1277,7 @@ async function insertEpisodeFiles(episodeFiles) {
       }
     }
 
-    console.log(`✅ [DB] Inserted ${inserted}/${episodeFiles.length} episode files`);
+    if (DEBUG_MODE) console.log(`✅ [DB] Inserted ${inserted}/${episodeFiles.length} episode files`);
     return inserted;
 
   } catch (error) {
@@ -1305,7 +1308,7 @@ async function getSeriesPackFiles(infoHash) {
     const packResult = await pool.query(packFilesQuery, [hashLower]);
     
     if (packResult.rows.length > 0) {
-      console.log(`💾 [DB] Found ${packResult.rows.length} files in pack_files for ${infoHash.substring(0, 8)}`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResult.rows.length} files in pack_files for ${infoHash.substring(0, 8)}`);
       return packResult.rows.map(row => ({
         id: row.id,
         path: row.path,
@@ -1324,7 +1327,7 @@ async function getSeriesPackFiles(infoHash) {
     const filesResult = await pool.query(filesQuery, [hashLower]);
     
     if (filesResult.rows.length > 0) {
-      console.log(`💾 [DB] Found ${filesResult.rows.length} files in files table for ${infoHash.substring(0, 8)}`);
+      if (DEBUG_MODE) console.log(`💾 [DB] Found ${filesResult.rows.length} files in files table for ${infoHash.substring(0, 8)}`);
     }
     
     return filesResult.rows.map(row => ({
@@ -1402,7 +1405,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
     
     // 🔧 AUTO-INDEX: Update files.imdb_id when we find matches by title
     // This allows future searches to find files directly by IMDb ID
@@ -1414,7 +1417,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
               'UPDATE files SET imdb_id = $1 WHERE info_hash = $2 AND file_index = $3 AND imdb_id IS NULL',
               [movieImdbId, row.info_hash, row.file_index]
             );
-            console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
+            if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
           } catch (updateErr) {
             // Ignore update errors
           }
@@ -1428,7 +1431,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   try {
     // Basic sanitation
     const cleanQuery = titleQuery.replace(/[^\w\s]/g, ' ').trim().replace(/\s+/g, ' & ');
-    console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
 
     let query = `
       SELECT 
@@ -1480,14 +1483,14 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
 
     const result = await pool.query(query, params);
-    console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
     
     // 🔧 FIX: If FTS returns 0 results, also try ILIKE fallback
     // This is needed for file titles like "(2013) Frozen.mkv" where FTS doesn't index well
     if (result.rows.length > 0) {
       return result.rows;
     }
-    console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
+    if (DEBUG_MODE) console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
     return await runIlikeSearch();
 
   } catch (error) {

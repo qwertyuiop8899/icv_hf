@@ -4,11 +4,21 @@
  * Based on IntroHater approach
  */
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 // ==================== Configuration ====================
 const PROBE_TIMEOUT_MS = 30000; // 30 seconds timeout for ffprobe
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours cache
+
+// Check if ffprobe is available at startup
+let FFPROBE_AVAILABLE = false;
+try {
+    execSync('which ffprobe', { stdio: 'ignore' });
+    FFPROBE_AVAILABLE = true;
+    console.log('✅ [HLS] ffprobe found - IntroSkip with precise seeking enabled');
+} catch {
+    console.warn('⚠️ [HLS] ffprobe not found - IntroSkip will use time-based seeking (less precise)');
+}
 
 // Simple in-memory cache for byte offsets
 const offsetCache = new Map();
@@ -71,6 +81,12 @@ async function getStreamDetails(url) {
  * Get byte offset for a given timestamp using ffprobe
  */
 async function getByteOffset(url, startTime) {
+    // If ffprobe not available, return 0 (will use time-based seeking)
+    if (!FFPROBE_AVAILABLE) {
+        console.log(`⏩ [HLS] ffprobe not available, skipping byte offset calculation`);
+        return { offset: 0, duration: 0 };
+    }
+
     const cacheKey = `offset:${url}:${startTime}`;
 
     // Check cache
@@ -96,7 +112,22 @@ async function getByteOffset(url, startTime) {
         ];
 
         console.log(`⏩ [HLS] Spawning ffprobe for ${startTime}s offset with UA (fetching duration)`);
-        const proc = spawn('ffprobe', args);
+        
+        let proc;
+        try {
+            proc = spawn('ffprobe', args);
+        } catch (e) {
+            console.warn(`⏩ [HLS] Failed to spawn ffprobe: ${e.message}`);
+            FFPROBE_AVAILABLE = false; // Disable for future calls
+            return resolve({ offset: 0, duration: 0 });
+        }
+        
+        // Handle spawn error (ffprobe not found)
+        proc.on('error', (err) => {
+            console.warn(`⏩ [HLS] ffprobe error: ${err.message}`);
+            FFPROBE_AVAILABLE = false; // Disable for future calls
+            resolve({ offset: 0, duration: 0 });
+        });
 
         const timeout = setTimeout(() => {
             console.warn(`⏩ [HLS] FFprobe timeout for ${startTime}s`);

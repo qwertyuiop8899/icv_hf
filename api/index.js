@@ -1861,9 +1861,6 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         return [];
     }
 
-    const allHits = [];
-    const seenHashes = new Set();
-
     // Prepara metadata per validazione (come AIOStreams)
     const validationMetadata = metadata ? {
         titles: metadata.titles || [metadata.title, metadata.primaryTitle].filter(Boolean),

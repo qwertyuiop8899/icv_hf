@@ -1088,7 +1088,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
               AND NOT (COALESCE(all_imdb_ids, '[]'::jsonb) @> $1::jsonb)
           `, [JSON.stringify(imdbId), row.info_hash]);
           
-          if (VERBOSE_LOG) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0,8)}... file_idx=${row.file_index}`);
+          if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0,8)}... file_idx=${row.file_index}`);
         } catch (updateErr) {
           // Ignore update errors (e.g., constraint violations)
         }
@@ -1417,7 +1417,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
               'UPDATE files SET imdb_id = $1 WHERE info_hash = $2 AND file_index = $3 AND imdb_id IS NULL',
               [movieImdbId, row.info_hash, row.file_index]
             );
-            if (VERBOSE_LOG) console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
+            if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
           } catch (updateErr) {
             // Ignore update errors
           }

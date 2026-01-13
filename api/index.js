@@ -457,11 +457,11 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
 
 // ✅ Enhanced Query Cleaning (from uiai.js)
 function cleanSearchQuery(query) {
-    console.log(`🧹 Cleaning query: "${query}"`);
+    if (DEBUG_MODE) console.log(`🧹 Cleaning query: "${query}"`);
 
     // Remove IMDb ID pattern if present
     if (query.match(/^tt\d+$/)) {
-        console.log(`⚠️ Raw IMDb ID detected: ${query}. This should be converted to movie title before calling scraper.`);
+        if (DEBUG_MODE) console.log(`⚠️ Raw IMDb ID detected: ${query}. This should be converted to movie title before calling scraper.`);
         return null;
     }
 
@@ -472,7 +472,7 @@ function cleanSearchQuery(query) {
         .replace(/\s+/g, ' ') // Normalize whitespace
         .trim();
 
-    console.log(`✨ Cleaned query: "${cleaned}"`);
+    if (DEBUG_MODE) console.log(`✨ Cleaned query: "${cleaned}"`);
     return cleaned;
 }
 
@@ -1812,11 +1812,11 @@ function buildKnabenQueries(parsedId, metadata, options = {}) {
 async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
     // Global circuit breaker check - if Knaben has failed too many times, skip
     if (Date.now() < knabenCircuitBreakerUntil) {
-        console.log(`⚠️ [Knaben API] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [Knaben API] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
-    console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Starting search for: "${searchQuery}" (type: ${type})`);
 
     // Determina le categorie in base al tipo
     const categories = [];
@@ -1840,7 +1840,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             addSeasonEpisode: true,
             useAllTitles: true,
         });
-        console.log(`🦉 [Knaben API] Built ${queries.length} queries from metadata: ${queries.join(', ')}`);
+        if (DEBUG_MODE) console.log(`🦉 [Knaben API] Built ${queries.length} queries from metadata: ${queries.join(', ')}`);
     }
 
     // Fallback alla query originale se non abbiamo metadata
@@ -1856,7 +1856,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     }
 
     if (queries.length === 0) {
-        console.log('🦉 [Knaben API] No valid queries, skipping search.');
+        if (DEBUG_MODE) console.log('🦉 [Knaben API] No valid queries, skipping search.');
         return [];
     }
 
@@ -1870,7 +1870,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
     } : null;
 
     // ✅ PARALLELIZZATO: Esegui TUTTE le query in parallelo
-    console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
     
     const queryResults = await Promise.all(queries.map(async (query) => {
         try {
@@ -1919,7 +1919,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             const hasDownloadUrl = !!hit.link;
 
             if (!hash && !hasDownloadUrl) {
-                console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
+                if (DEBUG_MODE) console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
                 continue;
             }
 
@@ -2020,7 +2020,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         }
     }
 
-    console.log(`🦉 [Knaben API] Search completed. Found ${allHits.length} unique results.`);
+    if (DEBUG_MODE) console.log(`🦉 [Knaben API] Search completed. Found ${allHits.length} unique results.`);
     return allHits;
 }
 
@@ -2048,11 +2048,11 @@ const TorrentGalaxyCategory = {
 async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = null, parsedId = null) {
     // Global circuit breaker check
     if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
-        console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
-    console.log(`🌌 [TorrentGalaxy] Starting search for: "${searchQuery}" (type: ${type})`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Starting search for: "${searchQuery}" (type: ${type})`);
 
     const allResults = [];
     const seenHashes = new Set();
@@ -2081,12 +2081,12 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
 
     // Deduplicate queries
     const uniqueQueries = [...new Set(queries)];
-    console.log(`🌌 [TorrentGalaxy] Built ${uniqueQueries.length} queries: ${uniqueQueries.join(', ')}`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Built ${uniqueQueries.length} queries: ${uniqueQueries.join(', ')}`);
 
     for (const query of uniqueQueries) {
         // Check circuit breaker before each query
         if (Date.now() < torrentGalaxyCircuitBreakerUntil) {
-            console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping remaining queries`);
+            if (DEBUG_MODE) console.log(`⚠️ [TorrentGalaxy] Circuit breaker active - skipping remaining queries`);
             break;
         }
 
@@ -2165,7 +2165,7 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
                         magnetLink: `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(item.n || '')}&tr=udp://tracker.opentrackr.org:1337/announce`
                     });
                 }
-                console.log(`🌌 [TorrentGalaxy] Query "${query}" returned ${data.results.length} results, ${allResults.length} total unique`);
+                if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Query "${query}" returned ${data.results.length} results, ${allResults.length} total unique`);
             }
 
         } catch (error) {
@@ -2185,7 +2185,7 @@ async function fetchTorrentGalaxyData(searchQuery, type = 'movie', metadata = nu
         }
     }
 
-    console.log(`🌌 [TorrentGalaxy] Search completed. Found ${allResults.length} unique results.`);
+    if (DEBUG_MODE) console.log(`🌌 [TorrentGalaxy] Search completed. Found ${allResults.length} unique results.`);
     return allResults;
 }
 
@@ -2415,7 +2415,7 @@ function parseUIndexHTML(html) {
         row.includes('<td')
     );
 
-    console.log(`📊 Processing ${rows.length} potential torrent rows`);
+    if (DEBUG_MODE) console.log(`📊 Processing ${rows.length} potential torrent rows`);
 
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -2512,7 +2512,7 @@ function parseUIndexHTML(html) {
                 source: 'UIndex'
             });
 
-            console.log(`✅ Parsed: ${title} (${sizeStr}) - ${infoHash}`);
+            if (DEBUG_MODE) console.log(`✅ Parsed: ${title} (${sizeStr}) - ${infoHash}`);
 
         } catch (error) {
             console.error(`❌ Error parsing row ${i}:`, error.message);
@@ -2520,7 +2520,7 @@ function parseUIndexHTML(html) {
         }
     }
 
-    console.log(`📊 Successfully parsed ${results.length} torrents`);
+    if (DEBUG_MODE) console.log(`📊 Successfully parsed ${results.length} torrents`);
     return results;
 }
 
@@ -2585,7 +2585,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
     for (const strategy of searchStrategies) {
         if (!strategy.query) continue;
 
-        console.log(`🔍 [UIndex] Strategy: ${strategy.description} - "${strategy.query}"`);
+        if (DEBUG_MODE) console.log(`🔍 [UIndex] Strategy: ${strategy.description} - "${strategy.query}"`);
 
         try {
             const results = await fetchUIndexSingle(strategy.query, type, validationMetadata);
@@ -2597,7 +2597,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
                 return true;
             });
 
-            console.log(`📊 [UIndex] Strategy "${strategy.description}" found ${newResults.length} unique results`);
+            if (DEBUG_MODE) console.log(`📊 [UIndex] Strategy "${strategy.description}" found ${newResults.length} unique results`);
             allResults.push(...newResults);
 
             // If we got good results, don't try more strategies
@@ -2612,7 +2612,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
         await new Promise(resolve => setTimeout(resolve, 50));
     }
 
-    console.log(`🎉 Multi-strategy search found ${allResults.length} total unique results`);
+    if (DEBUG_MODE) console.log(`🎉 Multi-strategy search found ${allResults.length} total unique results`);
     return allResults;
 }
 
@@ -2620,12 +2620,12 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
 async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata = null) {
     // Global circuit breaker check for UIndex
     if (Date.now() < uindexCircuitBreakerUntil) {
-        console.log(`⚠️ [UIndex] Circuit breaker active - skipping search for "${searchQuery}"`);
+        if (DEBUG_MODE) console.log(`⚠️ [UIndex] Circuit breaker active - skipping search for "${searchQuery}"`);
         return [];
     }
 
     try {
-        console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
+        if (DEBUG_MODE) console.log(`🔍 Searching UIndex for: "${searchQuery}" (type: ${type})`);
 
         let category = 0; // Default to 'All'
         if (type === 'movie') {
@@ -2730,7 +2730,7 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
             filteredResults.push(result);
         }
 
-        console.log(`🔍 [UIndex] Filtered to ${filteredResults.length}/${rawResults.length} Italian results`);
+        if (DEBUG_MODE) console.log(`🔍 [UIndex] Filtered to ${filteredResults.length}/${rawResults.length} Italian results`);
         return filteredResults;
 
     } catch (error) {
@@ -5362,12 +5362,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     return { streams: [] };
                 }
 
-                console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
+                if (DEBUG_MODE) console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
                 mediaDetails = await getTMDBDetailsByImdb(cleanImdbId, tmdbKey);
             } else if (/^\d+$/.test(imdbId)) {
                 // TMDb ID format (pure number)
                 const tmdbId = parseInt(imdbId);
-                console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
+                if (DEBUG_MODE) console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
                 mediaDetails = await getTMDBDetailsByTmdb(tmdbId, type, tmdbKey);
             } else {
                 console.log('❌ Invalid ID format (not IMDb or TMDb)');
@@ -5394,22 +5394,22 @@ async function handleStream(type, id, config, workerOrigin) {
             try {
                 // Convert 'series' to 'tv' for TMDB API
                 const tmdbType = mediaDetails.type === 'series' ? 'tv' : 'movie';
-                console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
+                if (DEBUG_MODE) console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
 
                 // 1. Prima chiamata: ottieni dettagli in italiano (language=it-IT)
                 const italianDetails = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'external_ids', 'it-IT');
-                console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
+                if (DEBUG_MODE) console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
 
                 if (italianDetails) {
                     const italianTitleFromResponse = italianDetails.title || italianDetails.name;
-                    console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
 
                     // Usa il titolo italiano se è diverso da quello inglese
                     if (italianTitleFromResponse && italianTitleFromResponse.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                         italianTitle = italianTitleFromResponse;
-                        console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
+                        if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
                     } else if (italianTitleFromResponse) {
-                        console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
+                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
                     }
 
                     // Salva anche l'original_title/original_name
@@ -5417,37 +5417,37 @@ async function handleStream(type, id, config, workerOrigin) {
                         const foundOriginalTitle = italianDetails.original_title || italianDetails.original_name;
                         if (foundOriginalTitle && foundOriginalTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                             originalTitle = foundOriginalTitle;
-                            console.log(`� Found original title: "${originalTitle}"`);
+                            if (DEBUG_MODE) console.log(`🎬 Found original title: "${originalTitle}"`);
                         }
                     }
                 }
 
                 // 2. Fallback: se non abbiamo trovato il titolo italiano, prova con translations
                 if (!italianTitle) {
-                    console.log(`🔍 [Italian Title] Trying translations as fallback...`);
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Trying translations as fallback...`);
                     const detailsWithTranslations = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'translations', 'en-US');
 
                     if (detailsWithTranslations?.translations?.translations) {
-                        console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
+                        if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
                         const italianTranslation = detailsWithTranslations.translations.translations.find(t => t.iso_639_1 === 'it');
 
                         if (italianTranslation) {
-                            console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
+                            if (DEBUG_MODE) console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
                             const foundTitle = italianTranslation.data.title || italianTranslation.data.name;
                             if (foundTitle && foundTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
                                 italianTitle = foundTitle;
-                                console.log(`🇮� Found Italian title from translations: "${italianTitle}"`);
+                                if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from translations: "${italianTitle}"`);
                             }
                         } else {
-                            console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
+                            if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
                         }
                     } else {
-                        console.log(`⚠️ [Italian Title] No translations data available`);
+                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No translations data available`);
                     }
                 }
 
                 if (!italianTitle) {
-                    console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
+                    if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
                 }
             } catch (e) {
                 console.warn("⚠️ Could not fetch Italian title from TMDB:", e.message);
@@ -6219,7 +6219,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     season: season ? parseInt(season, 10) : undefined,
                     episode: episode ? parseInt(episode, 10) : undefined,
                 };
-                console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
+                if (DEBUG_MODE) console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
 
                 // 🎬 FILM: Solo 2 query semplici
                 if (isMovie) {
@@ -6258,7 +6258,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
 
                 const uniqueUindexQueries = [...new Set(uindexQueries)];
-                console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
+                if (DEBUG_MODE) console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
 
                 // Track if we found results with Italian title (to enable early-exit)
                 let foundWithItalianTitle = false;
@@ -6270,14 +6270,14 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
                     if (foundWithItalianTitle && i >= italianQueryCount) {
-                        console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
+                        if (DEBUG_MODE) console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
                         break;
                     }
 
                     try {
                         const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
                         if (res && res.length > 0) {
-                            console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
+                            if (DEBUG_MODE) console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
                             rawResultsByProvider.UIndex.push(...res);
 
                             // Mark that we found results with Italian title queries
@@ -6307,16 +6307,16 @@ async function handleStream(type, id, config, workerOrigin) {
                     !query.toLowerCase().includes(cleanedItalianTitle);
 
                 if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
-                    console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
+                    if (DEBUG_MODE) console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
                     continue; // Skip this query, don't break - we might have more ITA queries after
                 }
 
-                console.log(`\n🔍 Searching sources for: "${query}"`);
+                if (DEBUG_MODE) console.log(`\n🔍 Searching sources for: "${query}"`);
 
                 // Stop searching if we have a good number of results (checking total accumulated)
                 const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
                 if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
-                    console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
+                    if (DEBUG_MODE) console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
                     break;
                 }
 
@@ -6395,7 +6395,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 results.forEach((result, index) => {
                     const sourceName = searchPromises[index].name;
                     if (result.status === 'fulfilled' && result.value) {
-                        console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
+                        if (DEBUG_MODE) console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
                         if (rawResultsByProvider[sourceName]) {
                             rawResultsByProvider[sourceName].push(...result.value);
                         }
@@ -6405,7 +6405,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             query.toLowerCase().includes(cleanedItalianTitle);
                         if (isItalianTitleQuery && result.value.length > 0) {
                             foundWithItalianTitleQueries += result.value.length;
-                            console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                            if (DEBUG_MODE) console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
                         }
                     } else if (result.status === 'rejected') {
                         console.error(`❌ ${sourceName} search failed:`, result.reason);
@@ -6422,7 +6422,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // 3️⃣ TASK: External Addons (skip in db_only mode)
         if (enabledExternalAddons.length > 0 && !config.db_only) {
             parallelSearchTasks.push(async () => {
-                console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+                if (DEBUG_MODE) console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
 
                 // Build Stremio-format ID for addon APIs
                 let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
@@ -6434,10 +6434,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
 
                     if (externalResults.length > 0) {
-                        console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                        if (DEBUG_MODE) console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
                         rawResultsByProvider.ExternalAddons.push(...externalResults);
                     } else {
-                        console.log(`⚠️ [External Addons] No results received`);
+                        if (DEBUG_MODE) console.log(`⚠️ [External Addons] No results received`);
                     }
                 } catch (externalError) {
                     console.error(`❌ [External Addons] Error:`, externalError.message);
@@ -6450,7 +6450,7 @@ async function handleStream(type, id, config, workerOrigin) {
             parallelSearchTasks.push(async () => {
                 // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
                 const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
-                console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
+                if (DEBUG_MODE) console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
                 try {
                     // Timeout 4500ms come richiesto
                     // Build Stremio-format ID
@@ -6461,7 +6461,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                     const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
                     if (rarbgRes && rarbgRes.length > 0) {
-                        console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
+                        if (DEBUG_MODE) console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
                         rawResultsByProvider.RARBG = rarbgRes.map(r => ({
                             title: r.title,
                             link: r.magnet,
@@ -6481,7 +6481,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // 🚀 EXECUTE ALL TASKS PARALLELY
         if (DEBUG_MODE) console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
         await Promise.allSettled(parallelSearchTasks.map(task => task()));
-        console.log(`🏁 All parallel search tasks completed.`);
+        if (DEBUG_MODE) console.log(`🏁 All parallel search tasks completed.`);
 
         // Merge finale
         const allRawResults = [
@@ -9271,18 +9271,18 @@ async function handleStream(type, id, config, workerOrigin) {
 async function getTMDBDetails(tmdbId, type = 'movie', tmdbApiKey, append = 'external_ids', language = 'it-IT') {
     try {
         const url = `${TMDB_BASE_URL}/${type}/${tmdbId}?api_key=${tmdbApiKey}&language=${language}&append_to_response=${append}`;
-        console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
+        if (DEBUG_MODE) console.log(`🔍 [TMDB] Fetching: ${url.replace(tmdbApiKey, 'HIDDEN')}`);
         const response = await fetch(url, {
             signal: AbortSignal.timeout(8000)
         });
-        console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
+        if (DEBUG_MODE) console.log(`🔍 [TMDB] Response status: ${response.status} ${response.statusText}`);
         if (!response.ok) {
             const errorText = await response.text().catch(() => 'Unable to read error');
             console.error(`❌ [TMDB] Error response: ${errorText.substring(0, 200)}`);
             throw new Error(`TMDB API error: ${response.status}`);
         }
         const data = await response.json();
-        console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
+        if (DEBUG_MODE) console.log(`✅ [TMDB] Success! Title/Name field: ${data.title || data.name}`);
         return data;
     } catch (error) {
         console.warn('⚠️ TMDB fetch warning (will use fallback):', error.message);

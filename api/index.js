@@ -1861,9 +1861,6 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         return [];
     }
 
-    const allHits = [];
-    const seenHashes = new Set();
-
     // Prepara metadata per validazione (come AIOStreams)
     const validationMetadata = metadata ? {
         titles: metadata.titles || [metadata.title, metadata.primaryTitle].filter(Boolean),
@@ -1873,11 +1870,11 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
         absoluteEpisode: metadata.absoluteEpisode,
     } : null;
 
-    // Esegui ricerche per ogni query
-    for (const query of queries) {
+    // ✅ PARALLELIZZATO: Esegui TUTTE le query in parallelo
+    console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
+    
+    const queryResults = await Promise.all(queries.map(async (query) => {
         try {
-            // console.log(`🦉 [Knaben API] Searching: "${query}"`);
-
             const { hits } = await knabenApi.search({
                 query,
                 categories: categories.length > 0 ? categories : undefined,
@@ -1885,141 +1882,142 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
                 hideUnsafe: false,
                 hideXXX: true,
             });
-
-            // Filtra e deduplica
-            for (const hit of hits) {
-                // Salta categorie blacklistate
-                if (hit.categoryId && KNABEN_BLACKLISTED_CATEGORIES.some(cat => hit.categoryId.includes(cat))) {
-                    continue;
-                }
-
-                // Estrai hash (come AIOStreams: usa hash, magnetUrl, o link)
-                let hash = hit.hash?.toLowerCase() ||
-                    (hit.magnetUrl ? extractInfoHash(hit.magnetUrl)?.toLowerCase() : null);
-
-                // ✅ COME AIOSTREAMS: Se non ha hash, prova a usare il link per scaricare il torrent
-                const hasDownloadUrl = !!hit.link;
-
-                if (!hash && !hasDownloadUrl) {
-                    console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
-                    continue;
-                }
-
-                // Se ha link ma non hash, generiamo un hash temporaneo dal link per deduplicazione
-                // L'hash reale verrà estratto quando si usa il torrent
-                const dedupeKey = hash || hit.link;
-
-                // Deduplica per hash o link
-                if (seenHashes.has(dedupeKey)) {
-                    continue;
-                }
-                seenHashes.add(dedupeKey);
-
-                // Filtro contenuti per adulti
-                if (isAdultCategory(hit.category) || isAdultCategory(hit.title)) {
-                    continue;
-                }
-
-                // ✅ NUOVO: Parsing del titolo come AIOStreams
-                const parsedTitle = parseTorrentTitle(hit.title);
-
-                // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
-                const hasItalian = parsedTitle.languages.includes('Italian');
-                const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
-                if (!hasItalian && !hasMulti) {
-                    // Fallback: controlla anche con regex diretta per casi edge
-                    if (!hit.hash || !hit.link) {
-                        // console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
-                        continue;
-                    }
-
-                    // Strict Italian Filter
-                    if (!isItalian(hit.title)) {
-                        // console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
-                        continue;
-                    }
-
-                    // Validate title fuzzily
-                    const validation = validateResult(hit.title, validationMetadata);
-                    if (!validation.match) {
-                        // console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
-                        continue;
-                    }
-
-                    if (type === 'series' && validationMetadata) {
-                        if (validation.season && validation.season !== validationMetadata.season) {
-                            // console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
-                            continue;
-                        }
-                        if (validation.episode && validation.episode !== validationMetadata.episode) {
-                            // console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
-                            continue;
-                        }
-                    }
-                }
-
-                const sizeInBytes = hit.bytes || 0;
-                const sizeStr = formatBytes(sizeInBytes);
-
-                // ✅ NUOVO: Usa i dati dal parser invece di extractQuality
-                const quality = parsedTitle.resolution || parsedTitle.quality || extractQuality(hit.title);
-
-                // ✅ COME AIOSTREAMS: Costruisci magnet link o usa download URL
-                let magnetLink = hit.magnetUrl;
-                if (!magnetLink && hash) {
-                    magnetLink = `magnet:?xt=urn:btih:${hash}`;
-                }
-
-                allHits.push({
-                    magnetLink: magnetLink || null,
-                    downloadUrl: hit.link || null, // ✅ NUOVO: URL download torrent file
-                    websiteTitle: hit.title,
-                    title: hit.title,
-                    filename: hit.title,
-                    quality: quality,
-                    size: sizeStr,
-                    source: `Knaben (${hit.tracker || 'Unknown'})`,
-                    seeders: hit.seeders || 0,
-                    leechers: hit.peers || 0,
-                    infoHash: hash ? hash.toUpperCase() : null, // ✅ Può essere null se solo link
-                    mainFileSize: sizeInBytes,
-                    pubDate: hit.date || new Date().toISOString(),
-                    categories: [hit.category || (type === 'movie' ? 'Movies' : 'TV')],
-                    indexer: hit.tracker,
-                    // ✅ NUOVO: Aggiungi dati dal parser
-                    parsedInfo: {
-                        resolution: parsedTitle.resolution,
-                        qualitySource: parsedTitle.quality,
-                        languages: parsedTitle.languages,
-                        codec: parsedTitle.codec,
-                        audioTags: parsedTitle.audioTags,
-                        visualTags: parsedTitle.visualTags,
-                        group: parsedTitle.group,
-                        seasons: parsedTitle.seasons,
-                        episodes: parsedTitle.episodes,
-                    },
-                });
-            }
-
-            // Piccola pausa tra le query per non sovraccaricare l'API
-            if (queries.indexOf(query) < queries.length - 1) {
-                await new Promise(r => setTimeout(r, 100));
-            }
-
+            return { query, hits, error: null };
         } catch (error) {
             console.error(`❌ [Knaben API] Query "${query}" failed:`, error.message);
             // Circuit breaker: if timeout/abort, increment global counter
             if (error.name === 'AbortError' || error.message.includes('aborted')) {
                 knabenTimeoutCount++;
-                console.warn(`⚠️ [Knaben API] Timeout #${knabenTimeoutCount} - skipping remaining queries`);
-
-                // After 2 timeouts, activate circuit breaker for 30 seconds
+                console.warn(`⚠️ [Knaben API] Timeout #${knabenTimeoutCount}`);
                 if (knabenTimeoutCount >= 2) {
-                    knabenCircuitBreakerUntil = Date.now() + 30000; // 30 seconds
+                    knabenCircuitBreakerUntil = Date.now() + 30000;
                     console.warn(`🔴 [Knaben API] Circuit breaker ACTIVATED - Knaben disabled for 30 seconds`);
                 }
-                break;
             }
+            return { query, hits: [], error: error.message };
+        }
+    }));
+
+    // Elabora tutti i risultati
+    const allHits = [];
+    const seenHashes = new Set();
+
+    for (const { query, hits, error } of queryResults) {
+        if (error || !hits) continue;
+
+        // Filtra e deduplica
+        for (const hit of hits) {
+            // Salta categorie blacklistate
+            if (hit.categoryId && KNABEN_BLACKLISTED_CATEGORIES.some(cat => hit.categoryId.includes(cat))) {
+                continue;
+            }
+
+            // Estrai hash (come AIOStreams: usa hash, magnetUrl, o link)
+            let hash = hit.hash?.toLowerCase() ||
+                (hit.magnetUrl ? extractInfoHash(hit.magnetUrl)?.toLowerCase() : null);
+
+            // ✅ COME AIOSTREAMS: Se non ha hash, prova a usare il link per scaricare il torrent
+            const hasDownloadUrl = !!hit.link;
+
+            if (!hash && !hasDownloadUrl) {
+                console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
+                continue;
+            }
+
+            // Se ha link ma non hash, generiamo un hash temporaneo dal link per deduplicazione
+            // L'hash reale verrà estratto quando si usa il torrent
+            const dedupeKey = hash || hit.link;
+
+            // Deduplica per hash o link
+            if (seenHashes.has(dedupeKey)) {
+                continue;
+            }
+            seenHashes.add(dedupeKey);
+
+            // Filtro contenuti per adulti
+            if (isAdultCategory(hit.category) || isAdultCategory(hit.title)) {
+                continue;
+            }
+
+            // ✅ NUOVO: Parsing del titolo come AIOStreams
+            const parsedTitle = parseTorrentTitle(hit.title);
+
+            // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
+            const hasItalian = parsedTitle.languages.includes('Italian');
+            const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
+            if (!hasItalian && !hasMulti) {
+                // Fallback: controlla anche con regex diretta per casi edge
+                if (!hit.hash || !hit.link) {
+                    // console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
+                    continue;
+                }
+
+                // Strict Italian Filter
+                if (!isItalian(hit.title)) {
+                    // console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
+                    continue;
+                }
+
+                // Validate title fuzzily
+                const validation = validateResult(hit.title, validationMetadata);
+                if (!validation.match) {
+                    // console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
+                    continue;
+                }
+
+                if (type === 'series' && validationMetadata) {
+                    if (validation.season && validation.season !== validationMetadata.season) {
+                        // console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
+                        continue;
+                    }
+                    if (validation.episode && validation.episode !== validationMetadata.episode) {
+                        // console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
+                        continue;
+                    }
+                }
+            }
+
+            const sizeInBytes = hit.bytes || 0;
+            const sizeStr = formatBytes(sizeInBytes);
+
+            // ✅ NUOVO: Usa i dati dal parser invece di extractQuality
+            const quality = parsedTitle.resolution || parsedTitle.quality || extractQuality(hit.title);
+
+            // ✅ COME AIOSTREAMS: Costruisci magnet link o usa download URL
+            let magnetLink = hit.magnetUrl;
+            if (!magnetLink && hash) {
+                magnetLink = `magnet:?xt=urn:btih:${hash}`;
+            }
+
+            allHits.push({
+                magnetLink: magnetLink || null,
+                downloadUrl: hit.link || null, // ✅ NUOVO: URL download torrent file
+                websiteTitle: hit.title,
+                title: hit.title,
+                filename: hit.title,
+                quality: quality,
+                size: sizeStr,
+                source: `Knaben (${hit.tracker || 'Unknown'})`,
+                seeders: hit.seeders || 0,
+                leechers: hit.peers || 0,
+                infoHash: hash ? hash.toUpperCase() : null, // ✅ Può essere null se solo link
+                mainFileSize: sizeInBytes,
+                pubDate: hit.date || new Date().toISOString(),
+                categories: [hit.category || (type === 'movie' ? 'Movies' : 'TV')],
+                indexer: hit.tracker,
+                // ✅ NUOVO: Aggiungi dati dal parser
+                parsedInfo: {
+                    resolution: parsedTitle.resolution,
+                    qualitySource: parsedTitle.quality,
+                    languages: parsedTitle.languages,
+                    codec: parsedTitle.codec,
+                    audioTags: parsedTitle.audioTags,
+                    visualTags: parsedTitle.visualTags,
+                    group: parsedTitle.group,
+                    seasons: parsedTitle.seasons,
+                    episodes: parsedTitle.episodes,
+                },
+            });
         }
     }
 
@@ -2527,38 +2525,58 @@ function parseUIndexHTML(html) {
     return results;
 }
 
-// ✅ Multi-Strategy Search (try different query variations)
+// ✅ Multi-Strategy Search (OTTIMIZZATO: meno query, più efficiente)
 async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validationMetadata = null) {
     const searchStrategies = [];
 
-    // Strategy 1: Original query
-    const cleanedOriginal = cleanSearchQuery(originalQuery);
-    if (cleanedOriginal) {
-        searchStrategies.push({
-            query: cleanedOriginal,
-            description: 'Original cleaned'
-        });
-    }
-
-    // Strategy 2: Remove extra words for movies
     if (type === 'movie') {
-        const simplified = cleanedOriginal?.replace(/\b(movie|film|dvd|bluray|bd)\b/gi, '').trim();
-        if (simplified && simplified !== cleanedOriginal) {
+        // FILM: titolo originale + anno, poi titolo ITA + anno (se diverso)
+        const cleanedOriginal = cleanSearchQuery(originalQuery);
+        if (cleanedOriginal) {
             searchStrategies.push({
-                query: simplified,
-                description: 'Simplified movie'
+                query: cleanedOriginal,
+                description: 'Original title + year'
             });
         }
-    }
-
-    // Strategy 3: For series, try alternative episode format
-    if (type === 'series' && originalQuery.includes('S') && originalQuery.includes('E')) {
-        const altFormat = originalQuery.replace(/S(\d+)E(\d+)/i, '$1x$2');
-        if (altFormat !== originalQuery) {
+        
+        // Se abbiamo validationMetadata con titoli alternativi
+        if (validationMetadata?.titles && validationMetadata.titles.length > 1) {
+            const italianTitle = validationMetadata.titles.find(t => t !== validationMetadata.titles[0]);
+            if (italianTitle) {
+                const italianQuery = validationMetadata.year 
+                    ? `${italianTitle} ${validationMetadata.year}`
+                    : italianTitle;
+                const cleanedItalian = cleanSearchQuery(italianQuery);
+                // Aggiungi solo se diverso dall'originale
+                if (cleanedItalian && cleanedItalian !== cleanedOriginal) {
+                    searchStrategies.push({
+                        query: cleanedItalian,
+                        description: 'Italian title + year'
+                    });
+                }
+            }
+        }
+    } else {
+        // SERIE: solo titolo + S0X (senza episodio, poi filtriamo)
+        // Estrai titolo e stagione dalla query originale (es. "Breaking Bad S01E05" → "Breaking Bad S01")
+        const seasonMatch = originalQuery.match(/(.+?)\s*S(\d+)/i);
+        if (seasonMatch) {
+            const title = seasonMatch[1].trim();
+            const season = seasonMatch[2].padStart(2, '0');
+            const seasonQuery = `${title} S${season}`;
             searchStrategies.push({
-                query: cleanSearchQuery(altFormat),
-                description: 'Alternative episode format'
+                query: cleanSearchQuery(seasonQuery),
+                description: `Season search (S${season})`
             });
+        } else {
+            // Fallback: usa query originale
+            const cleanedOriginal = cleanSearchQuery(originalQuery);
+            if (cleanedOriginal) {
+                searchStrategies.push({
+                    query: cleanedOriginal,
+                    description: 'Original query'
+                });
+            }
         }
     }
 
@@ -2568,7 +2586,7 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
     for (const strategy of searchStrategies) {
         if (!strategy.query) continue;
 
-        console.log(`🔍 Trying strategy: ${strategy.description} - "${strategy.query}"`);
+        console.log(`🔍 [UIndex] Strategy: ${strategy.description} - "${strategy.query}"`);
 
         try {
             const results = await fetchUIndexSingle(strategy.query, type, validationMetadata);
@@ -2580,19 +2598,19 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
                 return true;
             });
 
-            console.log(`📊 Strategy "${strategy.description}" found ${newResults.length} unique results`);
+            console.log(`📊 [UIndex] Strategy "${strategy.description}" found ${newResults.length} unique results`);
             allResults.push(...newResults);
 
-            // If we got good results, don't try too many more strategies
+            // If we got good results, don't try more strategies
             if (allResults.length >= 20) break;
 
         } catch (error) {
-            console.error(`❌ Strategy "${strategy.description}" failed:`, error.message);
+            console.error(`❌ [UIndex] Strategy "${strategy.description}" failed:`, error.message);
             continue;
         }
 
-        // Delay between strategies to avoid rate limiting (429 errors)
-        await new Promise(resolve => setTimeout(resolve, 400));
+        // Delay between strategies to avoid rate limiting (429 errors) - ridotto a 50ms
+        await new Promise(resolve => setTimeout(resolve, 50));
     }
 
     console.log(`🎉 Multi-strategy search found ${allResults.length} total unique results`);
@@ -2642,6 +2660,13 @@ async function fetchUIndexSingle(searchQuery, type = 'movie', validationMetadata
         });
 
         clearTimeout(timeoutId);
+
+        // ✅ Check for rate limit BEFORE checking response.ok
+        if (response.status === 429) {
+            console.warn(`🔴 [UIndex] RATE LIMITED (429) - UIndex disabled for 15 seconds`);
+            uindexCircuitBreakerUntil = Date.now() + 15000; // 15 seconds
+            return [];
+        }
 
         // Reset timeout count on successful response
         uindexTimeoutCount = 0;
@@ -7817,7 +7842,7 @@ async function handleStream(type, id, config, workerOrigin) {
             // UIndex is intentionally NOT required
         );
         
-        // ✅ Check if content is too recent (< 48 hours since release)
+        // ✅ Check if content is too recent (< 96 hours / 4 days since release)
         let contentReleaseDate = null;
         let isTooRecent = false;
         
@@ -7846,7 +7871,7 @@ async function handleStream(type, id, config, workerOrigin) {
             !config.db_only &&
             !config.full_ita &&  // ✅ Only save if full_ita=false (cache stores COMPLETE results)
             hasAllEssentialProviders &&
-            !isTooRecent  // ✅ Don't cache fresh releases (< 48 hours)
+            !isTooRecent  // ✅ Don't cache fresh releases (< 4 days / 96h)
         );
         
         if (canSaveToCache) {

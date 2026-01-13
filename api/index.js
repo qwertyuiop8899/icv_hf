@@ -52,10 +52,9 @@ function decodeHtmlEntities(text) {
     return text.replace(/&[#\w]+;/g, match => entities[match] || match);
 }
 
-// ✅ DEBUG MODE
-const DEBUG_MODE = false;
+// ✅ DEBUG MODE - per log dettagliati (default: false in produzione)
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
-// ✅ Custom Formatter Helper - Full AIOStreams compatible
 // ✅ Custom Formatter Helper - Full AIOStreams compatible
 function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', isCached = false) {
     // If AIOStreams mode is enabled, SKIP custom formatting to preserve AIO format

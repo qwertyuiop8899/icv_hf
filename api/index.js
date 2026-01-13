@@ -1944,36 +1944,15 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
             const hasItalian = parsedTitle.languages.includes('Italian');
             const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
-            if (!hasItalian && !hasMulti) {
-                // Fallback: controlla anche con regex diretta per casi edge
-                if (!hit.hash || !hit.link) {
-                    // console.log(`🦉 [Knaben API] Skipping hit without hash or link: ${hit.title}`);
-                    continue;
-                }
-
-                // Strict Italian Filter
-                if (!isItalian(hit.title)) {
-                    // console.log(`🦉 [Knaben API] Skipping non-Italian: "${hit.title.substring(0, 60)}..."`);
-                    continue;
-                }
-
-                // Validate title fuzzily
-                const validation = validateResult(hit.title, validationMetadata);
-                if (!validation.match) {
-                    // console.log(`🦉 [Knaben API] Skipping wrong title: "${hit.title.substring(0, 60)}..."`);
-                    continue;
-                }
-
-                if (type === 'series' && validationMetadata) {
-                    if (validation.season && validation.season !== validationMetadata.season) {
-                        // console.log(`🦉 [Knaben API] Skipping wrong season: "${hit.title}" (need S${validationMetadata.season})`);
-                        continue;
-                    }
-                    if (validation.episode && validation.episode !== validationMetadata.episode) {
-                        // console.log(`🦉 [Knaben API] Skipping wrong episode: "${hit.title}" (need E${validationMetadata.episode})`);
-                        continue;
-                    }
-                }
+            
+            // Se non ha italiano/multi dal parser, controlla con isItalian()
+            if (!hasItalian && !hasMulti && !isItalian(hit.title)) {
+                continue; // Skip non-Italian content
+            }
+            
+            // Verifica che abbia hash o link valido
+            if (!hit.hash && !hit.link) {
+                continue;
             }
 
             const sizeInBytes = hit.bytes || 0;

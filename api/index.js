@@ -22,6 +22,54 @@ const customFormatter = require('../formatter.cjs');
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
 
+// 🚀 SEEDER UPDATE WEBHOOK HELPER
+const TRIGGER_SEEDER_UPDATE_URL = process.env.SEEDER_UPDATE_URL; // e.g. 'http://my-vps-ip:3005/update'
+const TRIGGER_API_KEY = process.env.ENRICHMENT_API_KEY || 'change-me-in-production'; // Reusing existing key for internal services
+
+const triggerSeederUpdate = async (results) => {
+    try {
+        if (!TRIGGER_SEEDER_UPDATE_URL) {
+            if (process.env.DEBUG_MODE === 'true') {
+                console.warn('⚠️ [SEEDER] TRIGGER_SEEDER_UPDATE_URL not configured. Skipping seeder update.');
+            }
+            return;
+        }
+        if (!results || results.length === 0) return;
+
+        // Extract hashes
+        const hashes = results
+            .map(r => r.infoHash?.toLowerCase() || r.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase())
+            .filter(h => h && h.length >= 40);
+
+        if (hashes.length === 0) return;
+
+        // Unique hashes
+        const uniqueHashes = [...new Set(hashes)];
+
+        if (process.env.DEBUG_MODE === 'true') {
+            console.log(`🚀 [SEEDER] Triggering update for ${uniqueHashes.length} torrents to ${TRIGGER_SEEDER_UPDATE_URL}`);
+        }
+
+        // Fire and forget (don't await)
+        fetch(TRIGGER_SEEDER_UPDATE_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': TRIGGER_API_KEY
+            },
+            body: JSON.stringify({ hashes: uniqueHashes })
+        }).catch(err => {
+            // Silently fail if service makes connection errors (it might be down)
+            if (process.env.DEBUG_MODE === 'true') {
+                console.warn('⚠️ [SEEDER] Update trigger failed:', err.message);
+            }
+        });
+
+    } catch (e) {
+        // Ignore
+    }
+};
+
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 // ✅ Torrentio placeholder videos (hosted by Torrentio)
@@ -481,12 +529,12 @@ function cleanSearchQuery(query) {
 // Example: icv|rd|2160p|DV|FLUX or icv|tb|1080p|SDR|MeM
 function generateBingeGroup(title, service = 'p2p') {
     if (!title) return `icv|${service}|unknown`;
-    
+
     const parsed = parseTorrentTitle(title);
-    
+
     // Quality: 2160p, 1080p, 720p, etc.
     const quality = parsed.resolution || extractQuality(title) || 'unknown';
-    
+
     // HDR info: DV, HDR10+, HDR10, HDR, SDR
     let hdr = 'SDR'; // Default
     if (parsed.visualTags && parsed.visualTags.length > 0) {
@@ -505,14 +553,14 @@ function generateBingeGroup(title, service = 'p2p') {
             hdr = 'HDR';
         }
     }
-    
+
     // Release group: FLUX, NTb, MeM, etc.
     const group = parsed.group || '';
-    
+
     // Build bingeGroup - omit empty parts
     const parts = ['icv', service, quality, hdr];
     if (group) parts.push(group);
-    
+
     return parts.join('|');
 }
 
@@ -569,12 +617,12 @@ function extractQuality(title) {
 // ✅ Improved Info Hash Extraction
 function extractInfoHash(magnet) {
     if (!magnet) return null;
-    
+
     // 🔥 Also accept raw 40-char hex hash (not just magnet links)
     if (/^[A-Fa-f0-9]{40}$/.test(magnet)) {
         return magnet.toUpperCase();
     }
-    
+
     const match = magnet.match(/btih:([A-Fa-f0-9]{40}|[A-Za-z2-7]{32})/i);
     if (!match) return null;
 
@@ -1871,7 +1919,7 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
 
     // ✅ PARALLELIZZATO: Esegui TUTTE le query in parallelo
     if (DEBUG_MODE) console.log(`🦉 [Knaben API] Executing ${queries.length} queries in PARALLEL...`);
-    
+
     const queryResults = await Promise.all(queries.map(async (query) => {
         try {
             const { hits } = await knabenApi.search({
@@ -1944,12 +1992,12 @@ async function fetchKnabenData(searchQuery, type = 'movie', metadata = null, par
             // ✅ FILTRO ITALIANO: Accetta solo italiano, sub-ita, multi
             const hasItalian = parsedTitle.languages.includes('Italian');
             const hasMulti = parsedTitle.languages.includes('Multi') || parsedTitle.languages.includes('Dual Audio');
-            
+
             // Se non ha italiano/multi dal parser, controlla con isItalian()
             if (!hasItalian && !hasMulti && !isItalian(hit.title)) {
                 continue; // Skip non-Italian content
             }
-            
+
             // Verifica che abbia hash o link valido
             if (!hit.hash && !hit.link) {
                 continue;
@@ -2516,12 +2564,12 @@ async function searchUIndexMultiStrategy(originalQuery, type = 'movie', validati
                 description: 'Original title + year'
             });
         }
-        
+
         // Se abbiamo validationMetadata con titoli alternativi
         if (validationMetadata?.titles && validationMetadata.titles.length > 1) {
             const italianTitle = validationMetadata.titles.find(t => t !== validationMetadata.titles[0]);
             if (italianTitle) {
-                const italianQuery = validationMetadata.year 
+                const italianQuery = validationMetadata.year
                     ? `${italianTitle} ${validationMetadata.year}`
                     : italianTitle;
                 const cleanedItalian = cleanSearchQuery(italianQuery);
@@ -4387,11 +4435,11 @@ function maybeCleanupCache() {
         cleanupCache();
         lastCleanup = now;
     }
-    
+
     // Cleanup DB cache every hour (not critical, just housekeeping)
     // Use movie TTL (18h) for cleanup since it's the longest - series entries expire sooner anyway
     if (USE_DB_CACHE && now - lastDbCacheCleanup > 3600000) {
-        dbHelper.cleanupTorrentSearchCache(GLOBAL_CACHE_TTL_MOVIE).catch(err => 
+        dbHelper.cleanupTorrentSearchCache(GLOBAL_CACHE_TTL_MOVIE).catch(err =>
             console.error(`⚠️ [DB Cache Cleanup] Error: ${err.message}`)
         );
         lastDbCacheCleanup = now;
@@ -4858,7 +4906,7 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
             // This is a common pattern for Netflix/streaming releases
             const isFirstHalf = episodeNum <= 4;
             const isSecondHalf = episodeNum >= 5;
-            
+
             if (partNum === 1 && isSecondHalf) {
                 if (DEBUG_MODE) console.log(`❌ [SEASON PACK] Excluded "${torrentTitle.substring(0, 60)}..." (Part 1 doesn't contain E${episodeNum})`);
                 return false;
@@ -5158,20 +5206,20 @@ async function handleStream(type, id, config, workerOrigin) {
 
     // ✅ Check if user wants to use global cache (default: true)
     const useGlobalCache = config.use_global_cache !== false;
-    
+
     // ✅ GLOBAL TORRENT CACHE - key is type:id (NO user-specific keys!)
     // This allows different users to share the same torrent search results
     // Each user's debrid cache check and stream URLs are rebuilt with their own config
     const globalCacheKey = `torrent:${type}:${decodedId}`;
     let fromGlobalCache = false;
     let cachedData = null;
-    
+
     // ✅ Check global cache FIRST (before any API calls)
     // Only if user has use_global_cache enabled (default: true)
     // db_only users CAN read from cache (but won't save to it)
     // TTL: 18h for movies (stable), 10h for series (more dynamic)
     const cacheTtlHours = type === 'movie' ? GLOBAL_CACHE_TTL_MOVIE : GLOBAL_CACHE_TTL_SERIES;
-    
+
     if (GLOBAL_CACHE_ENABLED && useGlobalCache) {
         // Try DB cache first (persistent across restarts)
         if (USE_DB_CACHE) {
@@ -5191,7 +5239,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 console.error(`⚠️ [DB Cache] Error reading: ${dbError.message}`);
             }
         }
-        
+
         // Fallback to in-memory cache if DB failed or not enabled
         if (!fromGlobalCache && globalTorrentCache.has(globalCacheKey)) {
             const cached = globalTorrentCache.get(globalCacheKey);
@@ -5220,7 +5268,7 @@ async function handleStream(type, id, config, workerOrigin) {
         if (config.mediaflow_url) parts.push(`mf:${config.mediaflow_url.replace(/https?:\/\//, '').substring(0, 15)}`);
         return parts.join('|') || 'p2p';
     })();
-    
+
     try {
         // ✅ TMDB API Key from config or environment variable
         const tmdbKey = config.tmdb_key || process.env.TMDB_KEY || process.env.TMDB_API_KEY || '5462f78469f3d80bf5201645294c16e4';
@@ -5269,7 +5317,7 @@ async function handleStream(type, id, config, workerOrigin) {
             console.log(`✅ Found: ${displayTitle}${displayYear}${episodeStr} [CACHE]`);
             if (DEBUG_MODE) console.log(`⚡ [GLOBAL CACHE] Loaded. User config: ${configHashForLog}`);
         }
-        
+
         // ✅ Initialize DB connection (needed for debrid cache check even on cache hit)
         let dbEnabled = false;
         try {
@@ -5278,1366 +5326,1412 @@ async function handleStream(type, id, config, workerOrigin) {
         } catch (error) {
             console.error('❌ [DB] Failed to initialize database:', error.message);
         }
-        
+
         // ✅ GLOBAL CACHE MISS: Do the full search
         if (!fromGlobalCache) {
 
-        if (decodedId.startsWith('kitsu:')) {
-            const parts = decodedId.split(':');
-            kitsuId = parts[1];
-            const absoluteEpisode = parts[2]; // For Kitsu, this is absolute episode number (optional for movies)
+            if (decodedId.startsWith('kitsu:')) {
+                const parts = decodedId.split(':');
+                kitsuId = parts[1];
+                const absoluteEpisode = parts[2]; // For Kitsu, this is absolute episode number (optional for movies)
 
-            // ✅ If no episode number, it's a MOVIE (e.g., kitsu:45513 = One Piece Film Red)
-            if (!absoluteEpisode && type === 'movie') {
-                console.log(`🎬 Looking up Kitsu movie details for: ${kitsuId}`);
-                mediaDetails = await getKitsuDetails(kitsuId);
+                // ✅ If no episode number, it's a MOVIE (e.g., kitsu:45513 = One Piece Film Red)
+                if (!absoluteEpisode && type === 'movie') {
+                    console.log(`🎬 Looking up Kitsu movie details for: ${kitsuId}`);
+                    mediaDetails = await getKitsuDetails(kitsuId);
 
-                if (mediaDetails) {
-                    mediaDetails.isAnime = true;  // Mark as anime for special handling
-                    // For movies, we don't need episode info
-                }
-            } else if (!absoluteEpisode && type === 'series') {
-                // Series MUST have episode number
-                console.log('❌ Invalid Kitsu format: episode number required for series');
-                return { streams: [] };
-            } else {
-                // Series with episode number
-                console.log(`🌸 Looking up Kitsu details for: ${kitsuId}, absolute episode: ${absoluteEpisode}`);
-                mediaDetails = await getKitsuDetails(kitsuId);
+                    if (mediaDetails) {
+                        mediaDetails.isAnime = true;  // Mark as anime for special handling
+                        // For movies, we don't need episode info
+                    }
+                } else if (!absoluteEpisode && type === 'series') {
+                    // Series MUST have episode number
+                    console.log('❌ Invalid Kitsu format: episode number required for series');
+                    return { streams: [] };
+                } else {
+                    // Series with episode number
+                    console.log(`🌸 Looking up Kitsu details for: ${kitsuId}, absolute episode: ${absoluteEpisode}`);
+                    mediaDetails = await getKitsuDetails(kitsuId);
 
-                if (mediaDetails) {
-                    mediaDetails.absoluteEpisode = parseInt(absoluteEpisode);
-                    mediaDetails.isAnime = true;  // Mark as anime for special handling
+                    if (mediaDetails) {
+                        mediaDetails.absoluteEpisode = parseInt(absoluteEpisode);
+                        mediaDetails.isAnime = true;  // Mark as anime for special handling
 
-                    // ✅ SOLUZIONE KITSU 5: Convert absolute episode to season/episode if we have TMDb ID
-                    if (mediaDetails.tmdbId) {
-                        console.log(`🔄 [Kitsu] Converting absolute episode ${absoluteEpisode} to season/episode using TMDb ${mediaDetails.tmdbId}...`);
-                        const converted = await convertAbsoluteEpisode(mediaDetails.tmdbId, parseInt(absoluteEpisode), tmdbKey);
+                        // ✅ SOLUZIONE KITSU 5: Convert absolute episode to season/episode if we have TMDb ID
+                        if (mediaDetails.tmdbId) {
+                            console.log(`🔄 [Kitsu] Converting absolute episode ${absoluteEpisode} to season/episode using TMDb ${mediaDetails.tmdbId}...`);
+                            const converted = await convertAbsoluteEpisode(mediaDetails.tmdbId, parseInt(absoluteEpisode), tmdbKey);
 
-                        if (converted) {
-                            season = converted.season;
-                            episode = converted.episode;
-                            console.log(`✅ [Kitsu] Converted to S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`);
+                            if (converted) {
+                                season = converted.season;
+                                episode = converted.episode;
+                                console.log(`✅ [Kitsu] Converted to S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`);
+                            } else {
+                                // Fallback: treat as absolute episode without season mapping
+                                console.log(`⚠️ [Kitsu] Could not convert absolute episode, will search all packs`);
+                                season = null;
+                                episode = absoluteEpisode;
+                            }
                         } else {
-                            // Fallback: treat as absolute episode without season mapping
-                            console.log(`⚠️ [Kitsu] Could not convert absolute episode, will search all packs`);
+                            // No TMDb ID, can't convert - fallback to generic pack search
+                            console.log(`⚠️ [Kitsu] No TMDb ID available, will search all packs`);
                             season = null;
                             episode = absoluteEpisode;
                         }
-                    } else {
-                        // No TMDb ID, can't convert - fallback to generic pack search
-                        console.log(`⚠️ [Kitsu] No TMDb ID available, will search all packs`);
-                        season = null;
-                        episode = absoluteEpisode;
                     }
                 }
-            }
-        } else {
-            // ✅ SOLUZIONE 2: Detect if ID is TMDb (pure number) or IMDb (starts with 'tt')
-            imdbId = decodedId;
-            if (type === 'series') {
-                const parts = decodedId.split(':');
-                imdbId = parts[0];
-                season = parts[1];
-                episode = parts[2];
-
-                if (!season || !episode) {
-                    console.log('❌ Invalid series format');
-                    return { streams: [] };
-                }
-            }
-
-            // Check if ID is TMDb (pure number) or IMDb (starts with 'tt')
-            if (imdbId.startsWith('tt')) {
-                // IMDb ID format
-                const cleanImdbId = extractImdbId(imdbId);
-                if (!cleanImdbId) {
-                    console.log('❌ Invalid IMDB ID format');
-                    return { streams: [] };
-                }
-
-                if (DEBUG_MODE) console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
-                mediaDetails = await getTMDBDetailsByImdb(cleanImdbId, tmdbKey);
-            } else if (/^\d+$/.test(imdbId)) {
-                // TMDb ID format (pure number)
-                const tmdbId = parseInt(imdbId);
-                if (DEBUG_MODE) console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
-                mediaDetails = await getTMDBDetailsByTmdb(tmdbId, type, tmdbKey);
             } else {
-                console.log('❌ Invalid ID format (not IMDb or TMDb)');
+                // ✅ SOLUZIONE 2: Detect if ID is TMDb (pure number) or IMDb (starts with 'tt')
+                imdbId = decodedId;
+                if (type === 'series') {
+                    const parts = decodedId.split(':');
+                    imdbId = parts[0];
+                    season = parts[1];
+                    episode = parts[2];
+
+                    if (!season || !episode) {
+                        console.log('❌ Invalid series format');
+                        return { streams: [] };
+                    }
+                }
+
+                // Check if ID is TMDb (pure number) or IMDb (starts with 'tt')
+                if (imdbId.startsWith('tt')) {
+                    // IMDb ID format
+                    const cleanImdbId = extractImdbId(imdbId);
+                    if (!cleanImdbId) {
+                        console.log('❌ Invalid IMDB ID format');
+                        return { streams: [] };
+                    }
+
+                    if (DEBUG_MODE) console.log(`🔍 Looking up TMDB details for IMDb: ${cleanImdbId}`);
+                    mediaDetails = await getTMDBDetailsByImdb(cleanImdbId, tmdbKey);
+                } else if (/^\d+$/.test(imdbId)) {
+                    // TMDb ID format (pure number)
+                    const tmdbId = parseInt(imdbId);
+                    if (DEBUG_MODE) console.log(`🔍 Looking up details for TMDb: ${tmdbId}`);
+                    mediaDetails = await getTMDBDetailsByTmdb(tmdbId, type, tmdbKey);
+                } else {
+                    console.log('❌ Invalid ID format (not IMDb or TMDb)');
+                    return { streams: [] };
+                }
+            }
+
+            if (!mediaDetails) {
+                // ✅ FALLBACK: If TMDB conversion failed, try direct IMDb scraping
+                if (imdbId && imdbId.startsWith('tt')) {
+                    console.log(`⚠️ TMDB lookup failed. Attempting direct IMDb fallback for ${imdbId}...`);
+                    mediaDetails = await getIMDbDetailsDirectly(imdbId);
+                }
+            }
+
+            if (!mediaDetails) {
+                console.log('❌ Could not find media details (even after fallback)');
                 return { streams: [] };
             }
-        }
 
-        if (!mediaDetails) {
-            // ✅ FALLBACK: If TMDB conversion failed, try direct IMDb scraping
-            if (imdbId && imdbId.startsWith('tt')) {
-                console.log(`⚠️ TMDB lookup failed. Attempting direct IMDb fallback for ${imdbId}...`);
-                mediaDetails = await getIMDbDetailsDirectly(imdbId);
-            }
-        }
-
-        if (!mediaDetails) {
-            console.log('❌ Could not find media details (even after fallback)');
-            return { streams: [] };
-        }
-
-        // --- NUOVA MODIFICA: Ottieni il titolo in italiano ---
-        // (italianTitle and originalTitle already declared outside this block)
-        if (mediaDetails.tmdbId && !kitsuId) { // Solo per film/serie da TMDB
-            try {
-                // Convert 'series' to 'tv' for TMDB API
-                const tmdbType = mediaDetails.type === 'series' ? 'tv' : 'movie';
-                if (DEBUG_MODE) console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
-
-                // 1. Prima chiamata: ottieni dettagli in italiano (language=it-IT)
-                const italianDetails = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'external_ids', 'it-IT');
-                if (DEBUG_MODE) console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
-
-                if (italianDetails) {
-                    const italianTitleFromResponse = italianDetails.title || italianDetails.name;
-                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
-
-                    // Usa il titolo italiano se è diverso da quello inglese
-                    if (italianTitleFromResponse && italianTitleFromResponse.toLowerCase() !== mediaDetails.title.toLowerCase()) {
-                        italianTitle = italianTitleFromResponse;
-                        if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
-                    } else if (italianTitleFromResponse) {
-                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
-                    }
-
-                    // Salva anche l'original_title/original_name
-                    if (italianDetails.original_title || italianDetails.original_name) {
-                        const foundOriginalTitle = italianDetails.original_title || italianDetails.original_name;
-                        if (foundOriginalTitle && foundOriginalTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
-                            originalTitle = foundOriginalTitle;
-                            if (DEBUG_MODE) console.log(`🎬 Found original title: "${originalTitle}"`);
-                        }
-                    }
-                }
-
-                // 2. Fallback: se non abbiamo trovato il titolo italiano, prova con translations
-                if (!italianTitle) {
-                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Trying translations as fallback...`);
-                    const detailsWithTranslations = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'translations', 'en-US');
-
-                    if (detailsWithTranslations?.translations?.translations) {
-                        if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
-                        const italianTranslation = detailsWithTranslations.translations.translations.find(t => t.iso_639_1 === 'it');
-
-                        if (italianTranslation) {
-                            if (DEBUG_MODE) console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
-                            const foundTitle = italianTranslation.data.title || italianTranslation.data.name;
-                            if (foundTitle && foundTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
-                                italianTitle = foundTitle;
-                                if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from translations: "${italianTitle}"`);
-                            }
-                        } else {
-                            if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
-                        }
-                    } else {
-                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No translations data available`);
-                    }
-                }
-
-                if (!italianTitle) {
-                    if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
-                }
-            } catch (e) {
-                console.warn("⚠️ Could not fetch Italian title from TMDB:", e.message);
-            }
-        }
-        // --- FINE MODIFICA ---
-
-        // ✅ BUILD TITLES ARRAY: Include all possible titles for matching
-        if (!Array.isArray(mediaDetails.titles)) {
-            const allTitles = new Set();
-            // Always include the main English title
-            if (mediaDetails.title) {
-                allTitles.add(mediaDetails.title);
-                // If title contains ":", also add the part before it (e.g., "Suburra: Blood on Rome" → "Suburra")
-                if (mediaDetails.title.includes(':')) {
-                    allTitles.add(mediaDetails.title.split(':')[0].trim());
-                }
-            }
-            // Add Italian title if found
-            if (italianTitle && italianTitle !== mediaDetails.title) {
-                allTitles.add(italianTitle);
-                // If Italian title contains ":", also add the part before it
-                if (italianTitle.includes(':')) {
-                    allTitles.add(italianTitle.split(':')[0].trim());
-                }
-            }
-            // Add original title if different
-            if (originalTitle && originalTitle !== mediaDetails.title && originalTitle !== italianTitle) {
-                allTitles.add(originalTitle);
-                // If original title contains ":", also add the part before it
-                if (originalTitle.includes(':')) {
-                    allTitles.add(originalTitle.split(':')[0].trim());
-                }
-            }
-
-            mediaDetails.titles = Array.from(allTitles);
-            if (DEBUG_MODE) console.log(`📝 Built titles array: ${JSON.stringify(mediaDetails.titles)}`);
-        }
-
-        const displayTitle = Array.isArray(mediaDetails.titles) ? mediaDetails.titles[0] : mediaDetails.title;
-        console.log(`✅ Found: ${displayTitle} (${mediaDetails.year})`);
-
-        // ✅ STEP 1: DATABASE already initialized outside if block
-        // (dbEnabled is already set)
-        if (dbEnabled && DEBUG_MODE) {
-            console.log('💾 [DB] Database connection active');
-        }
-
-        // ✅ STEP 2: SEARCH DATABASE FIRST (if enabled)
-        let dbResults = [];
-
-        // ✅ BUILD SELECTED PROVIDERS LIST from user config
-        // Maps config keys to DB provider ILIKE patterns (shortest common substring)
-        let selectedProviders = [];
-
-        // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
-        if (config.db_only) {
-            selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'torrentio', 'mediafusion', 'comet'];
-            if (DEBUG_MODE) console.log(`💾 [DB Only] Querying ALL providers in database`);
-        } else {
-            if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
-            if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
-            if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
-            if (config.use_uindex !== false) selectedProviders.push('uindex');
-            if (config.use_rarbg === true) selectedProviders.push('rarbg');
-            // Always include rd_cache (personal torrents) and pack-handler
-            selectedProviders.push('rd_cache', 'pack-handler');
-            // External addons: Check individual toggles
-            if (config.use_external_addons !== false) {
-                if (config.use_torrentio !== false) selectedProviders.push('torrentio');
-                if (config.use_mediafusion !== false) selectedProviders.push('mediafusion');
-                if (config.use_comet !== false) selectedProviders.push('comet');
-            }
-        }
-        if (DEBUG_MODE) console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
-
-        if (dbEnabled && mediaDetails.imdbId) {
-            if (type === 'series') {
-                // ✅ SOLUZIONE KITSU 6: Use converted season/episode if available (from absolute episode)
-                if (season !== null && episode !== null) {
-                    // We have season/episode (either from original request or Kitsu conversion)
-                    if (DEBUG_MODE) console.log(`💾 [DB] Searching for S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} with IMDb ${mediaDetails.imdbId}`);
-
-                    // Search for specific episode files (with file_index)
-                    dbResults = await dbHelper.searchEpisodeFiles(
-                        mediaDetails.imdbId,
-                        parseInt(season),
-                        parseInt(episode),
-                        selectedProviders  // ✅ PROVIDER FILTER
-                    );
-
-                    // 🔥 ALSO search for season packs and complete packs (they don't have file_index)
-                    const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
-                    if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
-
-                    // ✅ FIX: Remove file_index from pack results!
-                    // The file_index in torrents table is from the LAST played episode, not the current one.
-                    // This prevents showing wrong episodes when user requests E1 but pack has E6 file_index saved.
-                    const cleanedPackResults = packResults.map(pack => ({
-                        ...pack,
-                        file_index: null,       // ❌ Remove - it's wrong for this episode
-                        file_title: null        // ❌ Remove - it's wrong for this episode
-                    }));
-
-                    // Merge: episode files + packs (packs need dynamic resolution)
-                    dbResults = [...dbResults, ...cleanedPackResults];
-                } else {
-                    // No season/episode available (Kitsu without TMDb conversion fallback)
-                    console.log(`🎌 [Anime] No season mapping available, fetching all packs`);
-                    dbResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
-                }
-            } else {
-                // Search for movie - both singles AND packs
-                // 📦 PRIORITY 1: Search pack_files first (with file_index)
-                const packResults = await dbHelper.searchPacksByImdbId(mediaDetails.imdbId);
-                if (packResults && packResults.length > 0) {
-                    console.log(`💾 [DB] Found ${packResults.length} pack(s) containing film ${mediaDetails.imdbId}`);
-                }
-
-                // 📦 PRIORITY 1.3: Search pack_files by movie TITLE (for unindexed movies in packs)
-                // This finds movies like "Basil" in Disney pack even if not pre-indexed with IMDb
-                if (mediaDetails.title) {
-                    const titlePackMatches = await dbHelper.searchPacksByTitle(
-                        mediaDetails.title, 
-                        mediaDetails.year ? String(mediaDetails.year) : null,
-                        mediaDetails.imdbId  // Auto-index if found
-                    );
-                    if (titlePackMatches && titlePackMatches.length > 0) {
-                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${titlePackMatches.length} pack file(s) via Title Search: "${mediaDetails.title}"`);
-                        packResults.push(...titlePackMatches);
-                    }
-                }
-
-                // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
-                // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
-                // 🎬 FILTRO DOPPIO: excludeSeries=true + movieImdbId per evitare risultati di serie TV con parole simili nel titolo episodio
-                // 🔧 FIX: Also filter by year to match exact movie (e.g., Frozen 2013 vs Frozen II 2019)
-                const fileSearchOptions = {
-                    movieImdbId: mediaDetails.imdbId,
-                    excludeSeries: true,
-                    year: mediaDetails.year ? String(mediaDetails.year) : null
-                };
-
-                if (mediaDetails.title) {
-                    const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders, fileSearchOptions);
-                    if (titleMatches && titleMatches.length > 0) {
-                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}" (${mediaDetails.year})`);
-                        packResults.push(...titleMatches);
-                    }
-                }
-                if (mediaDetails.originalName && mediaDetails.originalName !== mediaDetails.title) {
-                    const origMatches = await dbHelper.searchFilesByTitle(mediaDetails.originalName, selectedProviders, fileSearchOptions);
-                    if (origMatches && origMatches.length > 0) {
-                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
-                        packResults.push(...origMatches);
-                    }
-                }
-
-                // 🔧 FIX: Sanity check pack results from DB - verify file_title matches requested movie
-                // This catches corrupted cache entries (e.g., Dumbo IMDb mapped to Basil file)
-                // Also handles cases like "Frozen" vs "Frozen II" by checking year
-                // ✅ CHECK ALL TITLES: English, Italian, Original
-                if (packResults.length > 0 && mediaDetails.title) {
-                    const normalizeForMatch = (str) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim() : '';
-                    const requestedTitle = normalizeForMatch(mediaDetails.title);
-                    const requestedOriginal = mediaDetails.originalName ? normalizeForMatch(mediaDetails.originalName) : '';
-                    const requestedItalian = italianTitle ? normalizeForMatch(italianTitle) : '';
-                    const requestedWords = [...new Set([
-                        ...requestedTitle.split(' '), 
-                        ...requestedOriginal.split(' '),
-                        ...requestedItalian.split(' ')  // ✅ Include Italian title!
-                    ].filter(w => w.length > 2))];
-                    const requestedYear = mediaDetails.year ? String(mediaDetails.year) : null;
-                    
-                    const validPackResults = [];
-                    const corruptedHashes = [];
-                    
-                    for (const pack of packResults) {
-                        const fileTitle = normalizeForMatch(pack.file_title || pack.file_path || '');
-                        const fileWords = fileTitle.split(' ').filter(w => w.length > 2);
-                        
-                        // Check if at least 2 significant words match (or 1 if title is short)
-                        const minMatches = requestedWords.length <= 2 ? 1 : 2;
-                        const matchCount = requestedWords.filter(w => fileWords.some(fw => fw.includes(w) || w.includes(fw))).length;
-                        
-                        // 🔧 YEAR CHECK: If file has a year in name, it MUST match requested year
-                        // This prevents "Frozen II (2019)" matching when we want "Frozen (2013)"
-                        const fileYearMatch = (pack.file_title || pack.file_path || '').match(/\((\d{4})\)/);
-                        const fileYear = fileYearMatch ? fileYearMatch[1] : null;
-                        
-                        let yearOk = true;
-                        if (requestedYear && fileYear && fileYear !== requestedYear) {
-                            // File has a year but it doesn't match - REJECT
-                            yearOk = false;
-                            console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" has year ${fileYear} but we want ${requestedYear} - EXCLUDING`);
-                        }
-                        
-                        if (matchCount >= minMatches && yearOk) {
-                            validPackResults.push(pack);
-                        } else if (!yearOk) {
-                            // Don't delete cache for year mismatch - it's valid for other movies
-                        } else {
-                            console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" does NOT match "${mediaDetails.title}" - EXCLUDING`);
-                            if (pack.info_hash) {
-                                corruptedHashes.push(pack.info_hash.toLowerCase());
-                            }
-                        }
-                    }
-                    
-                    // Delete corrupted cache entries in background
-                    if (corruptedHashes.length > 0 && typeof dbHelper.deletePackFilesCache === 'function') {
-                        console.log(`🗑️ [DB SANITY] Deleting corrupted cache for ${corruptedHashes.length} pack(s)...`);
-                        for (const hash of [...new Set(corruptedHashes)]) {
-                            try {
-                                await dbHelper.deletePackFilesCache(hash);
-                            } catch (e) {
-                                console.warn(`⚠️ Failed to delete cache for ${hash}: ${e.message}`);
-                            }
-                        }
-                    }
-                    
-                    if (validPackResults.length < packResults.length) {
-                        console.log(`💾 [DB SANITY] Filtered pack results: ${validPackResults.length}/${packResults.length} valid`);
-                    }
-                    packResults.length = 0;
-                    packResults.push(...validPackResults);
-                }
-
-                // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
-                const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
-                
-                // 🔧 FIX: For multi-film packs (all_imdb_ids has multiple entries), REMOVE file_index
-                // The file_index in torrents table is from a DIFFERENT movie in the pack
-                // These packs need dynamic resolution via resolveMoviePackFile
-                for (const result of regularResults) {
-                    if (result.all_imdb_ids && Array.isArray(result.all_imdb_ids) && result.all_imdb_ids.length > 1) {
-                        if (result.file_index !== null && result.file_index !== undefined) {
-                            if (DEBUG_MODE) console.log(`🔧 [PACK FIX] Removing stale file_index=${result.file_index} from multi-film pack ${result.info_hash?.substring(0,8)}`);
-                            result.file_index = null;
-                            result.file_title = null;
-                        }
-                    }
-                }
-
-                // Merge: packs first (with file_index), then regular
-                dbResults = [...(packResults || []), ...regularResults];
-            }
-        }
-
-        // If found in DB, check if IDs are complete and convert if needed
-        if (dbResults.length > 0) {
-            if (DEBUG_MODE) console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
-
-            // ✅ SOLUZIONE 3: Check if we need to complete IDs and update DB
-            const firstResult = dbResults[0];
-            if ((firstResult.imdb_id && !firstResult.tmdb_id) ||
-                (!firstResult.imdb_id && firstResult.tmdb_id)) {
-                if (DEBUG_MODE) console.log(`💾 [DB] Completing missing IDs for database results...`);
-                const completed = await completeIds(
-                    firstResult.imdb_id,
-                    firstResult.tmdb_id,
-                    type === 'series' ? 'series' : 'movie'
-                );
-
-                // Update mediaDetails with completed IDs
-                if (completed.tmdbId && !mediaDetails.tmdbId) {
-                    mediaDetails.tmdbId = completed.tmdbId;
-                    if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
-                }
-                if (completed.imdbId && !mediaDetails.imdbId) {
-                    mediaDetails.imdbId = completed.imdbId;
-                    if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
-                }
-
-                // ✅ SOLUZIONE 3: Update DB with completed IDs (auto-repair)
-                if (completed.imdbId || completed.tmdbId) {
-                    if (DEBUG_MODE) console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
-                    // Extract all info_hash from dbResults
-                    const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
-                    if (infoHashes.length > 0) {
-                        const updatedCount = await dbHelper.updateTorrentsWithIds(
-                            infoHashes,           // ALL hashes from DB results
-                            completed.imdbId,     // Populate missing imdb_id
-                            completed.tmdbId      // Populate missing tmdb_id
-                        );
-                        if (updatedCount > 0) {
-                            if (DEBUG_MODE) console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
-                        }
-                    }
-                }
-            }
-        }
-
-        // ✅ STEP 3: If no results in DB and we have TMDb ID, try searching by TMDb
-        if (dbEnabled && dbResults.length === 0 && mediaDetails.tmdbId) {
-            console.log(`💾 [DB] No results by IMDb, trying TMDb ID: ${mediaDetails.tmdbId}`);
-
-            // 🔥 FIX: For series with episode info, get imdbId from TMDb first and use searchEpisodeFiles
-            if (type === 'series' && season && episode) {
+            // --- NUOVA MODIFICA: Ottieni il titolo in italiano ---
+            // (italianTitle and originalTitle already declared outside this block)
+            if (mediaDetails.tmdbId && !kitsuId) { // Solo per film/serie da TMDB
                 try {
-                    // Get IMDb ID from TMDb torrents table
-                    const tmdbTorrents = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
-                    if (tmdbTorrents.length > 0 && tmdbTorrents[0].imdb_id) {
-                        const imdbId = tmdbTorrents[0].imdb_id;
-                        console.log(`💾 [DB] Found imdbId ${imdbId} from TMDb, searching episode files...`);
+                    // Convert 'series' to 'tv' for TMDB API
+                    const tmdbType = mediaDetails.type === 'series' ? 'tv' : 'movie';
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] Using TMDB type: ${tmdbType} for mediaDetails.type: ${mediaDetails.type}`);
 
-                        // Search episode files
-                        const episodeFiles = await dbHelper.searchEpisodeFiles(imdbId, parseInt(season), parseInt(episode), selectedProviders);
-                        console.log(`💾 [DB] Found ${episodeFiles.length} files for S${season}E${episode}`);
+                    // 1. Prima chiamata: ottieni dettagli in italiano (language=it-IT)
+                    const italianDetails = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'external_ids', 'it-IT');
+                    if (DEBUG_MODE) console.log(`🔍 [Italian Title] TMDB response with language=it-IT received`);
 
-                        // 🔥 ALSO get all torrents (for packs)
-                        console.log(`💾 [DB] Also fetching all torrents for packs...`);
-                        dbResults = [...episodeFiles, ...tmdbTorrents];
-                        console.log(`💾 [DB] Total: ${dbResults.length} results (files + packs)`);
-                    } else {
-                        // Fallback: use TMDb search (won't have file_title)
-                        dbResults = tmdbTorrents;
+                    if (italianDetails) {
+                        const italianTitleFromResponse = italianDetails.title || italianDetails.name;
+                        if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found title from it-IT response: "${italianTitleFromResponse}"`);
+
+                        // Usa il titolo italiano se è diverso da quello inglese
+                        if (italianTitleFromResponse && italianTitleFromResponse.toLowerCase() !== mediaDetails.title.toLowerCase()) {
+                            italianTitle = italianTitleFromResponse;
+                            if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from language=it-IT: "${italianTitle}"`);
+                        } else if (italianTitleFromResponse) {
+                            if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Title from it-IT "${italianTitleFromResponse}" is same as English, will try translations`);
+                        }
+
+                        // Salva anche l'original_title/original_name
+                        if (italianDetails.original_title || italianDetails.original_name) {
+                            const foundOriginalTitle = italianDetails.original_title || italianDetails.original_name;
+                            if (foundOriginalTitle && foundOriginalTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
+                                originalTitle = foundOriginalTitle;
+                                if (DEBUG_MODE) console.log(`🎬 Found original title: "${originalTitle}"`);
+                            }
+                        }
                     }
-                } catch (err) {
-                    console.error(`❌ [DB] Error searching episode files by TMDb:`, err.message);
-                    dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
+
+                    // 2. Fallback: se non abbiamo trovato il titolo italiano, prova con translations
+                    if (!italianTitle) {
+                        if (DEBUG_MODE) console.log(`🔍 [Italian Title] Trying translations as fallback...`);
+                        const detailsWithTranslations = await getTMDBDetails(mediaDetails.tmdbId, tmdbType, tmdbKey, 'translations', 'en-US');
+
+                        if (detailsWithTranslations?.translations?.translations) {
+                            if (DEBUG_MODE) console.log(`🔍 [Italian Title] Found ${detailsWithTranslations.translations.translations.length} translations`);
+                            const italianTranslation = detailsWithTranslations.translations.translations.find(t => t.iso_639_1 === 'it');
+
+                            if (italianTranslation) {
+                                if (DEBUG_MODE) console.log(`🔍 [Italian Title] Italian translation found:`, JSON.stringify(italianTranslation.data));
+                                const foundTitle = italianTranslation.data.title || italianTranslation.data.name;
+                                if (foundTitle && foundTitle.toLowerCase() !== mediaDetails.title.toLowerCase()) {
+                                    italianTitle = foundTitle;
+                                    if (DEBUG_MODE) console.log(`🇮🇹 Found Italian title from translations: "${italianTitle}"`);
+                                }
+                            } else {
+                                if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No Italian (it) translation found in translations array`);
+                            }
+                        } else {
+                            if (DEBUG_MODE) console.log(`⚠️ [Italian Title] No translations data available`);
+                        }
+                    }
+
+                    if (!italianTitle) {
+                        if (DEBUG_MODE) console.log(`⚠️ [Italian Title] Could not find Italian title for "${mediaDetails.title}"`);
+                    }
+                } catch (e) {
+                    console.warn("⚠️ Could not fetch Italian title from TMDB:", e.message);
                 }
+            }
+            // --- FINE MODIFICA ---
+
+            // ✅ BUILD TITLES ARRAY: Include all possible titles for matching
+            if (!Array.isArray(mediaDetails.titles)) {
+                const allTitles = new Set();
+                // Always include the main English title
+                if (mediaDetails.title) {
+                    allTitles.add(mediaDetails.title);
+                    // If title contains ":", also add the part before it (e.g., "Suburra: Blood on Rome" → "Suburra")
+                    if (mediaDetails.title.includes(':')) {
+                        allTitles.add(mediaDetails.title.split(':')[0].trim());
+                    }
+                }
+                // Add Italian title if found
+                if (italianTitle && italianTitle !== mediaDetails.title) {
+                    allTitles.add(italianTitle);
+                    // If Italian title contains ":", also add the part before it
+                    if (italianTitle.includes(':')) {
+                        allTitles.add(italianTitle.split(':')[0].trim());
+                    }
+                }
+                // Add original title if different
+                if (originalTitle && originalTitle !== mediaDetails.title && originalTitle !== italianTitle) {
+                    allTitles.add(originalTitle);
+                    // If original title contains ":", also add the part before it
+                    if (originalTitle.includes(':')) {
+                        allTitles.add(originalTitle.split(':')[0].trim());
+                    }
+                }
+
+                mediaDetails.titles = Array.from(allTitles);
+                if (DEBUG_MODE) console.log(`📝 Built titles array: ${JSON.stringify(mediaDetails.titles)}`);
+            }
+
+            const displayTitle = Array.isArray(mediaDetails.titles) ? mediaDetails.titles[0] : mediaDetails.title;
+            console.log(`✅ Found: ${displayTitle} (${mediaDetails.year})`);
+
+            // ✅ STEP 1: DATABASE already initialized outside if block
+            // (dbEnabled is already set)
+            if (dbEnabled && DEBUG_MODE) {
+                console.log('💾 [DB] Database connection active');
+            }
+
+            // ✅ STEP 2: SEARCH DATABASE FIRST (if enabled)
+            let dbResults = [];
+
+            // ✅ BUILD SELECTED PROVIDERS LIST from user config
+            // Maps config keys to DB provider ILIKE patterns (shortest common substring)
+            let selectedProviders = [];
+
+            // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
+            if (config.db_only) {
+                selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'torrentio', 'mediafusion', 'comet'];
+                if (DEBUG_MODE) console.log(`💾 [DB Only] Querying ALL providers in database`);
             } else {
-                // For movies or when no episode info, use regular TMDb search
-                dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
+                if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
+                if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
+                if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
+                if (config.use_uindex !== false) selectedProviders.push('uindex');
+                if (config.use_rarbg === true) selectedProviders.push('rarbg');
+                // Always include rd_cache (personal torrents) and pack-handler
+                selectedProviders.push('rd_cache', 'pack-handler');
+                // External addons: Check individual toggles
+                if (config.use_external_addons !== false) {
+                    if (config.use_torrentio !== false) selectedProviders.push('torrentio');
+                    if (config.use_mediafusion !== false) selectedProviders.push('mediafusion');
+                    if (config.use_comet !== false) selectedProviders.push('comet');
+                }
             }
+            if (DEBUG_MODE) console.log(`💾 [DB] Selected providers for query: ${selectedProviders.join(', ')}`);
 
-            if (dbResults.length > 0) {
-                console.log(`💾 [DB] Found ${dbResults.length} results by TMDb ID!`);
+            if (dbEnabled && mediaDetails.imdbId) {
+                if (type === 'series') {
+                    // ✅ SOLUZIONE KITSU 6: Use converted season/episode if available (from absolute episode)
+                    if (season !== null && episode !== null) {
+                        // We have season/episode (either from original request or Kitsu conversion)
+                        if (DEBUG_MODE) console.log(`💾 [DB] Searching for S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} with IMDb ${mediaDetails.imdbId}`);
 
-                // ✅ SOLUZIONE 3: Auto-repair IDs when found via TMDb but missing IMDb
-                const firstResult = dbResults[0];
-                if (firstResult.tmdb_id && !firstResult.imdb_id && mediaDetails.imdbId) {
-                    console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents found via TMDb (missing IMDb)...`);
-                    // Extract all info_hash from dbResults
-                    const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
-                    if (infoHashes.length > 0) {
-                        const updatedCount = await dbHelper.updateTorrentsWithIds(
-                            infoHashes,           // ALL hashes from DB results
-                            mediaDetails.imdbId,  // Populate missing imdb_id
-                            mediaDetails.tmdbId   // Keep tmdb_id
+                        // Search for specific episode files (with file_index)
+                        dbResults = await dbHelper.searchEpisodeFiles(
+                            mediaDetails.imdbId,
+                            parseInt(season),
+                            parseInt(episode),
+                            selectedProviders  // ✅ PROVIDER FILTER
                         );
-                        if (updatedCount > 0) {
-                            console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with IMDb ID`);
-                        }
+
+                        // 🔥 ALSO search for season packs and complete packs (they don't have file_index)
+                        const packResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
+                        if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResults.length} additional torrents (packs/complete series)`);
+
+                        // ✅ FIX: Remove file_index from pack results!
+                        // The file_index in torrents table is from the LAST played episode, not the current one.
+                        // This prevents showing wrong episodes when user requests E1 but pack has E6 file_index saved.
+                        const cleanedPackResults = packResults.map(pack => ({
+                            ...pack,
+                            file_index: null,       // ❌ Remove - it's wrong for this episode
+                            file_title: null        // ❌ Remove - it's wrong for this episode
+                        }));
+
+                        // Merge: episode files + packs (packs need dynamic resolution)
+                        dbResults = [...dbResults, ...cleanedPackResults];
+                    } else {
+                        // No season/episode available (Kitsu without TMDb conversion fallback)
+                        console.log(`🎌 [Anime] No season mapping available, fetching all packs`);
+                        dbResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
                     }
-                }
-            }
-        }
-
-        // ✅ STEP 4: If still no results, try FULL-TEXT SEARCH (FTS) as fallback
-        if (dbEnabled && dbResults.length === 0 && mediaDetails && mediaDetails.title) {
-            console.log(`💾 [DB] No results by ID. Trying Full-Text Search (FTS)...`);
-
-            // Helper to extract short title (before ":" or "-")
-            const extractShortTitle = (title) => {
-                if (!title) return null;
-
-                // Try splitting by ":" first
-                if (title.includes(':')) {
-                    const short = title.split(':')[0].trim();
-                    if (short.length > 0) return short;
-                }
-
-                // Try splitting by " - " (with spaces)
-                if (title.includes(' - ')) {
-                    const short = title.split(' - ')[0].trim();
-                    if (short.length > 0) return short;
-                }
-
-                return null;
-            };
-
-            // Import cleanTitleForSearch for title cleaning
-            // Note: We need to replicate the logic here since it's not exported from daily-scraper
-            const cleanTitleForFTS = (title) => {
-                if (!title) return '';
-                let cleaned = title;
-                cleaned = cleaned.replace(/\.(mkv|mp4|avi|mov)$/gi, '');
-                cleaned = cleaned.replace(/^\s*[\[\(]\d{4}[\]\)]\s*/g, '');
-                const beforeSeriesPattern = cleaned.match(/^(.+?)(?:\s*[\s._-]*(?:Stagion[ei]|Season[s]?|EP\.?|S\d{1,2}|\d{1,2}x\d{1,2}|19\d{2}|20\d{2}|\d{4}))/i);
-                if (beforeSeriesPattern) {
-                    cleaned = beforeSeriesPattern[1];
-                    cleaned = cleaned.replace(/[\s._-]+$/g, '');
                 } else {
-                    cleaned = cleaned.replace(/[\s._-]*Stagion[ei].*/gi, '');
-                    cleaned = cleaned.replace(/[\s._-]*Season[s]?.*/gi, '');
-                    cleaned = cleaned.replace(/[\s._-]*S\d{2}(E\d{2})?(-S?\d{2})?(E\d{2})?/gi, '');
-                    cleaned = cleaned.replace(/[\s._-]*\d{1,2}x\d{1,2}/gi, '');
-                    cleaned = cleaned.replace(/[\s._-]*EP\.?\s*\d{1,2}/gi, '');
-                }
-                cleaned = cleaned.replace(/\[.*?\]/g, '');
-                cleaned = cleaned.replace(/\(.*?\)/g, '');
-                cleaned = cleaned.replace(/[\(\[]\s*$/g, '');
-                cleaned = cleaned.replace(/\b(COMPLETA?|Completa?|FULL|Complete|Miniserie|MiniSerieTV|SERIE|Serie|SerieTV|TV|EXTENDED|Extended)\b/gi, '');
-                cleaned = cleaned.replace(/\bDirector'?s?\s*Cut\b/gi, '');
-                cleaned = cleaned.replace(/\bUncut\b/gi, '');
-                cleaned = cleaned.replace(/\bStagion[ei].*/gi, '');
-                cleaned = cleaned.replace(/\bSeason[s]?.*/gi, '');
-                cleaned = cleaned.replace(/\d{2,3}-\d{2,3}\/\d{2,3}/g, '');
-                cleaned = cleaned.replace(/\?\?/g, '');
-                cleaned = cleaned.replace(/[._-]+/g, ' ');
-                cleaned = cleaned.replace(/\b(SD|HD|720p|1080p|2160p|4K|UHD|BluRay|WEB DL|WEBRip|HDTV|DVDRip|BRRip|WEBDL)\b/gi, '');
-                cleaned = cleaned.replace(/\b(ITA|ENG|SPA|FRA|GER|JAP|KOR|MULTI|Multisub|SubS?|DUB|NFRip)\b/gi, '');
-                cleaned = cleaned.replace(/\b(DV|HDR|HDR10|HDR10Plus|H264|H265|H 264|H 265|x264|x265|HEVC|AVC|10bit|AAC|AC3|Mp3|DD5? 1|DTS|Atmos|DDP\d+ ?\d*)\b/gi, '');
-                cleaned = cleaned.replace(/\b(AMZN|NF|DSNP|HULU|HBO|ATVP|WEBMUX)\b/gi, '');
-                cleaned = cleaned.replace(/\b(MeM|GP|TheBlackKing|TheWhiteQueen|MIRCrew|FGT|RARBG|YTS|YIFY|ION10|PSA|FLUX|NAHOM|V3SP4|Notorious)\b/gi, '');
-                cleaned = cleaned.replace(/\bby[A-Za-z0-9]+\b/gi, '');
-                cleaned = cleaned.replace(/\s+/g, ' ').trim();
-                cleaned = cleaned.replace(/\s+(L'|Il |La |Gli |I |Le |Lo |Un |Una |Uno )[a-zàèéìòù']+(\s+[a-zàèéìòù']+)*$/g, '');
-                cleaned = cleaned.replace(/[\s-]+$/g, '').trim();
-                return cleaned;
-            };
+                    // Search for movie - both singles AND packs
+                    // 📦 PRIORITY 1: Search pack_files first (with file_index)
+                    const packResults = await dbHelper.searchPacksByImdbId(mediaDetails.imdbId);
+                    if (packResults && packResults.length > 0) {
+                        console.log(`💾 [DB] Found ${packResults.length} pack(s) containing film ${mediaDetails.imdbId}`);
+                    }
 
-            const cleanedTitle = cleanTitleForFTS(mediaDetails.title);
-            console.log(`💾 [DB FTS] Cleaned title: "${cleanedTitle}"`);
-
-            try {
-                // ✅ PHASE 1: Try with full title first
-                dbResults = await dbHelper.searchByTitleFTS(
-                    cleanedTitle,
-                    type,
-                    mediaDetails.year
-                );
-
-                // ✅ PHASE 2: If no results and title has ":" or "-", try short title
-                if (dbResults.length === 0) {
-                    const shortTitle = extractShortTitle(mediaDetails.title);
-                    if (shortTitle && shortTitle !== mediaDetails.title) {
-                        const cleanedShortTitle = cleanTitleForFTS(shortTitle);
-                        console.log(`💾 [DB FTS] No results with full title. Trying short title: "${cleanedShortTitle}"`);
-
-                        dbResults = await dbHelper.searchByTitleFTS(
-                            cleanedShortTitle,
-                            type,
-                            mediaDetails.year
+                    // 📦 PRIORITY 1.3: Search pack_files by movie TITLE (for unindexed movies in packs)
+                    // This finds movies like "Basil" in Disney pack even if not pre-indexed with IMDb
+                    if (mediaDetails.title) {
+                        const titlePackMatches = await dbHelper.searchPacksByTitle(
+                            mediaDetails.title,
+                            mediaDetails.year ? String(mediaDetails.year) : null,
+                            mediaDetails.imdbId  // Auto-index if found
                         );
-
-                        if (dbResults.length > 0) {
-                            console.log(`💾 [DB FTS Fallback] Found ${dbResults.length} results with short title!`);
+                        if (titlePackMatches && titlePackMatches.length > 0) {
+                            if (DEBUG_MODE) console.log(`💾 [DB] Found ${titlePackMatches.length} pack file(s) via Title Search: "${mediaDetails.title}"`);
+                            packResults.push(...titlePackMatches);
                         }
                     }
+
+                    // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
+                    // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
+                    // 🎬 FILTRO DOPPIO: excludeSeries=true + movieImdbId per evitare risultati di serie TV con parole simili nel titolo episodio
+                    // 🔧 FIX: Also filter by year to match exact movie (e.g., Frozen 2013 vs Frozen II 2019)
+                    const fileSearchOptions = {
+                        movieImdbId: mediaDetails.imdbId,
+                        excludeSeries: true,
+                        year: mediaDetails.year ? String(mediaDetails.year) : null
+                    };
+
+                    if (mediaDetails.title) {
+                        const titleMatches = await dbHelper.searchFilesByTitle(mediaDetails.title, selectedProviders, fileSearchOptions);
+                        if (titleMatches && titleMatches.length > 0) {
+                            if (DEBUG_MODE) console.log(`💾 [DB] Found ${titleMatches.length} pack files via Reverse Title Search: "${mediaDetails.title}" (${mediaDetails.year})`);
+                            packResults.push(...titleMatches);
+                        }
+                    }
+                    if (mediaDetails.originalName && mediaDetails.originalName !== mediaDetails.title) {
+                        const origMatches = await dbHelper.searchFilesByTitle(mediaDetails.originalName, selectedProviders, fileSearchOptions);
+                        if (origMatches && origMatches.length > 0) {
+                            if (DEBUG_MODE) console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
+                            packResults.push(...origMatches);
+                        }
+                    }
+
+                    // 🔧 FIX: Sanity check pack results from DB - verify file_title matches requested movie
+                    // This catches corrupted cache entries (e.g., Dumbo IMDb mapped to Basil file)
+                    // Also handles cases like "Frozen" vs "Frozen II" by checking year
+                    // ✅ CHECK ALL TITLES: English, Italian, Original
+                    if (packResults.length > 0 && mediaDetails.title) {
+                        const normalizeForMatch = (str) => str ? str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+                        const requestedTitle = normalizeForMatch(mediaDetails.title);
+                        const requestedOriginal = mediaDetails.originalName ? normalizeForMatch(mediaDetails.originalName) : '';
+                        const requestedItalian = italianTitle ? normalizeForMatch(italianTitle) : '';
+                        const requestedWords = [...new Set([
+                            ...requestedTitle.split(' '),
+                            ...requestedOriginal.split(' '),
+                            ...requestedItalian.split(' ')  // ✅ Include Italian title!
+                        ].filter(w => w.length > 2))];
+                        const requestedYear = mediaDetails.year ? String(mediaDetails.year) : null;
+
+                        const validPackResults = [];
+                        const corruptedHashes = [];
+
+                        for (const pack of packResults) {
+                            const fileTitle = normalizeForMatch(pack.file_title || pack.file_path || '');
+                            const fileWords = fileTitle.split(' ').filter(w => w.length > 2);
+
+                            // Check if at least 2 significant words match (or 1 if title is short)
+                            const minMatches = requestedWords.length <= 2 ? 1 : 2;
+                            const matchCount = requestedWords.filter(w => fileWords.some(fw => fw.includes(w) || w.includes(fw))).length;
+
+                            // 🔧 YEAR CHECK: If file has a year in name, it MUST match requested year
+                            // This prevents "Frozen II (2019)" matching when we want "Frozen (2013)"
+                            const fileYearMatch = (pack.file_title || pack.file_path || '').match(/\((\d{4})\)/);
+                            const fileYear = fileYearMatch ? fileYearMatch[1] : null;
+
+                            let yearOk = true;
+                            if (requestedYear && fileYear && fileYear !== requestedYear) {
+                                // File has a year but it doesn't match - REJECT
+                                yearOk = false;
+                                console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" has year ${fileYear} but we want ${requestedYear} - EXCLUDING`);
+                            }
+
+                            if (matchCount >= minMatches && yearOk) {
+                                validPackResults.push(pack);
+                            } else if (!yearOk) {
+                                // Don't delete cache for year mismatch - it's valid for other movies
+                            } else {
+                                console.warn(`⚠️ [DB SANITY] Pack file "${pack.file_title || pack.file_path}" does NOT match "${mediaDetails.title}" - EXCLUDING`);
+                                if (pack.info_hash) {
+                                    corruptedHashes.push(pack.info_hash.toLowerCase());
+                                }
+                            }
+                        }
+
+                        // Delete corrupted cache entries in background
+                        if (corruptedHashes.length > 0 && typeof dbHelper.deletePackFilesCache === 'function') {
+                            console.log(`🗑️ [DB SANITY] Deleting corrupted cache for ${corruptedHashes.length} pack(s)...`);
+                            for (const hash of [...new Set(corruptedHashes)]) {
+                                try {
+                                    await dbHelper.deletePackFilesCache(hash);
+                                } catch (e) {
+                                    console.warn(`⚠️ Failed to delete cache for ${hash}: ${e.message}`);
+                                }
+                            }
+                        }
+
+                        if (validPackResults.length < packResults.length) {
+                            console.log(`💾 [DB SANITY] Filtered pack results: ${validPackResults.length}/${packResults.length} valid`);
+                        }
+                        packResults.length = 0;
+                        packResults.push(...validPackResults);
+                    }
+
+                    // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
+                    const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
+
+                    // 🔧 FIX: For multi-film packs (all_imdb_ids has multiple entries), REMOVE file_index
+                    // The file_index in torrents table is from a DIFFERENT movie in the pack
+                    // These packs need dynamic resolution via resolveMoviePackFile
+                    for (const result of regularResults) {
+                        if (result.all_imdb_ids && Array.isArray(result.all_imdb_ids) && result.all_imdb_ids.length > 1) {
+                            if (result.file_index !== null && result.file_index !== undefined) {
+                                if (DEBUG_MODE) console.log(`🔧 [PACK FIX] Removing stale file_index=${result.file_index} from multi-film pack ${result.info_hash?.substring(0, 8)}`);
+                                result.file_index = null;
+                                result.file_title = null;
+                            }
+                        }
+                    }
+
+                    // Merge: packs first (with file_index), then regular
+                    dbResults = [...(packResults || []), ...regularResults];
+                }
+            }
+
+            // If found in DB, check if IDs are complete and convert if needed
+            if (dbResults.length > 0) {
+                if (DEBUG_MODE) console.log(`💾 [DB] Found ${dbResults.length} results in database!`);
+
+                // ✅ SOLUZIONE 3: Check if we need to complete IDs and update DB
+                const firstResult = dbResults[0];
+                if ((firstResult.imdb_id && !firstResult.tmdb_id) ||
+                    (!firstResult.imdb_id && firstResult.tmdb_id)) {
+                    if (DEBUG_MODE) console.log(`💾 [DB] Completing missing IDs for database results...`);
+                    const completed = await completeIds(
+                        firstResult.imdb_id,
+                        firstResult.tmdb_id,
+                        type === 'series' ? 'series' : 'movie'
+                    );
+
+                    // Update mediaDetails with completed IDs
+                    if (completed.tmdbId && !mediaDetails.tmdbId) {
+                        mediaDetails.tmdbId = completed.tmdbId;
+                        if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.tmdbId: ${completed.tmdbId}`);
+                    }
+                    if (completed.imdbId && !mediaDetails.imdbId) {
+                        mediaDetails.imdbId = completed.imdbId;
+                        if (DEBUG_MODE) console.log(`💾 [DB] Populated mediaDetails.imdbId: ${completed.imdbId}`);
+                    }
+
+                    // ✅ SOLUZIONE 3: Update DB with completed IDs (auto-repair)
+                    if (completed.imdbId || completed.tmdbId) {
+                        if (DEBUG_MODE) console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents with completed IDs...`);
+                        // Extract all info_hash from dbResults
+                        const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
+                        if (infoHashes.length > 0) {
+                            const updatedCount = await dbHelper.updateTorrentsWithIds(
+                                infoHashes,           // ALL hashes from DB results
+                                completed.imdbId,     // Populate missing imdb_id
+                                completed.tmdbId      // Populate missing tmdb_id
+                            );
+                            if (updatedCount > 0) {
+                                if (DEBUG_MODE) console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with completed IDs`);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ✅ STEP 3: If no results in DB and we have TMDb ID, try searching by TMDb
+            if (dbEnabled && dbResults.length === 0 && mediaDetails.tmdbId) {
+                console.log(`💾 [DB] No results by IMDb, trying TMDb ID: ${mediaDetails.tmdbId}`);
+
+                // 🔥 FIX: For series with episode info, get imdbId from TMDb first and use searchEpisodeFiles
+                if (type === 'series' && season && episode) {
+                    try {
+                        // Get IMDb ID from TMDb torrents table
+                        const tmdbTorrents = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
+                        if (tmdbTorrents.length > 0 && tmdbTorrents[0].imdb_id) {
+                            const imdbId = tmdbTorrents[0].imdb_id;
+                            console.log(`💾 [DB] Found imdbId ${imdbId} from TMDb, searching episode files...`);
+
+                            // Search episode files
+                            const episodeFiles = await dbHelper.searchEpisodeFiles(imdbId, parseInt(season), parseInt(episode), selectedProviders);
+                            console.log(`💾 [DB] Found ${episodeFiles.length} files for S${season}E${episode}`);
+
+                            // 🔥 ALSO get all torrents (for packs)
+                            console.log(`💾 [DB] Also fetching all torrents for packs...`);
+                            dbResults = [...episodeFiles, ...tmdbTorrents];
+                            console.log(`💾 [DB] Total: ${dbResults.length} results (files + packs)`);
+                        } else {
+                            // Fallback: use TMDb search (won't have file_title)
+                            dbResults = tmdbTorrents;
+                        }
+                    } catch (err) {
+                        console.error(`❌ [DB] Error searching episode files by TMDb:`, err.message);
+                        dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
+                    }
+                } else {
+                    // For movies or when no episode info, use regular TMDb search
+                    dbResults = await dbHelper.searchByTmdbId(mediaDetails.tmdbId, type, selectedProviders);
                 }
 
                 if (dbResults.length > 0) {
-                    console.log(`💾 [DB FTS] Found ${dbResults.length} results via Full-Text Search!`);
+                    console.log(`💾 [DB] Found ${dbResults.length} results by TMDb ID!`);
 
-                    // If we found results with FTS but they have NULL IDs, try to populate them
+                    // ✅ SOLUZIONE 3: Auto-repair IDs when found via TMDb but missing IMDb
                     const firstResult = dbResults[0];
-                    if (firstResult.imdb_id && !mediaDetails.imdbId) {
-                        mediaDetails.imdbId = firstResult.imdb_id;
-                        console.log(`💾 [DB FTS] Populated imdbId from FTS result: ${firstResult.imdb_id}`);
-                    }
-                    if (firstResult.tmdb_id && !mediaDetails.tmdbId) {
-                        mediaDetails.tmdbId = firstResult.tmdb_id;
-                        console.log(`💾 [DB FTS] Populated tmdbId from FTS result: ${firstResult.tmdb_id}`);
-                    }
-                } else {
-                    console.log(`💾 [DB FTS] No results found. Will search online sources...`);
-                }
-            } catch (error) {
-                console.error(`❌ [DB FTS] Search failed:`, error.message);
-                // Continue to live search
-            }
-
-            // Try to complete missing IDs for better matching later
-            if ((mediaDetails.imdbId && !mediaDetails.tmdbId) ||
-                (!mediaDetails.imdbId && mediaDetails.tmdbId)) {
-                console.log(`🔄 Completing missing media IDs for future use...`);
-                const completed = await completeIds(
-                    mediaDetails.imdbId,
-                    mediaDetails.tmdbId,
-                    type === 'series' ? 'series' : 'movie'
-                );
-
-                if (completed.imdbId) mediaDetails.imdbId = completed.imdbId;
-                if (completed.tmdbId) mediaDetails.tmdbId = completed.tmdbId;
-            }
-        }
-
-        // ✅ 3-TIER STRATEGY: Check if we should skip live search FOR CORSARO (Tier 1/2 -> Tier 3)
-        // Knaben and UIndex will ALWAYS run if enabled (Parallel Flow)
-        let skipLiveSearch = dbResults.length > 0;
-
-        // 📺 For series: check if at least one result matches the requested season
-        // If all results are from different seasons, we should still do live search for Corsaro
-        if (skipLiveSearch && type === 'series' && season) {
-            const seasonNum = parseInt(season);
-            const hasMatchingSeason = dbResults.some(result => {
-                const title = result.title || result.torrent_title || '';
-
-                // 1. Check singola stagione: S02E01, S02 , Stagione 2, Season 2
-                //    Usa (?![0-9]) per evitare che S2 matchi S21 o S22
-                const singleSeasonPattern = new RegExp(
-                    `[Ss](0?${season})(?![0-9])([Ee\\s]|$|[^0-9])|[Ss]tagione\\s*${season}(?![0-9])|[Ss]eason\\s*${season}(?![0-9])`, 'i'
-                );
-                if (singleSeasonPattern.test(title)) {
-                    if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Single season match for "${title.substring(0, 60)}..."`);
-                    return true;
-                }
-
-                // 2. Check range multi-stagione: S01-08, S1-8, S01-S08, S01 S08
-                const rangeMatch = title.match(/[Ss](0?\d+)[-–\s]+[Ss]?(0?\d+)/i);
-                if (rangeMatch) {
-                    const startSeason = parseInt(rangeMatch[1]);
-                    const endSeason = parseInt(rangeMatch[2]);
-                    if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Range S${startSeason}-S${endSeason} contains Season ${season}`);
-                        return true;
-                    }
-                }
-
-                // 3. Check range "Stagioni 01-08", "Stagioni 1 a 8"
-                const stagioniMatch = title.match(/[Ss]tagioni?\s*(0?\d+)[-–\s]+(?:a\s*)?(0?\d+)/i);
-                if (stagioniMatch) {
-                    const startSeason = parseInt(stagioniMatch[1]);
-                    const endSeason = parseInt(stagioniMatch[2]);
-                    if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Stagioni ${startSeason}-${endSeason} contains Season ${season}`);
-                        return true;
-                    }
-                }
-
-                // 4. Check "S01 a S08" pattern
-                const aRangeMatch = title.match(/[Ss](0?\d+)\s+a\s+[Ss](0?\d+)/i);
-                if (aRangeMatch) {
-                    const startSeason = parseInt(aRangeMatch[1]);
-                    const endSeason = parseInt(aRangeMatch[2]);
-                    if (seasonNum >= startSeason && seasonNum <= endSeason) {
-                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] S${startSeason} a S${endSeason} contains Season ${season}`);
-                        return true;
-                    }
-                }
-
-                // 5. Check serie completa
-                if (/\[COMPLETA\]|Complete\s*Series|Tutte\s*le\s*stagioni|Serie\s*Completa/i.test(title)) {
-                    if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Complete series detected: "${title.substring(0, 60)}..."`);
-                    return true;
-                }
-
-                return false;
-            });
-
-            if (!hasMatchingSeason) {
-                if (DEBUG_MODE) console.log(`⚠️ [3-Tier] Found ${dbResults.length} results but none match Season ${season} - will do live search for Corsaro`);
-                skipLiveSearch = false;
-            }
-        }
-
-        // 💾 DB-Only Mode: Skip ALL live searches (but keep enrichment for background DB growth)
-        if (config.db_only) {
-            skipLiveSearch = true;
-            if (DEBUG_MODE) console.log(`💾 [DB Only] Mode enabled - skipping all live searches`);
-        }
-
-        if (skipLiveSearch) {
-            if (DEBUG_MODE) console.log(`✅ [3-Tier] Found ${dbResults.length} results from DB/FTS. Skipping Corsaro live search.`);
-        } else {
-            if (DEBUG_MODE) console.log(`🔍 [3-Tier] No results from DB/FTS. Proceeding to Corsaro live search.`);
-        }
-
-        // Build search queries (ALWAYS - needed for both live search AND enrichment)
-        // Note: searchQueries declared in outer scope for caching
-        searchQueries = [];
-        let finalSearchQueries = []; // Declare here, outside the conditional blocks
-
-        // 🧹 Helper function to clean title for search (remove . - : symbols)
-        const cleanTitleForSearch = (title) => {
-            if (!title) return '';
-            return title
-                .replace(/[.\-:]/g, ' ')  // Replace . - : with spaces
-                .replace(/\s+/g, ' ')      // Collapse multiple spaces
-                .trim()
-                .toLowerCase();
-        };
-
-        // Helper function to generate queries for a given title (SERIES ONLY)
-        // isItalianTitle flag indicates if this is the Italian title (higher priority)
-        const addQueriesForTitle = (title, label = '', isItalianTitle = false) => {
-            if (!title || type !== 'series' || kitsuId) return;
-
-            const seasonStr = String(season).padStart(2, '0');
-            const episodeStr = String(episode).padStart(2, '0');
-
-            // Clean title for search (remove symbols)
-            const cleanedTitle = cleanTitleForSearch(title);
-
-            // Extract short version (before ":" if present)
-            const shortTitle = title.includes(':') ? title.split(':')[0].trim() : title;
-            const cleanedShortTitle = cleanTitleForSearch(shortTitle);
-
-            if (isItalianTitle) {
-                // 🇮🇹 ITALIAN TITLE: Higher priority, search with "ita" first
-                // Order: Most specific to least specific
-
-                // 1. Cleaned full title + season/episode + "ita"
-                searchQueries.push(`${cleanedTitle} S${seasonStr}E${episodeStr} ita`);
-                searchQueries.push(`${cleanedTitle} S${seasonStr} ita`);
-                searchQueries.push(`${cleanedTitle} ita`);
-
-                // 2. Cleaned full title + season/episode (without "ita")
-                searchQueries.push(`${cleanedTitle} S${seasonStr}E${episodeStr}`);
-                searchQueries.push(`${cleanedTitle} S${seasonStr}`);
-                searchQueries.push(`${cleanedTitle} Stagione ${season}`);
-                searchQueries.push(`${cleanedTitle}`);
-
-                // 3. Short title variants (if different)
-                if (cleanedShortTitle !== cleanedTitle) {
-                    searchQueries.push(`${cleanedShortTitle} S${seasonStr} ita`);
-                    searchQueries.push(`${cleanedShortTitle} S${seasonStr}`);
-                    searchQueries.push(`${cleanedShortTitle} ita`);
-                }
-            } else {
-                // 🌍 ENGLISH TITLE: Lower priority, used as fallback
-                // Only add if we need fallback queries
-
-                // 1. With "ita" for international sites
-                searchQueries.push(`${cleanedShortTitle} S${seasonStr} ita`);
-                searchQueries.push(`${cleanedShortTitle} S${seasonStr}E${episodeStr} ita`);
-                searchQueries.push(`${cleanedShortTitle} ita`);
-
-                // 2. Without "ita" (last resort)
-                searchQueries.push(`${cleanedShortTitle} S${seasonStr}E${episodeStr}`);
-                searchQueries.push(`${cleanedShortTitle} S${seasonStr}`);
-                searchQueries.push(`${cleanedShortTitle} Stagione ${season}`);
-                searchQueries.push(`${cleanedShortTitle} Season ${season}`);
-                searchQueries.push(`${cleanedShortTitle} Complete`);
-
-                // 3. Short title alone (for enrichment - LAST)
-                searchQueries.push(cleanedShortTitle);
-            }
-
-            if (DEBUG_MODE && label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
-        };
-
-        // Always build queries (needed for enrichment even when skipping live search)
-        if (DEBUG_MODE) console.log(`📝 [Queries] Building search queries for enrichment and live search...`);
-        if (type === 'series') {
-            if (kitsuId) { // Anime search strategy
-                const uniqueQueries = new Set();
-                const absEpisode = mediaDetails.absoluteEpisode || episode;
-                if (DEBUG_MODE) console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
-
-                // Use all available titles from Kitsu to build search queries
-                for (const title of mediaDetails.titles) {
-                    // 1. Title + absolute episode number (e.g., "Naruto 24", "One Piece 786")
-                    uniqueQueries.add(`${title} ${absEpisode}`);
-
-                    // 2. Title + season/episode format if we converted it (e.g., "Attack on Titan S01E05")
-                    if (season && episode) {
-                        const seasonStr = String(season).padStart(2, '0');
-                        const episodeStr = String(episode).padStart(2, '0');
-                        uniqueQueries.add(`${title} S${seasonStr}E${episodeStr}`);
-                        uniqueQueries.add(`${title} S${seasonStr}`); // Season pack
-                    }
-
-                    // 3. Just title (to find large packs and collections)
-                    uniqueQueries.add(title);
-                }
-                searchQueries.push(...uniqueQueries);
-            } else { // Regular series search strategy
-                // 🇮🇹 PRIORITY: Add Italian title queries FIRST (if available)
-                // This ensures we search with the full Italian title before generic English
-                if (italianTitle) {
-                    console.log(`🇮🇹 Adding Italian title queries FIRST (priority)...`);
-                    addQueriesForTitle(italianTitle, 'Italian title', true);
-                }
-
-                // 🌍 Then add English title queries as fallback
-                addQueriesForTitle(mediaDetails.title, 'English title', false);
-            }
-        } else { // Movie
-            searchQueries.push(`${mediaDetails.title} ${mediaDetails.year}`);
-            searchQueries.push(mediaDetails.title); // Aggiunto per completezza
-        }
-
-        // --- NUOVA MODIFICA: Aggiungi titolo italiano e originale alle query di ricerca ---
-        // 🇮🇹 Italian title for series is now added FIRST in the block above with priority
-        if (italianTitle && type === 'movie') {
-            searchQueries.push(`${italianTitle} ${mediaDetails.year}`);
-            searchQueries.push(italianTitle);
-            // Also add short version if it has ":"
-            if (italianTitle.includes(':')) {
-                const shortItalian = italianTitle.split(':')[0].trim();
-                searchQueries.push(`${shortItalian} ${mediaDetails.year}`);
-                searchQueries.push(shortItalian);
-            }
-        }
-
-        if (originalTitle && type === 'series' && !kitsuId) {
-            console.log(`🌍 Adding original title queries...`);
-            addQueriesForTitle(originalTitle, 'Original title');
-        } else if (originalTitle && type === 'movie') {
-            searchQueries.push(`${originalTitle} ${mediaDetails.year}`);
-            searchQueries.push(originalTitle);
-            // Also add short version if it has ":"
-            if (originalTitle.includes(':')) {
-                const shortOriginal = originalTitle.split(':')[0].trim();
-                searchQueries.push(`${shortOriginal} ${mediaDetails.year}`);
-                searchQueries.push(shortOriginal);
-            }
-        }
-
-        // Rimuovi duplicati e logga
-        finalSearchQueries = [...new Set(searchQueries)];
-        if (DEBUG_MODE) console.log(`📚 Final search queries (${finalSearchQueries.length} total):`, finalSearchQueries);
-        // --- FINE MODIFICA ---
-
-        // --- NUOVA LOGICA DI AGGREGAZIONE E DEDUPLICAZIONE ---
-        // Separazione dei risultati per provider per applicare filtri specifici
-        const rawResultsByProvider = {
-            UIndex: [],
-            Knaben: [],
-            TorrentGalaxy: [],
-            CorsaroNero: [],
-            Jackettio: [],
-            ExternalAddons: [], // ✅ Torrentio, MediaFusion, Comet
-            RARBG: []
-        };
-
-        const searchType = kitsuId ? 'anime' : type;
-        const TOTAL_RESULTS_TARGET = 50;
-        let totalQueries = 0;
-
-        // Check which sites are enabled (default to all if not specified)
-        const useUIndex = config.use_uindex !== false;
-        const useCorsaroNero = config.use_corsaronero !== false;
-        const useKnaben = config.use_knaben !== false;
-        const useTorrentGalaxy = config.use_torrentgalaxy === true; // Default OFF (false) for new feature
-        const globalExternalEnabled = config.use_external_addons !== false;
-        const enabledExternalAddons = [];
-        if (globalExternalEnabled) {
-            if (config.use_torrentio !== false) enabledExternalAddons.push('torrentio');
-            if (config.use_mediafusion !== false) enabledExternalAddons.push('mediafusion');
-            if (config.use_comet !== false) enabledExternalAddons.push('comet');
-        }
-        if (DEBUG_MODE) {
-            console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
-            console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
-        }
-
-        // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
-        if (DEBUG_MODE) console.log(`🔍 Starting parallel live search...`);
-
-        // ✅ Initialize Jackettio if ENV vars are set
-        let jackettioInstance = null;
-        if (config.jackett_url && config.jackett_api_key) {
-            jackettioInstance = new Jackettio(
-                config.jackett_url,
-                config.jackett_api_key,
-                config.jackett_password
-            );
-            console.log('🔍 [Jackettio] Instance initialized (ITALIAN ONLY mode)');
-        }
-
-        const parallelSearchTasks = [];
-
-        // 1️⃣ TASK: UIndex
-        if (useUIndex) {
-            parallelSearchTasks.push(async () => {
-                const uindexQueries = [];
-                const isMovie = type === 'movie';
-                const seasonStr = season ? String(season).padStart(2, '0') : null;
-
-                // ✅ Costruisci validationMetadata per UIndex (come Knaben)
-                const uindexValidationMetadata = {
-                    titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
-                    year: mediaDetails.year,
-                    season: season ? parseInt(season, 10) : undefined,
-                    episode: episode ? parseInt(episode, 10) : undefined,
-                };
-                if (DEBUG_MODE) console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
-
-                // 🎬 FILM: Solo 2 query semplici
-                if (isMovie) {
-                    // Query 1: Titolo italiano + ita
-                    if (italianTitle) {
-                        const cleanedItalian = cleanTitleForSearch(italianTitle);
-                        uindexQueries.push(`${cleanedItalian} ita`);
-                    }
-                    // Query 2: Titolo inglese + ita (se diverso)
-                    const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
-                    const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-                    if (cleanedEnglish !== cleanedItalian) {
-                        uindexQueries.push(`${cleanedEnglish} ita`);
-                    }
-                } else {
-                    // 📺 SERIE TV: Solo 2 query (come film)
-                    // Query 1: Titolo italiano + stagione + ita
-                    if (italianTitle) {
-                        const cleanedItalian = cleanTitleForSearch(italianTitle);
-                        if (seasonStr) {
-                            uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
-                        } else {
-                            uindexQueries.push(`${cleanedItalian} ita`);
-                        }
-                    }
-                    // Query 2: Titolo inglese + stagione + ita (se diverso)
-                    const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
-                    const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-                    if (cleanedEnglish !== cleanedItalian) {
-                        if (seasonStr) {
-                            uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
-                        } else {
-                            uindexQueries.push(`${cleanedEnglish} ita`);
-                        }
-                    }
-                }
-
-                const uniqueUindexQueries = [...new Set(uindexQueries)];
-                if (DEBUG_MODE) console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
-
-                // Track if we found results with Italian title (to enable early-exit)
-                let foundWithItalianTitle = false;
-                // Now we always have max 1 Italian query + 1 English query (if different)
-                const italianQueryCount = italianTitle ? 1 : 0;
-
-                for (let i = 0; i < uniqueUindexQueries.length; i++) {
-                    const q = uniqueUindexQueries[i];
-
-                    // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
-                    if (foundWithItalianTitle && i >= italianQueryCount) {
-                        if (DEBUG_MODE) console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
-                        break;
-                    }
-
-                    try {
-                        const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
-                        if (res && res.length > 0) {
-                            if (DEBUG_MODE) console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
-                            rawResultsByProvider.UIndex.push(...res);
-
-                            // Mark that we found results with Italian title queries
-                            if (i < italianQueryCount && rawResultsByProvider.UIndex.length >= 5) {
-                                foundWithItalianTitle = true;
+                    if (firstResult.tmdb_id && !firstResult.imdb_id && mediaDetails.imdbId) {
+                        console.log(`💾 [DB] Auto-repairing ${dbResults.length} torrents found via TMDb (missing IMDb)...`);
+                        // Extract all info_hash from dbResults
+                        const infoHashes = dbResults.map(r => r.info_hash).filter(Boolean);
+                        if (infoHashes.length > 0) {
+                            const updatedCount = await dbHelper.updateTorrentsWithIds(
+                                infoHashes,           // ALL hashes from DB results
+                                mediaDetails.imdbId,  // Populate missing imdb_id
+                                mediaDetails.tmdbId   // Keep tmdb_id
+                            );
+                            if (updatedCount > 0) {
+                                console.log(`✅ [DB] Auto-repaired ${updatedCount} torrent(s) with IMDb ID`);
                             }
                         }
-                    } catch (e) {
-                        console.error(`❌ [UIndex] Error searching "${q}":`, e.message);
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
-                }
-            });
-        }
-
-        // 2️⃣ TASK: Main Loop (Corsaro, Knaben, Galaxy, Jackettio)
-        parallelSearchTasks.push(async () => {
-            // 🛑 EARLY EXIT LOGIC: Track results from Italian title queries vs English fallback
-            let foundWithItalianTitleQueries = 0; // Count results from Italian title queries
-            const cleanedItalianTitle = italianTitle ? cleanTitleForSearch(italianTitle) : '';
-            const cleanedEnglishTitle = cleanTitleForSearch(mediaDetails.title || '');
-
-            for (const query of finalSearchQueries) {
-                // 🛑 EARLY EXIT: If we found good results with Italian title queries, skip English fallback
-                const isEnglishFallbackQuery = cleanedEnglishTitle &&
-                    query.toLowerCase().startsWith(cleanedEnglishTitle) &&
-                    !query.toLowerCase().includes(cleanedItalianTitle);
-
-                if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
-                    if (DEBUG_MODE) console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
-                    continue; // Skip this query, don't break - we might have more ITA queries after
-                }
-
-                if (DEBUG_MODE) console.log(`\n🔍 Searching sources for: "${query}"`);
-
-                // Stop searching if we have a good number of results (checking total accumulated)
-                const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
-                if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
-                    if (DEBUG_MODE) console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
-                    break;
-                }
-
-                const searchPromises = [];
-
-                // CorsaroNero
-                if (useCorsaroNero) {
-                    if (!skipLiveSearch) {
-                        searchPromises.push({
-                            name: 'CorsaroNero',
-                            promise: fetchCorsaroNeroData(query, searchType)
-                        });
                     }
                 }
+            }
 
-                // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
-                if (useKnaben) {
-                    // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
-                    // Build metadata object for Knaben API
-                    const knabenMetadata = {
-                        primaryTitle: mediaDetails.title,
-                        title: mediaDetails.title,
-                        titles: mediaDetails.titles || [mediaDetails.title],
-                        year: mediaDetails.year,
-                        imdbId: mediaDetails.imdbId,
-                        tmdbId: mediaDetails.tmdbId,
-                        absoluteEpisode: mediaDetails.absoluteEpisode,
-                    };
+            // ✅ STEP 4: If still no results, try FULL-TEXT SEARCH (FTS) as fallback
+            if (dbEnabled && dbResults.length === 0 && mediaDetails && mediaDetails.title) {
+                console.log(`💾 [DB] No results by ID. Trying Full-Text Search (FTS)...`);
 
-                    // Build parsedId for Knaben
-                    const knabenParsedId = {
-                        mediaType: searchType,
-                        season: season,
-                        episode: episode,
-                    };
+                // Helper to extract short title (before ":" or "-")
+                const extractShortTitle = (title) => {
+                    if (!title) return null;
 
-                    searchPromises.push({
-                        name: 'Knaben',
-                        promise: fetchKnabenData(query, searchType, knabenMetadata, knabenParsedId)
-                    });
+                    // Try splitting by ":" first
+                    if (title.includes(':')) {
+                        const short = title.split(':')[0].trim();
+                        if (short.length > 0) return short;
+                    }
+
+                    // Try splitting by " - " (with spaces)
+                    if (title.includes(' - ')) {
+                        const short = title.split(' - ')[0].trim();
+                        if (short.length > 0) return short;
+                    }
+
+                    return null;
+                };
+
+                // Import cleanTitleForSearch for title cleaning
+                // Note: We need to replicate the logic here since it's not exported from daily-scraper
+                const cleanTitleForFTS = (title) => {
+                    if (!title) return '';
+                    let cleaned = title;
+                    cleaned = cleaned.replace(/\.(mkv|mp4|avi|mov)$/gi, '');
+                    cleaned = cleaned.replace(/^\s*[\[\(]\d{4}[\]\)]\s*/g, '');
+                    const beforeSeriesPattern = cleaned.match(/^(.+?)(?:\s*[\s._-]*(?:Stagion[ei]|Season[s]?|EP\.?|S\d{1,2}|\d{1,2}x\d{1,2}|19\d{2}|20\d{2}|\d{4}))/i);
+                    if (beforeSeriesPattern) {
+                        cleaned = beforeSeriesPattern[1];
+                        cleaned = cleaned.replace(/[\s._-]+$/g, '');
+                    } else {
+                        cleaned = cleaned.replace(/[\s._-]*Stagion[ei].*/gi, '');
+                        cleaned = cleaned.replace(/[\s._-]*Season[s]?.*/gi, '');
+                        cleaned = cleaned.replace(/[\s._-]*S\d{2}(E\d{2})?(-S?\d{2})?(E\d{2})?/gi, '');
+                        cleaned = cleaned.replace(/[\s._-]*\d{1,2}x\d{1,2}/gi, '');
+                        cleaned = cleaned.replace(/[\s._-]*EP\.?\s*\d{1,2}/gi, '');
+                    }
+                    cleaned = cleaned.replace(/\[.*?\]/g, '');
+                    cleaned = cleaned.replace(/\(.*?\)/g, '');
+                    cleaned = cleaned.replace(/[\(\[]\s*$/g, '');
+                    cleaned = cleaned.replace(/\b(COMPLETA?|Completa?|FULL|Complete|Miniserie|MiniSerieTV|SERIE|Serie|SerieTV|TV|EXTENDED|Extended)\b/gi, '');
+                    cleaned = cleaned.replace(/\bDirector'?s?\s*Cut\b/gi, '');
+                    cleaned = cleaned.replace(/\bUncut\b/gi, '');
+                    cleaned = cleaned.replace(/\bStagion[ei].*/gi, '');
+                    cleaned = cleaned.replace(/\bSeason[s]?.*/gi, '');
+                    cleaned = cleaned.replace(/\d{2,3}-\d{2,3}\/\d{2,3}/g, '');
+                    cleaned = cleaned.replace(/\?\?/g, '');
+                    cleaned = cleaned.replace(/[._-]+/g, ' ');
+                    cleaned = cleaned.replace(/\b(SD|HD|720p|1080p|2160p|4K|UHD|BluRay|WEB DL|WEBRip|HDTV|DVDRip|BRRip|WEBDL)\b/gi, '');
+                    cleaned = cleaned.replace(/\b(ITA|ENG|SPA|FRA|GER|JAP|KOR|MULTI|Multisub|SubS?|DUB|NFRip)\b/gi, '');
+                    cleaned = cleaned.replace(/\b(DV|HDR|HDR10|HDR10Plus|H264|H265|H 264|H 265|x264|x265|HEVC|AVC|10bit|AAC|AC3|Mp3|DD5? 1|DTS|Atmos|DDP\d+ ?\d*)\b/gi, '');
+                    cleaned = cleaned.replace(/\b(AMZN|NF|DSNP|HULU|HBO|ATVP|WEBMUX)\b/gi, '');
+                    cleaned = cleaned.replace(/\b(MeM|GP|TheBlackKing|TheWhiteQueen|MIRCrew|FGT|RARBG|YTS|YIFY|ION10|PSA|FLUX|NAHOM|V3SP4|Notorious)\b/gi, '');
+                    cleaned = cleaned.replace(/\bby[A-Za-z0-9]+\b/gi, '');
+                    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+                    cleaned = cleaned.replace(/\s+(L'|Il |La |Gli |I |Le |Lo |Un |Una |Uno )[a-zàèéìòù']+(\s+[a-zàèéìòù']+)*$/g, '');
+                    cleaned = cleaned.replace(/[\s-]+$/g, '').trim();
+                    return cleaned;
+                };
+
+                const cleanedTitle = cleanTitleForFTS(mediaDetails.title);
+                console.log(`💾 [DB FTS] Cleaned title: "${cleanedTitle}"`);
+
+                try {
+                    // ✅ PHASE 1: Try with full title first
+                    dbResults = await dbHelper.searchByTitleFTS(
+                        cleanedTitle,
+                        type,
+                        mediaDetails.year
+                    );
+
+                    // ✅ PHASE 2: If no results and title has ":" or "-", try short title
+                    if (dbResults.length === 0) {
+                        const shortTitle = extractShortTitle(mediaDetails.title);
+                        if (shortTitle && shortTitle !== mediaDetails.title) {
+                            const cleanedShortTitle = cleanTitleForFTS(shortTitle);
+                            console.log(`💾 [DB FTS] No results with full title. Trying short title: "${cleanedShortTitle}"`);
+
+                            dbResults = await dbHelper.searchByTitleFTS(
+                                cleanedShortTitle,
+                                type,
+                                mediaDetails.year
+                            );
+
+                            if (dbResults.length > 0) {
+                                console.log(`💾 [DB FTS Fallback] Found ${dbResults.length} results with short title!`);
+                            }
+                        }
+                    }
+
+                    if (dbResults.length > 0) {
+                        console.log(`💾 [DB FTS] Found ${dbResults.length} results via Full-Text Search!`);
+
+                        // If we found results with FTS but they have NULL IDs, try to populate them
+                        const firstResult = dbResults[0];
+                        if (firstResult.imdb_id && !mediaDetails.imdbId) {
+                            mediaDetails.imdbId = firstResult.imdb_id;
+                            console.log(`💾 [DB FTS] Populated imdbId from FTS result: ${firstResult.imdb_id}`);
+                        }
+                        if (firstResult.tmdb_id && !mediaDetails.tmdbId) {
+                            mediaDetails.tmdbId = firstResult.tmdb_id;
+                            console.log(`💾 [DB FTS] Populated tmdbId from FTS result: ${firstResult.tmdb_id}`);
+                        }
+                    } else {
+                        console.log(`💾 [DB FTS] No results found. Will search online sources...`);
+                    }
+                } catch (error) {
+                    console.error(`❌ [DB FTS] Search failed:`, error.message);
+                    // Continue to live search
                 }
 
-                // TorrentGalaxy
-                if (useTorrentGalaxy) {
-                    const tgxMetadata = {
-                        primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
-                        title: originalTitle || mediaDetails.title,
+                // Try to complete missing IDs for better matching later
+                if ((mediaDetails.imdbId && !mediaDetails.tmdbId) ||
+                    (!mediaDetails.imdbId && mediaDetails.tmdbId)) {
+                    console.log(`🔄 Completing missing media IDs for future use...`);
+                    const completed = await completeIds(
+                        mediaDetails.imdbId,
+                        mediaDetails.tmdbId,
+                        type === 'series' ? 'series' : 'movie'
+                    );
+
+                    if (completed.imdbId) mediaDetails.imdbId = completed.imdbId;
+                    if (completed.tmdbId) mediaDetails.tmdbId = completed.tmdbId;
+                }
+            }
+
+            // ✅ 3-TIER STRATEGY: Check if we should skip live search FOR CORSARO (Tier 1/2 -> Tier 3)
+            // Knaben and UIndex will ALWAYS run if enabled (Parallel Flow)
+            let skipLiveSearch = dbResults.length > 0;
+
+            // 📺 For series: check if at least one result matches the requested season
+            // If all results are from different seasons, we should still do live search for Corsaro
+            if (skipLiveSearch && type === 'series' && season) {
+                const seasonNum = parseInt(season);
+                const hasMatchingSeason = dbResults.some(result => {
+                    const title = result.title || result.torrent_title || '';
+
+                    // 1. Check singola stagione: S02E01, S02 , Stagione 2, Season 2
+                    //    Usa (?![0-9]) per evitare che S2 matchi S21 o S22
+                    const singleSeasonPattern = new RegExp(
+                        `[Ss](0?${season})(?![0-9])([Ee\\s]|$|[^0-9])|[Ss]tagione\\s*${season}(?![0-9])|[Ss]eason\\s*${season}(?![0-9])`, 'i'
+                    );
+                    if (singleSeasonPattern.test(title)) {
+                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Single season match for "${title.substring(0, 60)}..."`);
+                        return true;
+                    }
+
+                    // 2. Check range multi-stagione: S01-08, S1-8, S01-S08, S01 S08
+                    const rangeMatch = title.match(/[Ss](0?\d+)[-–\s]+[Ss]?(0?\d+)/i);
+                    if (rangeMatch) {
+                        const startSeason = parseInt(rangeMatch[1]);
+                        const endSeason = parseInt(rangeMatch[2]);
+                        if (seasonNum >= startSeason && seasonNum <= endSeason) {
+                            if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Range S${startSeason}-S${endSeason} contains Season ${season}`);
+                            return true;
+                        }
+                    }
+
+                    // 3. Check range "Stagioni 01-08", "Stagioni 1 a 8"
+                    const stagioniMatch = title.match(/[Ss]tagioni?\s*(0?\d+)[-–\s]+(?:a\s*)?(0?\d+)/i);
+                    if (stagioniMatch) {
+                        const startSeason = parseInt(stagioniMatch[1]);
+                        const endSeason = parseInt(stagioniMatch[2]);
+                        if (seasonNum >= startSeason && seasonNum <= endSeason) {
+                            if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Stagioni ${startSeason}-${endSeason} contains Season ${season}`);
+                            return true;
+                        }
+                    }
+
+                    // 4. Check "S01 a S08" pattern
+                    const aRangeMatch = title.match(/[Ss](0?\d+)\s+a\s+[Ss](0?\d+)/i);
+                    if (aRangeMatch) {
+                        const startSeason = parseInt(aRangeMatch[1]);
+                        const endSeason = parseInt(aRangeMatch[2]);
+                        if (seasonNum >= startSeason && seasonNum <= endSeason) {
+                            if (DEBUG_MODE) console.log(`✅ [TIER CHECK] S${startSeason} a S${endSeason} contains Season ${season}`);
+                            return true;
+                        }
+                    }
+
+                    // 5. Check serie completa
+                    if (/\[COMPLETA\]|Complete\s*Series|Tutte\s*le\s*stagioni|Serie\s*Completa/i.test(title)) {
+                        if (DEBUG_MODE) console.log(`✅ [TIER CHECK] Complete series detected: "${title.substring(0, 60)}..."`);
+                        return true;
+                    }
+
+                    return false;
+                });
+
+                if (!hasMatchingSeason) {
+                    if (DEBUG_MODE) console.log(`⚠️ [3-Tier] Found ${dbResults.length} results but none match Season ${season} - will do live search for Corsaro`);
+                    skipLiveSearch = false;
+                }
+            }
+
+            // 💾 DB-Only Mode: Skip ALL live searches (but keep enrichment for background DB growth)
+            if (config.db_only) {
+                skipLiveSearch = true;
+                if (DEBUG_MODE) console.log(`💾 [DB Only] Mode enabled - skipping all live searches`);
+            }
+
+            if (skipLiveSearch) {
+                if (DEBUG_MODE) console.log(`✅ [3-Tier] Found ${dbResults.length} results from DB/FTS. Skipping Corsaro live search.`);
+            } else {
+                if (DEBUG_MODE) console.log(`🔍 [3-Tier] No results from DB/FTS. Proceeding to Corsaro live search.`);
+            }
+
+            // Build search queries (ALWAYS - needed for both live search AND enrichment)
+            // Note: searchQueries declared in outer scope for caching
+            searchQueries = [];
+            let finalSearchQueries = []; // Declare here, outside the conditional blocks
+
+            // 🧹 Helper function to clean title for search (remove . - : symbols)
+            const cleanTitleForSearch = (title) => {
+                if (!title) return '';
+                return title
+                    .replace(/[.\-:]/g, ' ')  // Replace . - : with spaces
+                    .replace(/\s+/g, ' ')      // Collapse multiple spaces
+                    .trim()
+                    .toLowerCase();
+            };
+
+            // Helper function to generate queries for a given title (SERIES ONLY)
+            // isItalianTitle flag indicates if this is the Italian title (higher priority)
+            const addQueriesForTitle = (title, label = '', isItalianTitle = false) => {
+                if (!title || type !== 'series' || kitsuId) return;
+
+                const seasonStr = String(season).padStart(2, '0');
+                const episodeStr = String(episode).padStart(2, '0');
+
+                // Clean title for search (remove symbols)
+                const cleanedTitle = cleanTitleForSearch(title);
+
+                // Extract short version (before ":" if present)
+                const shortTitle = title.includes(':') ? title.split(':')[0].trim() : title;
+                const cleanedShortTitle = cleanTitleForSearch(shortTitle);
+
+                if (isItalianTitle) {
+                    // 🇮🇹 ITALIAN TITLE: Higher priority, search with "ita" first
+                    // Order: Most specific to least specific
+
+                    // 1. Cleaned full title + season/episode + "ita"
+                    searchQueries.push(`${cleanedTitle} S${seasonStr}E${episodeStr} ita`);
+                    searchQueries.push(`${cleanedTitle} S${seasonStr} ita`);
+                    searchQueries.push(`${cleanedTitle} ita`);
+
+                    // 2. Cleaned full title + season/episode (without "ita")
+                    searchQueries.push(`${cleanedTitle} S${seasonStr}E${episodeStr}`);
+                    searchQueries.push(`${cleanedTitle} S${seasonStr}`);
+                    searchQueries.push(`${cleanedTitle} Stagione ${season}`);
+                    searchQueries.push(`${cleanedTitle}`);
+
+                    // 3. Short title variants (if different)
+                    if (cleanedShortTitle !== cleanedTitle) {
+                        searchQueries.push(`${cleanedShortTitle} S${seasonStr} ita`);
+                        searchQueries.push(`${cleanedShortTitle} S${seasonStr}`);
+                        searchQueries.push(`${cleanedShortTitle} ita`);
+                    }
+                } else {
+                    // 🌍 ENGLISH TITLE: Lower priority, used as fallback
+                    // Only add if we need fallback queries
+
+                    // 1. With "ita" for international sites
+                    searchQueries.push(`${cleanedShortTitle} S${seasonStr} ita`);
+                    searchQueries.push(`${cleanedShortTitle} S${seasonStr}E${episodeStr} ita`);
+                    searchQueries.push(`${cleanedShortTitle} ita`);
+
+                    // 2. Without "ita" (last resort)
+                    searchQueries.push(`${cleanedShortTitle} S${seasonStr}E${episodeStr}`);
+                    searchQueries.push(`${cleanedShortTitle} S${seasonStr}`);
+                    searchQueries.push(`${cleanedShortTitle} Stagione ${season}`);
+                    searchQueries.push(`${cleanedShortTitle} Season ${season}`);
+                    searchQueries.push(`${cleanedShortTitle} Complete`);
+
+                    // 3. Short title alone (for enrichment - LAST)
+                    searchQueries.push(cleanedShortTitle);
+                }
+
+                if (DEBUG_MODE && label) console.log(`📝 Added queries for ${label}: "${title}" -> cleaned: "${cleanedTitle}"`);
+            };
+
+            // Always build queries (needed for enrichment even when skipping live search)
+            if (DEBUG_MODE) console.log(`📝 [Queries] Building search queries for enrichment and live search...`);
+            if (type === 'series') {
+                if (kitsuId) { // Anime search strategy
+                    const uniqueQueries = new Set();
+                    const absEpisode = mediaDetails.absoluteEpisode || episode;
+                    if (DEBUG_MODE) console.log(`🎌 [Anime] Building queries for absolute episode ${absEpisode}, titles: ${mediaDetails.titles.length}`);
+
+                    // Use all available titles from Kitsu to build search queries
+                    for (const title of mediaDetails.titles) {
+                        // 1. Title + absolute episode number (e.g., "Naruto 24", "One Piece 786")
+                        uniqueQueries.add(`${title} ${absEpisode}`);
+
+                        // 2. Title + season/episode format if we converted it (e.g., "Attack on Titan S01E05")
+                        if (season && episode) {
+                            const seasonStr = String(season).padStart(2, '0');
+                            const episodeStr = String(episode).padStart(2, '0');
+                            uniqueQueries.add(`${title} S${seasonStr}E${episodeStr}`);
+                            uniqueQueries.add(`${title} S${seasonStr}`); // Season pack
+                        }
+
+                        // 3. Just title (to find large packs and collections)
+                        uniqueQueries.add(title);
+                    }
+                    searchQueries.push(...uniqueQueries);
+                } else { // Regular series search strategy
+                    // 🇮🇹 PRIORITY: Add Italian title queries FIRST (if available)
+                    // This ensures we search with the full Italian title before generic English
+                    if (italianTitle) {
+                        console.log(`🇮🇹 Adding Italian title queries FIRST (priority)...`);
+                        addQueriesForTitle(italianTitle, 'Italian title', true);
+                    }
+
+                    // 🌍 Then add English title queries as fallback
+                    addQueriesForTitle(mediaDetails.title, 'English title', false);
+                }
+            } else { // Movie
+                searchQueries.push(`${mediaDetails.title} ${mediaDetails.year}`);
+                searchQueries.push(mediaDetails.title); // Aggiunto per completezza
+            }
+
+            // --- NUOVA MODIFICA: Aggiungi titolo italiano e originale alle query di ricerca ---
+            // 🇮🇹 Italian title for series is now added FIRST in the block above with priority
+            if (italianTitle && type === 'movie') {
+                searchQueries.push(`${italianTitle} ${mediaDetails.year}`);
+                searchQueries.push(italianTitle);
+                // Also add short version if it has ":"
+                if (italianTitle.includes(':')) {
+                    const shortItalian = italianTitle.split(':')[0].trim();
+                    searchQueries.push(`${shortItalian} ${mediaDetails.year}`);
+                    searchQueries.push(shortItalian);
+                }
+            }
+
+            if (originalTitle && type === 'series' && !kitsuId) {
+                console.log(`🌍 Adding original title queries...`);
+                addQueriesForTitle(originalTitle, 'Original title');
+            } else if (originalTitle && type === 'movie') {
+                searchQueries.push(`${originalTitle} ${mediaDetails.year}`);
+                searchQueries.push(originalTitle);
+                // Also add short version if it has ":"
+                if (originalTitle.includes(':')) {
+                    const shortOriginal = originalTitle.split(':')[0].trim();
+                    searchQueries.push(`${shortOriginal} ${mediaDetails.year}`);
+                    searchQueries.push(shortOriginal);
+                }
+            }
+
+            // Rimuovi duplicati e logga
+            finalSearchQueries = [...new Set(searchQueries)];
+            if (DEBUG_MODE) console.log(`📚 Final search queries (${finalSearchQueries.length} total):`, finalSearchQueries);
+            // --- FINE MODIFICA ---
+
+            // --- NUOVA LOGICA DI AGGREGAZIONE E DEDUPLICAZIONE ---
+            // Separazione dei risultati per provider per applicare filtri specifici
+            const rawResultsByProvider = {
+                UIndex: [],
+                Knaben: [],
+                TorrentGalaxy: [],
+                CorsaroNero: [],
+                Jackettio: [],
+                ExternalAddons: [], // ✅ Torrentio, MediaFusion, Comet
+                RARBG: []
+            };
+
+            const searchType = kitsuId ? 'anime' : type;
+            const TOTAL_RESULTS_TARGET = 50;
+            let totalQueries = 0;
+
+            // Check which sites are enabled (default to all if not specified)
+            const useUIndex = config.use_uindex !== false;
+            const useCorsaroNero = config.use_corsaronero !== false;
+            const useKnaben = config.use_knaben !== false;
+            const useTorrentGalaxy = config.use_torrentgalaxy === true; // Default OFF (false) for new feature
+            const globalExternalEnabled = config.use_external_addons !== false;
+            const enabledExternalAddons = [];
+            if (globalExternalEnabled) {
+                if (config.use_torrentio !== false) enabledExternalAddons.push('torrentio');
+                if (config.use_mediafusion !== false) enabledExternalAddons.push('mediafusion');
+                if (config.use_comet !== false) enabledExternalAddons.push('comet');
+            }
+            if (DEBUG_MODE) {
+                console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
+                console.log(`🐞 [DEBUG-EXT] Global: ${globalExternalEnabled}, Enabled: ${JSON.stringify(enabledExternalAddons)}`);
+            }
+
+            // ✅ LIVE SEARCH (Tier 3 + Parallel Flows)
+            if (DEBUG_MODE) console.log(`🔍 Starting parallel live search...`);
+
+            // ✅ Initialize Jackettio if ENV vars are set
+            let jackettioInstance = null;
+            if (config.jackett_url && config.jackett_api_key) {
+                jackettioInstance = new Jackettio(
+                    config.jackett_url,
+                    config.jackett_api_key,
+                    config.jackett_password
+                );
+                console.log('🔍 [Jackettio] Instance initialized (ITALIAN ONLY mode)');
+            }
+
+            const parallelSearchTasks = [];
+
+            // 1️⃣ TASK: UIndex
+            if (useUIndex) {
+                parallelSearchTasks.push(async () => {
+                    const uindexQueries = [];
+                    const isMovie = type === 'movie';
+                    const seasonStr = season ? String(season).padStart(2, '0') : null;
+
+                    // ✅ Costruisci validationMetadata per UIndex (come Knaben)
+                    const uindexValidationMetadata = {
+                        titles: mediaDetails.titles || [mediaDetails.title, italianTitle, originalTitle].filter(Boolean),
                         year: mediaDetails.year,
-                        titles: [cleanedItalianTitle, originalTitle, mediaDetails.title].filter(Boolean),
-                    };
-                    const tgxParsedId = {
                         season: season ? parseInt(season, 10) : undefined,
                         episode: episode ? parseInt(episode, 10) : undefined,
                     };
+                    if (DEBUG_MODE) console.log(`🔍 [UIndex] Validation metadata: titles=${uindexValidationMetadata.titles.join(', ')}, year=${uindexValidationMetadata.year}, S${uindexValidationMetadata.season}E${uindexValidationMetadata.episode}`);
 
-                    searchPromises.push({
-                        name: 'TorrentGalaxy',
-                        promise: fetchTorrentGalaxyData(query, searchType, tgxMetadata, tgxParsedId)
-                    });
-                }
+                    // 🎬 FILM: Solo 2 query semplici
+                    if (isMovie) {
+                        // Query 1: Titolo italiano + ita
+                        if (italianTitle) {
+                            const cleanedItalian = cleanTitleForSearch(italianTitle);
+                            uindexQueries.push(`${cleanedItalian} ita`);
+                        }
+                        // Query 2: Titolo inglese + ita (se diverso)
+                        const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
+                        const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                        if (cleanedEnglish !== cleanedItalian) {
+                            uindexQueries.push(`${cleanedEnglish} ita`);
+                        }
+                    } else {
+                        // 📺 SERIE TV: Solo 2 query (come film)
+                        // Query 1: Titolo italiano + stagione + ita
+                        if (italianTitle) {
+                            const cleanedItalian = cleanTitleForSearch(italianTitle);
+                            if (seasonStr) {
+                                uindexQueries.push(`${cleanedItalian} S${seasonStr} ita`);
+                            } else {
+                                uindexQueries.push(`${cleanedItalian} ita`);
+                            }
+                        }
+                        // Query 2: Titolo inglese + stagione + ita (se diverso)
+                        const cleanedEnglish = cleanTitleForSearch(mediaDetails.title);
+                        const cleanedItalian = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                        if (cleanedEnglish !== cleanedItalian) {
+                            if (seasonStr) {
+                                uindexQueries.push(`${cleanedEnglish} S${seasonStr} ita`);
+                            } else {
+                                uindexQueries.push(`${cleanedEnglish} ita`);
+                            }
+                        }
+                    }
 
-                // Jackettio
-                if (jackettioInstance) {
-                    searchPromises.push({
-                        name: 'Jackettio',
-                        promise: fetchJackettioData(query, searchType, jackettioInstance)
-                    });
-                }
+                    const uniqueUindexQueries = [...new Set(uindexQueries)];
+                    if (DEBUG_MODE) console.log(`📊 [UIndex] Running ${isMovie ? 'MOVIE' : 'SERIES'} queries:`, uniqueUindexQueries);
 
-                if (searchPromises.length === 0) {
-                    continue;
-                }
+                    // Track if we found results with Italian title (to enable early-exit)
+                    let foundWithItalianTitle = false;
+                    // Now we always have max 1 Italian query + 1 English query (if different)
+                    const italianQueryCount = italianTitle ? 1 : 0;
 
-                const results = await Promise.allSettled(searchPromises.map(sp => sp.promise));
+                    for (let i = 0; i < uniqueUindexQueries.length; i++) {
+                        const q = uniqueUindexQueries[i];
 
-                results.forEach((result, index) => {
-                    const sourceName = searchPromises[index].name;
-                    if (result.status === 'fulfilled' && result.value) {
-                        if (DEBUG_MODE) console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
-                        if (rawResultsByProvider[sourceName]) {
-                            rawResultsByProvider[sourceName].push(...result.value);
+                        // 🛑 EARLY EXIT: If we found good results with Italian title, skip English fallback queries
+                        if (foundWithItalianTitle && i >= italianQueryCount) {
+                            if (DEBUG_MODE) console.log(`✅ [UIndex] Found ${rawResultsByProvider.UIndex.length} results with Italian title. Skipping English fallback queries.`);
+                            break;
                         }
 
-                        // 🛑 Track results from Italian title queries for early exit
-                        const isItalianTitleQuery = cleanedItalianTitle &&
-                            query.toLowerCase().includes(cleanedItalianTitle);
-                        if (isItalianTitleQuery && result.value.length > 0) {
-                            foundWithItalianTitleQueries += result.value.length;
-                            if (DEBUG_MODE) console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                        try {
+                            const res = await fetchUIndexData(q, searchType, italianTitle, uindexValidationMetadata);
+                            if (res && res.length > 0) {
+                                if (DEBUG_MODE) console.log(`📊 [UIndex] Found ${res.length} results for "${q}"`);
+                                rawResultsByProvider.UIndex.push(...res);
+
+                                // Mark that we found results with Italian title queries
+                                if (i < italianQueryCount && rawResultsByProvider.UIndex.length >= 5) {
+                                    foundWithItalianTitle = true;
+                                }
+                            }
+                        } catch (e) {
+                            console.error(`❌ [UIndex] Error searching "${q}":`, e.message);
                         }
-                    } else if (result.status === 'rejected') {
-                        console.error(`❌ ${sourceName} search failed:`, result.reason);
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
                     }
                 });
-
-                totalQueries++;
-                if (totalQueries < finalSearchQueries.length) {
-                    await new Promise(resolve => setTimeout(resolve, 250));
-                }
             }
-        });
 
-        // 3️⃣ TASK: External Addons (skip in db_only mode)
-        if (enabledExternalAddons.length > 0 && !config.db_only) {
+            // 2️⃣ TASK: Main Loop (Corsaro, Knaben, Galaxy, Jackettio)
             parallelSearchTasks.push(async () => {
-                if (DEBUG_MODE) console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+                // 🛑 EARLY EXIT LOGIC: Track results from Italian title queries vs English fallback
+                let foundWithItalianTitleQueries = 0; // Count results from Italian title queries
+                const cleanedItalianTitle = italianTitle ? cleanTitleForSearch(italianTitle) : '';
+                const cleanedEnglishTitle = cleanTitleForSearch(mediaDetails.title || '');
 
-                // Build Stremio-format ID for addon APIs
-                let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
-                if (type === 'series' && season && episode) {
-                    stremioId = `${stremioId}:${season}:${episode}`;
-                }
+                for (const query of finalSearchQueries) {
+                    // 🛑 EARLY EXIT: If we found good results with Italian title queries, skip English fallback
+                    const isEnglishFallbackQuery = cleanedEnglishTitle &&
+                        query.toLowerCase().startsWith(cleanedEnglishTitle) &&
+                        !query.toLowerCase().includes(cleanedItalianTitle);
 
-                try {
-                    const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
-
-                    if (externalResults.length > 0) {
-                        if (DEBUG_MODE) console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
-                        rawResultsByProvider.ExternalAddons.push(...externalResults);
-                    } else {
-                        if (DEBUG_MODE) console.log(`⚠️ [External Addons] No results received`);
+                    if (isEnglishFallbackQuery && foundWithItalianTitleQueries >= 3) {
+                        if (DEBUG_MODE) console.log(`✅ [EARLY EXIT] Found ${foundWithItalianTitleQueries} results with Italian title. Skipping English fallback query: "${query}"`);
+                        continue; // Skip this query, don't break - we might have more ITA queries after
                     }
-                } catch (externalError) {
-                    console.error(`❌ [External Addons] Error:`, externalError.message);
+
+                    if (DEBUG_MODE) console.log(`\n🔍 Searching sources for: "${query}"`);
+
+                    // Stop searching if we have a good number of results (checking total accumulated)
+                    const currentTotal = Object.values(rawResultsByProvider).reduce((acc, arr) => acc + arr.length, 0);
+                    if (currentTotal >= TOTAL_RESULTS_TARGET * 4) {
+                        if (DEBUG_MODE) console.log(`🎯 Target of ~${TOTAL_RESULTS_TARGET} unique results likely reached. Stopping further searches.`);
+                        break;
+                    }
+
+                    const searchPromises = [];
+
+                    // CorsaroNero
+                    if (useCorsaroNero) {
+                        if (!skipLiveSearch) {
+                            searchPromises.push({
+                                name: 'CorsaroNero',
+                                promise: fetchCorsaroNeroData(query, searchType)
+                            });
+                        }
+                    }
+
+                    // Knaben (Always run if enabled, but skip Italian-specific keywords if needed)
+                    if (useKnaben) {
+                        // 🔥 MODIFIED: Use AIOStreams-style API with metadata when available
+                        // Build metadata object for Knaben API
+                        const knabenMetadata = {
+                            primaryTitle: mediaDetails.title,
+                            title: mediaDetails.title,
+                            titles: mediaDetails.titles || [mediaDetails.title],
+                            year: mediaDetails.year,
+                            imdbId: mediaDetails.imdbId,
+                            tmdbId: mediaDetails.tmdbId,
+                            absoluteEpisode: mediaDetails.absoluteEpisode,
+                        };
+
+                        // Build parsedId for Knaben
+                        const knabenParsedId = {
+                            mediaType: searchType,
+                            season: season,
+                            episode: episode,
+                        };
+
+                        searchPromises.push({
+                            name: 'Knaben',
+                            promise: fetchKnabenData(query, searchType, knabenMetadata, knabenParsedId)
+                        });
+                    }
+
+                    // TorrentGalaxy
+                    if (useTorrentGalaxy) {
+                        const tgxMetadata = {
+                            primaryTitle: cleanedItalianTitle || originalTitle || mediaDetails.title,
+                            title: originalTitle || mediaDetails.title,
+                            year: mediaDetails.year,
+                            titles: [cleanedItalianTitle, originalTitle, mediaDetails.title].filter(Boolean),
+                        };
+                        const tgxParsedId = {
+                            season: season ? parseInt(season, 10) : undefined,
+                            episode: episode ? parseInt(episode, 10) : undefined,
+                        };
+
+                        searchPromises.push({
+                            name: 'TorrentGalaxy',
+                            promise: fetchTorrentGalaxyData(query, searchType, tgxMetadata, tgxParsedId)
+                        });
+                    }
+
+                    // Jackettio
+                    if (jackettioInstance) {
+                        searchPromises.push({
+                            name: 'Jackettio',
+                            promise: fetchJackettioData(query, searchType, jackettioInstance)
+                        });
+                    }
+
+                    if (searchPromises.length === 0) {
+                        continue;
+                    }
+
+                    const results = await Promise.allSettled(searchPromises.map(sp => sp.promise));
+
+                    results.forEach((result, index) => {
+                        const sourceName = searchPromises[index].name;
+                        if (result.status === 'fulfilled' && result.value) {
+                            if (DEBUG_MODE) console.log(`✅ ${sourceName} returned ${result.value.length} results for query.`);
+                            if (rawResultsByProvider[sourceName]) {
+                                rawResultsByProvider[sourceName].push(...result.value);
+                            }
+
+                            // 🛑 Track results from Italian title queries for early exit
+                            const isItalianTitleQuery = cleanedItalianTitle &&
+                                query.toLowerCase().includes(cleanedItalianTitle);
+                            if (isItalianTitleQuery && result.value.length > 0) {
+                                foundWithItalianTitleQueries += result.value.length;
+                                if (DEBUG_MODE) console.log(`📊 [ITA TRACKING] Query "${query}" added ${result.value.length} results. Total ITA results: ${foundWithItalianTitleQueries}`);
+                            }
+                        } else if (result.status === 'rejected') {
+                            console.error(`❌ ${sourceName} search failed:`, result.reason);
+                        }
+                    });
+
+                    totalQueries++;
+                    if (totalQueries < finalSearchQueries.length) {
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                    }
                 }
             });
-        }
 
-        // 4️⃣ TASK: RARBG (skip in db_only mode)
-        if (config.use_rarbg !== false && !config.db_only) {
-            parallelSearchTasks.push(async () => {
-                // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
-                const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
-                if (DEBUG_MODE) console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
-                try {
-                    // Timeout 4500ms come richiesto
-                    // Build Stremio-format ID
+            // 3️⃣ TASK: External Addons (skip in db_only mode)
+            if (enabledExternalAddons.length > 0 && !config.db_only) {
+                parallelSearchTasks.push(async () => {
+                    if (DEBUG_MODE) console.log(`\n🔗 [External Addons] Fetching from ${enabledExternalAddons.join(', ')}...`);
+
+                    // Build Stremio-format ID for addon APIs
                     let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
                     if (type === 'series' && season && episode) {
                         stremioId = `${stremioId}:${season}:${episode}`;
                     }
 
-                    const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
-                    if (rarbgRes && rarbgRes.length > 0) {
-                        if (DEBUG_MODE) console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
-                        rawResultsByProvider.RARBG = rarbgRes.map(r => ({
-                            title: r.title,
-                            link: r.magnet,
-                            size: r.size,
-                            seeders: r.seeders,
-                            quality: r.quality,  // ✅ Add quality from RARBG
-                            source: "RARBG",
-                            infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
-                        }));
-                    }
-                } catch (e) {
-                    console.log(`❌ [RARBG] Error: ${e.message}`);
-                }
-            });
-        }
+                    try {
+                        const externalResults = await fetchExternalAddonsFlat(type, stremioId, { enabledAddons: enabledExternalAddons });
 
-        // 🚀 EXECUTE ALL TASKS PARALLELY
-        if (DEBUG_MODE) console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
-        await Promise.allSettled(parallelSearchTasks.map(task => task()));
-        if (DEBUG_MODE) console.log(`🏁 All parallel search tasks completed.`);
-
-        // Merge finale
-        const allRawResults = [
-            ...rawResultsByProvider.CorsaroNero,
-            ...rawResultsByProvider.Knaben,
-            ...rawResultsByProvider.TorrentGalaxy,
-            ...rawResultsByProvider.ExternalAddons,
-            ...rawResultsByProvider.RARBG,
-            ...rawResultsByProvider.UIndex,
-            ...rawResultsByProvider.Jackettio
-        ];
-
-        if (DEBUG_MODE) console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
-
-        // ✅ ADD DATABASE RESULTS TO RAW RESULTS (if any)
-        if (dbResults.length > 0) {
-            if (DEBUG_MODE) console.log(`💾 [DB] Adding ${dbResults.length} database results to aggregation...`);
-
-            // DEBUG: Log all unique hashes BEFORE filtering
-            const uniqueHashes = [...new Set(dbResults.map(r => r.info_hash))];
-            if (DEBUG_MODE) console.log(`💾 [DB] Found ${uniqueHashes.length} unique torrents from ${dbResults.length} total DB results`);
-            // uniqueHashes.forEach(hash => {
-            //     const torrents = dbResults.filter(r => r.info_hash === hash);
-            //     const firstTorrent = torrents[0];
-            //     const title = firstTorrent.torrent_title || firstTorrent.title;
-            //     console.log(`  - ${hash.substring(0, 8)}: "${title.substring(0, 60)}..." (appears ${torrents.length} times)`);
-            // });
-
-            // ✅ FILTER DB RESULTS for series by season/episode (like scraping results)
-            let filteredDbResults = dbResults;
-            if (type === 'series' && season && episode) {
-                const seasonNum = parseInt(season);
-                const episodeNum = parseInt(episode);
-
-                filteredDbResults = dbResults.filter(dbResult => {
-                    // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
-                    const torrentTitle = dbResult.torrent_title || dbResult.title;
-                    // TRUST ID MATCH: If torrent has correct IMDB ID, skip title check
-                    // This fixes issues where torrent title is in different language (e.g. "Il Trono di Spade" vs "Game of Thrones")
-                    const trustTitle = dbResult.imdb_id && dbResult.imdb_id === mediaDetails.imdbId;
-
-                    const match = isExactEpisodeMatch(
-                        torrentTitle,
-                        mediaDetails.titles || mediaDetails.title,
-                        seasonNum,
-                        episodeNum,
-                        !!kitsuId,  // isAnime flag
-                        mediaDetails.absoluteEpisode,  // absolute episode for Kitsu
-                        trustTitle // skipTitleCheck
-                    );
-
-                    // DEBUG: Log rejected torrents
-                    if (!match) {
-                        if (DEBUG_MODE) console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}"`);
-                    }
-
-                    return match;
-                });
-
-                if (DEBUG_MODE) console.log(`💾 [DB] Filtered to ${filteredDbResults.length}/${dbResults.length} torrents matching S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`);
-            }
-
-            // ✅ DEDUPLICATE by info_hash (prefer entries with file_index for episode files)
-            const deduplicatedMap = new Map();
-            for (const dbResult of filteredDbResults) {
-                const hash = dbResult.info_hash;
-                if (!deduplicatedMap.has(hash)) {
-                    deduplicatedMap.set(hash, dbResult);
-                } else {
-                    // ALWAYS prefer entry with file_index (from searchEpisodeFiles)
-                    const existing = deduplicatedMap.get(hash);
-                    const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
-                    const existingHasFileIndex = existing.file_index !== null && existing.file_index !== undefined;
-
-                    if (hasFileIndex && !existingHasFileIndex) {
-                        // New has file_index, existing doesn't → replace
-                        if (DEBUG_MODE) console.log(`💾 [DB Dedup] Replacing ${hash.substring(0, 8)} (no fileIndex) with version that has fileIndex=${dbResult.file_index}`);
-                        deduplicatedMap.set(hash, dbResult);
-                    } else if (hasFileIndex && existingHasFileIndex) {
-                        // Both have file_index → keep first one
-                        if (DEBUG_MODE) console.log(`💾 [DB Dedup] Keeping first ${hash.substring(0, 8)} fileIndex=${existing.file_index}, skipping duplicate with fileIndex=${dbResult.file_index}`);
-                    }
-                }
-            }
-            filteredDbResults = Array.from(deduplicatedMap.values());
-            if (DEBUG_MODE) console.log(`💾 [DB] Deduplicated to ${filteredDbResults.length} unique torrents`);
-
-            // ✅ PACK FILES VERIFICATION: Verify season packs contain the requested episode
-            // - Max 20 packs verified per search
-            // - 100ms delay between API calls to avoid 503
-            // - Skip packs already in DB (have file_index)
-            // - Order by size (largest first)
-            if (type === 'series' && season && episode && (config.rd_key || config.torbox_key)) {
-                const seasonNum = parseInt(season);
-                const episodeNum = parseInt(episode);
-                const seriesImdbId = mediaDetails.imdbId;
-                const MAX_PACK_VERIFY = 6;
-                const DELAY_MS = 200; // Balance between rate limiting and speed
-
-                // Separate verified (in DB) from unverified packs
-                const verifiedPacks = [];
-                const unverifiedPacks = [];
-                const nonPacks = [];
-
-                for (const dbResult of filteredDbResults) {
-                    const torrentTitle = dbResult.torrent_title || dbResult.title;
-                    const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
-                    const isPack = packFilesHandler.isSeasonPack(torrentTitle);
-
-                    if (!isPack) {
-                        nonPacks.push(dbResult);
-                    } else if (hasFileIndex) {
-                        // 🚨 SANITY CHECK: Verify that the "Verified" file matches the episode
-                        // This fixes "Poisoned" DB entries (e.g. Index 1 maps to E1, but file is actually E6)
-                        let isClean = false;
-                        if (DEBUG_MODE) console.log(`🔍 [SANITY] Checking Verified Pack: "${torrentTitle.substring(0, 30)}..." | File: "${dbResult.file_title}"`);
-                        const parsed = packFilesHandler.parseSeasonEpisode(dbResult.file_title, seasonNum);
-                        if (DEBUG_MODE) {
-                            if (parsed) console.log(`   -> Parsed: S${parsed.season}E${parsed.episode}`);
-                            else console.log(`   -> Parsed: NULL`);
-                        }
-
-                        if (parsed && parsed.episode === episodeNum) {
-                            isClean = true;
-                        }
-
-                        // Special Case: If file_title is undefined (DB corruption/partial save), force re-verify
-                        if (dbResult.file_title && isClean) {
-                            verifiedPacks.push(dbResult);
+                        if (externalResults.length > 0) {
+                            if (DEBUG_MODE) console.log(`✅ [External Addons] Received ${externalResults.length} total results`);
+                            rawResultsByProvider.ExternalAddons.push(...externalResults);
                         } else {
-                            console.warn(`⚠️ [PACK SANITY] Found suspicious 'verified' pack: "${torrentTitle.substring(0, 30)}..." (File: ${dbResult.file_title}). Forcing re-verification.`);
+                            if (DEBUG_MODE) console.log(`⚠️ [External Addons] No results received`);
+                        }
+                    } catch (externalError) {
+                        console.error(`❌ [External Addons] Error:`, externalError.message);
+                    }
+                });
+            }
+
+            // 4️⃣ TASK: RARBG (skip in db_only mode)
+            if (config.use_rarbg !== false && !config.db_only) {
+                parallelSearchTasks.push(async () => {
+                    // 🇮🇹 PRIORITY: Use Italian title if available, otherwise original name, then English title
+                    const rarbgQuery = italianTitle || mediaDetails.originalName || mediaDetails.title;
+                    if (DEBUG_MODE) console.log(`\n🏴 [RARBG] Searching for: ${rarbgQuery}...`);
+                    try {
+                        // Timeout 4500ms come richiesto
+                        // Build Stremio-format ID
+                        let stremioId = mediaDetails.imdbId || decodedId.split(':')[0];
+                        if (type === 'series' && season && episode) {
+                            stremioId = `${stremioId}:${season}:${episode}`;
+                        }
+
+                        const rarbgRes = await searchRARBG(rarbgQuery, mediaDetails.year, type, stremioId, { timeout: 4500, allowEng: true });
+                        if (rarbgRes && rarbgRes.length > 0) {
+                            if (DEBUG_MODE) console.log(`✅ [RARBG] Found ${rarbgRes.length} results`);
+                            rawResultsByProvider.RARBG = rarbgRes.map(r => ({
+                                title: r.title,
+                                link: r.magnet,
+                                size: r.size,
+                                seeders: r.seeders,
+                                quality: r.quality,  // ✅ Add quality from RARBG
+                                source: "RARBG",
+                                infoHash: r.magnet.match(/btih:([a-zA-Z0-9]{40})/i)?.[1]?.toLowerCase()
+                            }));
+                        }
+                    } catch (e) {
+                        console.log(`❌ [RARBG] Error: ${e.message}`);
+                    }
+                });
+            }
+
+            // 🚀 EXECUTE ALL TASKS PARALLELY
+            if (DEBUG_MODE) console.log(`🚀 Executing ${parallelSearchTasks.length} search tasks in parallel...`);
+            await Promise.allSettled(parallelSearchTasks.map(task => task()));
+            if (DEBUG_MODE) console.log(`🏁 All parallel search tasks completed.`);
+
+            // Merge finale
+            const allRawResults = [
+                ...rawResultsByProvider.CorsaroNero,
+                ...rawResultsByProvider.Knaben,
+                ...rawResultsByProvider.TorrentGalaxy,
+                ...rawResultsByProvider.ExternalAddons,
+                ...rawResultsByProvider.RARBG,
+                ...rawResultsByProvider.UIndex,
+                ...rawResultsByProvider.Jackettio
+            ];
+
+            if (DEBUG_MODE) console.log(`🔎 Found a total of ${allRawResults.length} raw results from all sources. Performing smart deduplication...`);
+
+            // ✅ ADD DATABASE RESULTS TO RAW RESULTS (if any)
+            if (dbResults.length > 0) {
+                if (DEBUG_MODE) console.log(`💾 [DB] Adding ${dbResults.length} database results to aggregation...`);
+
+                // DEBUG: Log all unique hashes BEFORE filtering
+                const uniqueHashes = [...new Set(dbResults.map(r => r.info_hash))];
+                if (DEBUG_MODE) console.log(`💾 [DB] Found ${uniqueHashes.length} unique torrents from ${dbResults.length} total DB results`);
+                // uniqueHashes.forEach(hash => {
+                //     const torrents = dbResults.filter(r => r.info_hash === hash);
+                //     const firstTorrent = torrents[0];
+                //     const title = firstTorrent.torrent_title || firstTorrent.title;
+                //     console.log(`  - ${hash.substring(0, 8)}: "${title.substring(0, 60)}..." (appears ${torrents.length} times)`);
+                // });
+
+                // ✅ FILTER DB RESULTS for series by season/episode (like scraping results)
+                let filteredDbResults = dbResults;
+                if (type === 'series' && season && episode) {
+                    const seasonNum = parseInt(season);
+                    const episodeNum = parseInt(episode);
+
+                    filteredDbResults = dbResults.filter(dbResult => {
+                        // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
+                        const torrentTitle = dbResult.torrent_title || dbResult.title;
+                        // TRUST ID MATCH: If torrent has correct IMDB ID, skip title check
+                        // This fixes issues where torrent title is in different language (e.g. "Il Trono di Spade" vs "Game of Thrones")
+                        const trustTitle = dbResult.imdb_id && dbResult.imdb_id === mediaDetails.imdbId;
+
+                        const match = isExactEpisodeMatch(
+                            torrentTitle,
+                            mediaDetails.titles || mediaDetails.title,
+                            seasonNum,
+                            episodeNum,
+                            !!kitsuId,  // isAnime flag
+                            mediaDetails.absoluteEpisode,  // absolute episode for Kitsu
+                            trustTitle // skipTitleCheck
+                        );
+
+                        // DEBUG: Log rejected torrents
+                        if (!match) {
+                            if (DEBUG_MODE) console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}"`);
+                        }
+
+                        return match;
+                    });
+
+                    if (DEBUG_MODE) console.log(`💾 [DB] Filtered to ${filteredDbResults.length}/${dbResults.length} torrents matching S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`);
+                }
+
+                // ✅ DEDUPLICATE by info_hash (prefer entries with file_index for episode files)
+                const deduplicatedMap = new Map();
+                for (const dbResult of filteredDbResults) {
+                    const hash = dbResult.info_hash;
+                    if (!deduplicatedMap.has(hash)) {
+                        deduplicatedMap.set(hash, dbResult);
+                    } else {
+                        // ALWAYS prefer entry with file_index (from searchEpisodeFiles)
+                        const existing = deduplicatedMap.get(hash);
+                        const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
+                        const existingHasFileIndex = existing.file_index !== null && existing.file_index !== undefined;
+
+                        if (hasFileIndex && !existingHasFileIndex) {
+                            // New has file_index, existing doesn't → replace
+                            if (DEBUG_MODE) console.log(`💾 [DB Dedup] Replacing ${hash.substring(0, 8)} (no fileIndex) with version that has fileIndex=${dbResult.file_index}`);
+                            deduplicatedMap.set(hash, dbResult);
+                        } else if (hasFileIndex && existingHasFileIndex) {
+                            // Both have file_index → keep first one
+                            if (DEBUG_MODE) console.log(`💾 [DB Dedup] Keeping first ${hash.substring(0, 8)} fileIndex=${existing.file_index}, skipping duplicate with fileIndex=${dbResult.file_index}`);
+                        }
+                    }
+                }
+                filteredDbResults = Array.from(deduplicatedMap.values());
+                if (DEBUG_MODE) console.log(`💾 [DB] Deduplicated to ${filteredDbResults.length} unique torrents`);
+
+                // ✅ PACK FILES VERIFICATION: Verify season packs contain the requested episode
+                // - Max 20 packs verified per search
+                // - 100ms delay between API calls to avoid 503
+                // - Skip packs already in DB (have file_index)
+                // - Order by size (largest first)
+                if (type === 'series' && season && episode && (config.rd_key || config.torbox_key)) {
+                    const seasonNum = parseInt(season);
+                    const episodeNum = parseInt(episode);
+                    const seriesImdbId = mediaDetails.imdbId;
+                    const MAX_PACK_VERIFY = 6;
+                    const DELAY_MS = 200; // Balance between rate limiting and speed
+
+                    // Separate verified (in DB) from unverified packs
+                    const verifiedPacks = [];
+                    const unverifiedPacks = [];
+                    const nonPacks = [];
+
+                    for (const dbResult of filteredDbResults) {
+                        const torrentTitle = dbResult.torrent_title || dbResult.title;
+                        const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
+                        const isPack = packFilesHandler.isSeasonPack(torrentTitle);
+
+                        if (!isPack) {
+                            nonPacks.push(dbResult);
+                        } else if (hasFileIndex) {
+                            // 🚨 SANITY CHECK: Verify that the "Verified" file matches the episode
+                            // This fixes "Poisoned" DB entries (e.g. Index 1 maps to E1, but file is actually E6)
+                            let isClean = false;
+                            if (DEBUG_MODE) console.log(`🔍 [SANITY] Checking Verified Pack: "${torrentTitle.substring(0, 30)}..." | File: "${dbResult.file_title}"`);
+                            const parsed = packFilesHandler.parseSeasonEpisode(dbResult.file_title, seasonNum);
+                            if (DEBUG_MODE) {
+                                if (parsed) console.log(`   -> Parsed: S${parsed.season}E${parsed.episode}`);
+                                else console.log(`   -> Parsed: NULL`);
+                            }
+
+                            if (parsed && parsed.episode === episodeNum) {
+                                isClean = true;
+                            }
+
+                            // Special Case: If file_title is undefined (DB corruption/partial save), force re-verify
+                            if (dbResult.file_title && isClean) {
+                                verifiedPacks.push(dbResult);
+                            } else {
+                                console.warn(`⚠️ [PACK SANITY] Found suspicious 'verified' pack: "${torrentTitle.substring(0, 30)}..." (File: ${dbResult.file_title}). Forcing re-verification.`);
+                                unverifiedPacks.push(dbResult);
+                            }
+                        } else {
                             unverifiedPacks.push(dbResult);
                         }
-                    } else {
-                        unverifiedPacks.push(dbResult);
                     }
-                }
 
-                // Sort unverified packs by size (largest first)
-                const torrentSize = (r) => r.torrent_size || r.size || 0;
-                unverifiedPacks.sort((a, b) => torrentSize(b) - torrentSize(a));
+                    // Sort unverified packs by size (largest first)
+                    const torrentSize = (r) => r.torrent_size || r.size || 0;
+                    unverifiedPacks.sort((a, b) => torrentSize(b) - torrentSize(a));
 
-                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+                    if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
 
-                // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
-                const needsExternalVerification = [];
-                const newlyVerified = [];
-                const excluded = [];
+                    // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
+                    const needsExternalVerification = [];
+                    const newlyVerified = [];
+                    const excluded = [];
 
-                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                // This ensures "Part 2" packs are excluded if we already know their content
-                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                    // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
+                    // This ensures "Part 2" packs are excluded if we already know their content
+                    if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
 
-                for (const dbResult of unverifiedPacks) {
-                    try {
-                        // Check if we have files for this pack in DB
-                        // We use the same helper that resolveSeriesPackFile uses
-                        const cachedFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
+                    for (const dbResult of unverifiedPacks) {
+                        try {
+                            // Check if we have files for this pack in DB
+                            // We use the same helper that resolveSeriesPackFile uses
+                            const cachedFiles = await dbHelper.getSeriesPackFiles(dbResult.info_hash);
 
-                        if (cachedFiles && cachedFiles.length > 0) {
-                            // ✅ CACHE HIT: Verify immediately (zero cost)
-                            // We call resolveSeriesPackFile which will use the cache we just found
+                            if (cachedFiles && cachedFiles.length > 0) {
+                                // ✅ CACHE HIT: Verify immediately (zero cost)
+                                // We call resolveSeriesPackFile which will use the cache we just found
+                                const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                                    dbResult.info_hash.toLowerCase(),
+                                    config,
+                                    seriesImdbId,
+                                    seasonNum,
+                                    episodeNum,
+                                    dbHelper
+                                );
+
+                                if (fileInfo) {
+                                    if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                    dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
+                                    dbResult.file_index = fileInfo.fileIndex;
+                                    dbResult.file_title = fileInfo.fileName;
+                                    dbResult.file_size = fileInfo.fileSize;
+                                    newlyVerified.push(dbResult);
+                                } else {
+                                    if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                    excluded.push(dbResult);
+                                }
+                            } else {
+                                // ❌ CACHE MISS: Needs external verification
+                                needsExternalVerification.push(dbResult);
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [PACK VERIFY] Cache check error: ${err.message}`);
+                            needsExternalVerification.push(dbResult); // Fallback to external
+                        }
+                    }
+
+                    // 2️⃣ SLOW PATH: External Verification (LIMITED)
+                    const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
+                    const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
+
+                    if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+
+                    for (let i = 0; i < toVerifyExternal.length; i++) {
+                        const dbResult = toVerifyExternal[i];
+                        const torrentTitle = dbResult.torrent_title || dbResult.title;
+
+                        // Delay for external calls
+                        if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+
+                        if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
+
+                        try {
                             const fileInfo = await packFilesHandler.resolveSeriesPackFile(
                                 dbResult.info_hash.toLowerCase(),
                                 config,
@@ -6648,690 +6742,694 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                                 dbResult.file_index = fileInfo.fileIndex;
                                 dbResult.file_title = fileInfo.fileName;
                                 dbResult.file_size = fileInfo.fileSize;
                                 newlyVerified.push(dbResult);
                             } else {
-                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
                                 excluded.push(dbResult);
                             }
-                        } else {
-                            // ❌ CACHE MISS: Needs external verification
-                            needsExternalVerification.push(dbResult);
-                        }
-                    } catch (err) {
-                        console.warn(`⚠️ [PACK VERIFY] Cache check error: ${err.message}`);
-                        needsExternalVerification.push(dbResult); // Fallback to external
-                    }
-                }
-
-                // 2️⃣ SLOW PATH: External Verification (LIMITED)
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
-                const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
-
-                if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const dbResult = toVerifyExternal[i];
-                    const torrentTitle = dbResult.torrent_title || dbResult.title;
-
-                    // Delay for external calls
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-
-                    if (DEBUG_MODE) console.log(`📦 [PACK VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${torrentTitle.substring(0, 50)}..."`);
-
-                    try {
-                        const fileInfo = await packFilesHandler.resolveSeriesPackFile(
-                            dbResult.info_hash.toLowerCase(),
-                            config,
-                            seriesImdbId,
-                            seasonNum,
-                            episodeNum,
-                            dbHelper
-                        );
-
-                        if (fileInfo) {
-                            if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
-                            dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
-                            dbResult.file_index = fileInfo.fileIndex;
-                            dbResult.file_title = fileInfo.fileName;
-                            dbResult.file_size = fileInfo.fileSize;
-                            newlyVerified.push(dbResult);
-                        } else {
-                            if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
-                            excluded.push(dbResult);
-                        }
-                    } catch (err) {
-                        // ✅ FIX: If rate limited (429), keep the pack instead of excluding
-                        if (err.message?.includes('RATE_LIMITED') || err.message?.includes('429')) {
-                            console.warn(`⚠️ [PACK VERIFY] Rate limited, KEEPING pack for later: ${err.message}`);
-                            newlyVerified.push(dbResult); // Keep it, resolve at playback time
-                        } else {
-                            console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - EXCLUDING pack to be safe`);
-                            // 🔥 STRICT MODE: If we can't verify it, we can't assume it has the episode.
-                            excluded.push(dbResult);
-                        }
-                    }
-                }
-
-                // 3️⃣ STRICT FILTERING: Exclude skipped packs!
-                if (skippedSize > 0) {
-                    if (DEBUG_MODE) console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
-                }
-
-                // Combine results: nonPacks + verifiedPacks + newlyVerified
-                // SKIPPED ARE EXCLUDED
-                filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
-            } // ✅ END PACK VERIFICATION BLOCK
-
-            // Convert filtered DB results to scraper format
-            for (const dbResult of filteredDbResults) {
-                // 🔥 FILTER: Respect user configuration for DB results
-                // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
-                const providerName = dbResult.provider || 'Database';
-
-                if (!config.db_only) {
-                    // Normal mode: respect individual provider toggles
-                    if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
-                        console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
-                    if (providerName === 'UIndex' && config.use_uindex === false) {
-                        console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
-                    if (providerName === 'Knaben' && config.use_knaben === false) {
-                        console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
-                        continue;
-                    }
-                }
-                // In db_only mode: show ALL providers without filtering
-
-                // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
-                const torrentTitle = dbResult.torrent_title || dbResult.title;
-                const torrentSize = dbResult.torrent_size || dbResult.size;
-
-                // 🔧 FIX [P2P Packs]: If file_index is missing (Pack Result), try to resolve it from DB files
-                let resolvedFileIndex = null;
-                let resolvedFileTitle = null;
-                let resolvedFileSize = null;
-
-                if ((dbResult.file_index === null || dbResult.file_index === undefined) && dbResult.provider === 'Database') {
-                    // Previously implemented fix logic was here, now reverted.
-                }
-
-                // Determine final values
-                let finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
-                // ✅ FIX: Use file_title directly if available, with file_path as fallback (searchPacksByImdbId returns file_path)
-                let finalFileTitle = resolvedFileTitle || dbResult.file_title || dbResult.file_path || undefined;
-                const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
-
-                // ✅ SANITY CHECK: Verify that file_title matches the requested episode!
-                // This catches corrupted DB entries where file_index=4 but imdb_episode=1
-                if (type === 'series' && season && episode && finalFileTitle && finalFileIndex !== undefined) {
-                    const episodeNum = parseInt(episode);
-                    const seasonNum = parseInt(season);
-                    const parsed = packFilesHandler.parseSeasonEpisode(finalFileTitle, seasonNum);
-                    
-                    if (parsed && parsed.episode !== episodeNum) {
-                        console.warn(`⚠️ [DB SANITY] Corrupted entry! file_title="${finalFileTitle}" parsed as E${parsed.episode} but expected E${episodeNum}. Discarding file_index=${finalFileIndex}`);
-                        finalFileIndex = undefined;
-                        finalFileTitle = undefined;
-                        // Keep the torrent but without the wrong file mapping
-                    }
-                }
-
-                // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
-                const displaySize = finalFileSize;
-
-                // Only use file_title if we resolved it OR it came from searchEpisodeFiles
-                const fileName = finalFileTitle || undefined;
-
-                // Build magnet link
-                const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
-
-                // DEBUG: Log what we're adding
-                if (DEBUG_MODE) console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${finalFileSize ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
-
-                // Add to raw results with high priority
-                allRawResults.push({
-                    title: torrentTitle,
-                    infoHash: dbResult.info_hash.toUpperCase(),
-                    magnetLink: magnetLink,
-                    seeders: dbResult.seeders || 0,
-                    leechers: 0,
-                    size: displaySize ? formatBytes(displaySize) : 'Unknown',
-                    sizeInBytes: displaySize || 0,
-                    // ✅ Pack size for pack/episode display
-                    packSize: dbResult.packSize || torrentSize || 0,
-                    file_size: finalFileSize || 0,
-                    quality: extractQuality(torrentTitle),
-                    filename: fileName || torrentTitle,
-                    source: `💾 ${dbResult.provider || 'Database'}`,
-                    fileIndex: finalFileIndex, // For series episodes and pack movies
-                    file_title: fileName // Real filename from DB (only for specific episode)
-                });
-
-                // DEBUG: Log file info from DB
-                if (DEBUG_MODE && finalFileIndex !== undefined && finalFileIndex !== null) {
-                    console.log(`   📁 Has file: fileIndex=${finalFileIndex}, file_title=${fileName}`);
-                }
-            }
-
-            if (DEBUG_MODE) console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
-        }
-
-
-        // 🎯 Helper: Calculate similarity between two strings (0-1)
-        // Uses multiple strategies: Levenshtein, word overlap, containment
-        const calculateSimilarity = (str1, str2) => {
-            if (!str1 || !str2) return 0;
-            if (str1 === str2) return 1;
-
-            const s1 = str1.toLowerCase();
-            const s2 = str2.toLowerCase();
-
-            // Strategy 1: If one contains the other, high similarity
-            if (s1.includes(s2) || s2.includes(s1)) {
-                const minLen = Math.min(s1.length, s2.length);
-                const maxLen = Math.max(s1.length, s2.length);
-                return Math.max(0.8, minLen / maxLen); // At least 80%
-            }
-
-            // Strategy 2: Word overlap (handles different word order)
-            // "Medical Division Dr House" vs "Dr House Medical Division" should match!
-            const words1 = s1.split(/\s+/).filter(w => w.length > 1); // Ignore single chars
-            const words2 = s2.split(/\s+/).filter(w => w.length > 1);
-
-            if (words1.length > 0 && words2.length > 0) {
-                let matchedWords = 0;
-                const usedIndices = new Set();
-
-                for (const w1 of words1) {
-                    for (let i = 0; i < words2.length; i++) {
-                        if (usedIndices.has(i)) continue;
-                        const w2 = words2[i];
-                        // Exact match or very similar (typo tolerance)
-                        if (w1 === w2 || (w1.length > 3 && w2.length > 3 && (w1.includes(w2) || w2.includes(w1)))) {
-                            matchedWords++;
-                            usedIndices.add(i);
-                            break;
-                        }
-                    }
-                }
-
-                const maxWords = Math.max(words1.length, words2.length);
-                const wordOverlap = matchedWords / maxWords;
-
-                // If most words match, it's a good match even if order is different
-                if (wordOverlap >= 0.6) {
-                    return Math.max(0.75, wordOverlap); // At least 75% if 60%+ words match
-                }
-            }
-
-            // Strategy 3: Levenshtein distance (fallback)
-            const matrix = [];
-            for (let i = 0; i <= s1.length; i++) {
-                matrix[i] = [i];
-            }
-            for (let j = 0; j <= s2.length; j++) {
-                matrix[0][j] = j;
-            }
-            for (let i = 1; i <= s1.length; i++) {
-                for (let j = 1; j <= s2.length; j++) {
-                    const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-                    matrix[i][j] = Math.min(
-                        matrix[i - 1][j] + 1,      // deletion
-                        matrix[i][j - 1] + 1,      // insertion
-                        matrix[i - 1][j - 1] + cost // substitution
-                    );
-                }
-            }
-
-            const distance = matrix[s1.length][s2.length];
-            const maxLen = Math.max(s1.length, s2.length);
-            return 1 - (distance / maxLen);
-        };
-
-        // 🎯 Helper function to check if a title matches the requested episode
-        // Returns true if: season pack complete, exact episode, or range that includes the episode
-        // Also validates that the series name matches the expected titles (75% fuzzy match)
-        const matchesRequestedEpisode = (title, requestedSeason, requestedEpisode, expectedTitles = []) => {
-            if (!title || !requestedSeason || !requestedEpisode) return true; // No filter for movies
-
-            const seasonNum = parseInt(requestedSeason);
-            const episodeNum = parseInt(requestedEpisode);
-            const titleLower = title.toLowerCase();
-
-            const SIMILARITY_THRESHOLD = 0.75; // 75% match required
-
-            // 🚨 NEW: Validate series name matches expected titles (fuzzy 75% match)
-            // This prevents "Chico and the Man S01E06 E Pluribus Used Car" from matching "Pluribus"
-            if (expectedTitles && expectedTitles.length > 0) {
-                // Extract the series name from the torrent title (everything before S01E06 or 1x06)
-                // Added: S01-08 (season range), Stagioni (plural), ep01-22
-                const seriesNameMatch = title.match(/^(.+?)(?:\s*[.-]?\s*)?(?:[Ss]\d+[Ee]\d+|[Ss]\d+[-–]\d+|\d+x\d+|[Ss]tagion[ei]|[Ss]eason|[Ee]p?\d+|\[COMPLETA\]|Complete)/i);
-
-                if (seriesNameMatch) {
-                    const torrentSeriesName = seriesNameMatch[1].trim().toLowerCase()
-                        .replace(/[.\-_]/g, ' ')  // Replace separators with spaces
-                        .replace(/\s+/g, ' ')      // Normalize spaces
-                        .replace(/\(\d{4}\)$/, '') // Remove year at end
-                        .trim();
-
-                    // Check if any expected title matches with 75% similarity
-                    let bestMatch = { title: '', similarity: 0 };
-
-                    const matchesExpectedTitle = expectedTitles.some(expectedTitle => {
-                        const cleanExpected = expectedTitle.toLowerCase()
-                            .replace(/[.\-_]/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-
-                        // Calculate similarity
-                        const similarity = calculateSimilarity(torrentSeriesName, cleanExpected);
-
-                        if (similarity > bestMatch.similarity) {
-                            bestMatch = { title: cleanExpected, similarity };
-                        }
-
-                        // Also check if one starts with the other (common case)
-                        // "Pluribus 2025" should match "Pluribus"
-                        if (torrentSeriesName.startsWith(cleanExpected) || cleanExpected.startsWith(torrentSeriesName)) {
-                            const minLen = Math.min(torrentSeriesName.length, cleanExpected.length);
-                            const maxLen = Math.max(torrentSeriesName.length, cleanExpected.length);
-                            const startSimilarity = minLen / maxLen;
-                            if (startSimilarity >= SIMILARITY_THRESHOLD) {
-                                bestMatch = { title: cleanExpected, similarity: Math.max(similarity, startSimilarity) };
-                                return true;
+                        } catch (err) {
+                            // ✅ FIX: If rate limited (429), keep the pack instead of excluding
+                            if (err.message?.includes('RATE_LIMITED') || err.message?.includes('429')) {
+                                console.warn(`⚠️ [PACK VERIFY] Rate limited, KEEPING pack for later: ${err.message}`);
+                                newlyVerified.push(dbResult); // Keep it, resolve at playback time
+                            } else {
+                                console.warn(`⚠️ [PACK VERIFY] External error: ${err.message} - EXCLUDING pack to be safe`);
+                                // 🔥 STRICT MODE: If we can't verify it, we can't assume it has the episode.
+                                excluded.push(dbResult);
                             }
                         }
+                    }
 
-                        return similarity >= SIMILARITY_THRESHOLD;
+                    // 3️⃣ STRICT FILTERING: Exclude skipped packs!
+                    if (skippedSize > 0) {
+                        if (DEBUG_MODE) console.log(`🚫 [PACK VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    }
+
+                    // Combine results: nonPacks + verifiedPacks + newlyVerified
+                    // SKIPPED ARE EXCLUDED
+                    filteredDbResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
+                } // ✅ END PACK VERIFICATION BLOCK
+
+                // Convert filtered DB results to scraper format
+                for (const dbResult of filteredDbResults) {
+                    // 🔥 FILTER: Respect user configuration for DB results
+                    // ✅ EXCEPTION: In db_only mode, show ALL providers from DB
+                    const providerName = dbResult.provider || 'Database';
+
+                    if (!config.db_only) {
+                        // Normal mode: respect individual provider toggles
+                        if (providerName === 'CorsaroNero' && config.use_corsaronero === false) {
+                            console.log(`⏭️  [DB] Skipping CorsaroNero result (disabled in config): ${dbResult.title}`);
+                            continue;
+                        }
+                        if (providerName === 'UIndex' && config.use_uindex === false) {
+                            console.log(`⏭️  [DB] Skipping UIndex result (disabled in config): ${dbResult.title}`);
+                            continue;
+                        }
+                        if (providerName === 'Knaben' && config.use_knaben === false) {
+                            console.log(`⏭️  [DB] Skipping Knaben result (disabled in config): ${dbResult.title}`);
+                            continue;
+                        }
+                    }
+                    // In db_only mode: show ALL providers without filtering
+
+                    // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
+                    const torrentTitle = dbResult.torrent_title || dbResult.title;
+                    const torrentSize = dbResult.torrent_size || dbResult.size;
+
+                    // 🔧 FIX [P2P Packs]: If file_index is missing (Pack Result), try to resolve it from DB files
+                    let resolvedFileIndex = null;
+                    let resolvedFileTitle = null;
+                    let resolvedFileSize = null;
+
+                    if ((dbResult.file_index === null || dbResult.file_index === undefined) && dbResult.provider === 'Database') {
+                        // Previously implemented fix logic was here, now reverted.
+                    }
+
+                    // Determine final values
+                    let finalFileIndex = resolvedFileIndex !== null ? resolvedFileIndex : (dbResult.file_index !== null && dbResult.file_index !== undefined ? dbResult.file_index : undefined);
+                    // ✅ FIX: Use file_title directly if available, with file_path as fallback (searchPacksByImdbId returns file_path)
+                    let finalFileTitle = resolvedFileTitle || dbResult.file_title || dbResult.file_path || undefined;
+                    const finalFileSize = resolvedFileSize || dbResult.file_size || torrentSize;
+
+                    // ✅ SANITY CHECK: Verify that file_title matches the requested episode!
+                    // This catches corrupted DB entries where file_index=4 but imdb_episode=1
+                    if (type === 'series' && season && episode && finalFileTitle && finalFileIndex !== undefined) {
+                        const episodeNum = parseInt(episode);
+                        const seasonNum = parseInt(season);
+                        const parsed = packFilesHandler.parseSeasonEpisode(finalFileTitle, seasonNum);
+
+                        if (parsed && parsed.episode !== episodeNum) {
+                            console.warn(`⚠️ [DB SANITY] Corrupted entry! file_title="${finalFileTitle}" parsed as E${parsed.episode} but expected E${episodeNum}. Discarding file_index=${finalFileIndex}`);
+                            finalFileIndex = undefined;
+                            finalFileTitle = undefined;
+                            // Keep the torrent but without the wrong file mapping
+                        }
+                    }
+
+                    // ✅ Use file_size (single episode) if available, otherwise fallback to torrent_size (pack)
+                    const displaySize = finalFileSize;
+
+                    // Only use file_title if we resolved it OR it came from searchEpisodeFiles
+                    const fileName = finalFileTitle || undefined;
+
+                    // Build magnet link
+                    const magnetLink = `magnet:?xt=urn:btih:${dbResult.info_hash}&dn=${encodeURIComponent(torrentTitle)}`;
+
+                    // DEBUG: Log what we're adding
+                    if (DEBUG_MODE) console.log(`🔍 [DB ADD] Adding: hash=${dbResult.info_hash.substring(0, 8)}, title="${torrentTitle.substring(0, 50)}...", size=${formatBytes(displaySize || 0)}${finalFileSize ? ' (episode)' : ' (pack)'}, seeders=${dbResult.seeders || 0}`);
+
+                    // Add to raw results with high priority
+                    allRawResults.push({
+                        title: torrentTitle,
+                        infoHash: dbResult.info_hash.toUpperCase(),
+                        magnetLink: magnetLink,
+                        seeders: dbResult.seeders || 0,
+                        leechers: 0,
+                        size: displaySize ? formatBytes(displaySize) : 'Unknown',
+                        sizeInBytes: displaySize || 0,
+                        // ✅ Pack size for pack/episode display
+                        packSize: dbResult.packSize || torrentSize || 0,
+                        file_size: finalFileSize || 0,
+                        quality: extractQuality(torrentTitle),
+                        filename: fileName || torrentTitle,
+                        source: `💾 ${dbResult.provider || 'Database'}`,
+                        fileIndex: finalFileIndex, // For series episodes and pack movies
+                        file_title: fileName // Real filename from DB (only for specific episode)
                     });
 
-                    if (!matchesExpectedTitle) {
-                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
-                        return false;
-                    } else {
-                        if (DEBUG_MODE) console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
+                    // DEBUG: Log file info from DB
+                    if (DEBUG_MODE && finalFileIndex !== undefined && finalFileIndex !== null) {
+                        console.log(`   📁 Has file: fileIndex=${finalFileIndex}, file_title=${fileName}`);
                     }
                 }
+
+                if (DEBUG_MODE) console.log(`💾 [DB] Total raw results after DB merge: ${allRawResults.length}`);
             }
 
-            // 1. Check if it's a COMPLETE SEASON PACK (no specific episodes)
-            // Patterns: "S01" alone, "Stagione 1", "Season 1", "[COMPLETA]", "Complete"
-            // IMPORTANT: S01.E01.E02 or S01.E01-02 are NOT season packs, they are episode packs!
 
-            const isCompletePack = /\[COMPLETA\]|Complete\s*Series|Complete\s*Season|Serie\s*Completa|Stagione\s*Completa/i.test(title);
+            // 🎯 Helper: Calculate similarity between two strings (0-1)
+            // Uses multiple strategies: Levenshtein, word overlap, containment
+            const calculateSimilarity = (str1, str2) => {
+                if (!str1 || !str2) return 0;
+                if (str1 === str2) return 1;
 
-            // Check for episode indicators that mean it's NOT a complete season
-            // S01E01, S01.E01, S01 E01, S01-E01, 1x01, etc.
-            const hasEpisodeIndicator = /[Ss]\d+[.\s-]*[Ee]\d+|[Ss]\d+[Ee]\d+|\d+x\d+/i.test(title);
-            // Episode range like E01-E10, E01-10
-            const hasEpisodeRange = /[Ee](p)?\.?\s*\d+\s*[-–]\s*(E(p)?\.?\s*)?\d+/i.test(title);
-            // Multi-episode list like .E01.E02 or .01.02 after season
-            const hasMultiEpisodeList = /[Ss]\d+[.\s][Ee]?\d+[.\s][Ee]?\d+/i.test(title);
+                const s1 = str1.toLowerCase();
+                const s2 = str2.toLowerCase();
 
-            // It's a season pack only if it has season number but NO episode indicators
-            const hasSeasonOnly = !hasEpisodeIndicator && !hasEpisodeRange && !hasMultiEpisodeList && (
-                // S01 or S1 pattern
-                new RegExp(`[Ss](0?${seasonNum})(?![0-9])`, 'i').test(title) ||
-                // "Stagione X" or "Season X" pattern
-                new RegExp(`(stagione|season)\\s*${seasonNum}(?![0-9])`, 'i').test(title)
-            );
-
-            if (isCompletePack || hasSeasonOnly) {
-                // Verify it's the right season
-                const seasonMatch = title.match(/[Ss](0?\d+)|[Ss]tagione?\s*(\d+)|[Ss]eason\s*(\d+)/i);
-                if (seasonMatch) {
-                    const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
-                    if (foundSeason === seasonNum) {
-                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
-                        return true;
-                    }
+                // Strategy 1: If one contains the other, high similarity
+                if (s1.includes(s2) || s2.includes(s1)) {
+                    const minLen = Math.min(s1.length, s2.length);
+                    const maxLen = Math.max(s1.length, s2.length);
+                    return Math.max(0.8, minLen / maxLen); // At least 80%
                 }
-                // Complete series pack
-                if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
-                    if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
-                    return true;
-                }
-            }
 
-            // 2. Check for EXACT EPISODE match
-            const exactPatterns = [
-                new RegExp(`[Ss](0?${seasonNum})[Ee](0?${episodeNum})(?![0-9])`, 'i'),  // S01E06
-                new RegExp(`${seasonNum}x(0?${episodeNum})(?![0-9])`, 'i'),              // 1x06
-                new RegExp(`[Ss](0?${seasonNum})\\s*[Ee](0?${episodeNum})(?![0-9])`, 'i'), // S01 E06
-            ];
+                // Strategy 2: Word overlap (handles different word order)
+                // "Medical Division Dr House" vs "Dr House Medical Division" should match!
+                const words1 = s1.split(/\s+/).filter(w => w.length > 1); // Ignore single chars
+                const words2 = s2.split(/\s+/).filter(w => w.length > 1);
 
-            if (exactPatterns.some(p => p.test(title))) {
-                if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
-                return true;
-            }
+                if (words1.length > 0 && words2.length > 0) {
+                    let matchedWords = 0;
+                    const usedIndices = new Set();
 
-            // 3. Check for EPISODE RANGE that includes the requested episode
-            // Patterns: S01E01-E10, S01E01-10, E01-E10, S01E01.E02.E03
-            const rangePatterns = [
-                // S01E01-E10 or S01E01-10
-                /[Ss](0?\d+)[Ee](0?\d+)[-–](E)?(0?\d+)/i,
-                // E01-E10 or E01-10 (without season, assume current)
-                /[Ee](0?\d+)[-–](E)?(0?\d+)/i,
-                // 1x01-1x10 or 1x01-10
-                /(\d+)x(0?\d+)[-–](\d+x)?(0?\d+)/i,
-            ];
-
-            for (const pattern of rangePatterns) {
-                const match = title.match(pattern);
-                if (match) {
-                    let startEp, endEp, matchedSeason;
-
-                    if (pattern.source.includes('[Ss]')) {
-                        // S01E01-E10 format
-                        matchedSeason = parseInt(match[1]);
-                        startEp = parseInt(match[2]);
-                        endEp = parseInt(match[4] || match[3]);
-                    } else if (pattern.source.includes('x')) {
-                        // 1x01-10 format
-                        matchedSeason = parseInt(match[1]);
-                        startEp = parseInt(match[2]);
-                        endEp = parseInt(match[4]);
-                    } else {
-                        // E01-E10 format (no season in pattern, check separately)
-                        const seasonCheck = title.match(/[Ss](0?\d+)/i);
-                        matchedSeason = seasonCheck ? parseInt(seasonCheck[1]) : seasonNum;
-                        startEp = parseInt(match[1]);
-                        endEp = parseInt(match[3] || match[2]);
+                    for (const w1 of words1) {
+                        for (let i = 0; i < words2.length; i++) {
+                            if (usedIndices.has(i)) continue;
+                            const w2 = words2[i];
+                            // Exact match or very similar (typo tolerance)
+                            if (w1 === w2 || (w1.length > 3 && w2.length > 3 && (w1.includes(w2) || w2.includes(w1)))) {
+                                matchedWords++;
+                                usedIndices.add(i);
+                                break;
+                            }
+                        }
                     }
 
-                    if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
-                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
-                        return true;
-                    } else if (matchedSeason === seasonNum) {
-                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
-                        return false;
+                    const maxWords = Math.max(words1.length, words2.length);
+                    const wordOverlap = matchedWords / maxWords;
+
+                    // If most words match, it's a good match even if order is different
+                    if (wordOverlap >= 0.6) {
+                        return Math.max(0.75, wordOverlap); // At least 75% if 60%+ words match
                     }
                 }
-            }
 
-            // 4. Check for MULTI-EPISODE list (S01E01.E02.E03 or S01 E01 E02 E03)
-            const multiEpMatch = title.match(/[Ss](0?\d+)[.\s]*([Ee]\d+[.\s]*)+/i);
-            if (multiEpMatch) {
-                const matchedSeason = parseInt(multiEpMatch[1]);
-                if (matchedSeason === seasonNum) {
-                    // Extract all episode numbers
-                    const episodes = title.match(/[Ee](0?\d+)/gi);
-                    if (episodes) {
-                        const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
-                        if (epNumbers.includes(episodeNum)) {
-                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
-                            return true;
+                // Strategy 3: Levenshtein distance (fallback)
+                const matrix = [];
+                for (let i = 0; i <= s1.length; i++) {
+                    matrix[i] = [i];
+                }
+                for (let j = 0; j <= s2.length; j++) {
+                    matrix[0][j] = j;
+                }
+                for (let i = 1; i <= s1.length; i++) {
+                    for (let j = 1; j <= s2.length; j++) {
+                        const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+                        matrix[i][j] = Math.min(
+                            matrix[i - 1][j] + 1,      // deletion
+                            matrix[i][j - 1] + 1,      // insertion
+                            matrix[i - 1][j - 1] + cost // substitution
+                        );
+                    }
+                }
+
+                const distance = matrix[s1.length][s2.length];
+                const maxLen = Math.max(s1.length, s2.length);
+                return 1 - (distance / maxLen);
+            };
+
+            // 🎯 Helper function to check if a title matches the requested episode
+            // Returns true if: season pack complete, exact episode, or range that includes the episode
+            // Also validates that the series name matches the expected titles (75% fuzzy match)
+            const matchesRequestedEpisode = (title, requestedSeason, requestedEpisode, expectedTitles = []) => {
+                if (!title || !requestedSeason || !requestedEpisode) return true; // No filter for movies
+
+                const seasonNum = parseInt(requestedSeason);
+                const episodeNum = parseInt(requestedEpisode);
+                const titleLower = title.toLowerCase();
+
+                const SIMILARITY_THRESHOLD = 0.75; // 75% match required
+
+                // 🚨 NEW: Validate series name matches expected titles (fuzzy 75% match)
+                // This prevents "Chico and the Man S01E06 E Pluribus Used Car" from matching "Pluribus"
+                if (expectedTitles && expectedTitles.length > 0) {
+                    // Extract the series name from the torrent title (everything before S01E06 or 1x06)
+                    // Added: S01-08 (season range), Stagioni (plural), ep01-22
+                    const seriesNameMatch = title.match(/^(.+?)(?:\s*[.-]?\s*)?(?:[Ss]\d+[Ee]\d+|[Ss]\d+[-–]\d+|\d+x\d+|[Ss]tagion[ei]|[Ss]eason|[Ee]p?\d+|\[COMPLETA\]|Complete)/i);
+
+                    if (seriesNameMatch) {
+                        const torrentSeriesName = seriesNameMatch[1].trim().toLowerCase()
+                            .replace(/[.\-_]/g, ' ')  // Replace separators with spaces
+                            .replace(/\s+/g, ' ')      // Normalize spaces
+                            .replace(/\(\d{4}\)$/, '') // Remove year at end
+                            .trim();
+
+                        // Check if any expected title matches with 75% similarity
+                        let bestMatch = { title: '', similarity: 0 };
+
+                        const matchesExpectedTitle = expectedTitles.some(expectedTitle => {
+                            const cleanExpected = expectedTitle.toLowerCase()
+                                .replace(/[.\-_]/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+
+                            // Calculate similarity
+                            const similarity = calculateSimilarity(torrentSeriesName, cleanExpected);
+
+                            if (similarity > bestMatch.similarity) {
+                                bestMatch = { title: cleanExpected, similarity };
+                            }
+
+                            // Also check if one starts with the other (common case)
+                            // "Pluribus 2025" should match "Pluribus"
+                            if (torrentSeriesName.startsWith(cleanExpected) || cleanExpected.startsWith(torrentSeriesName)) {
+                                const minLen = Math.min(torrentSeriesName.length, cleanExpected.length);
+                                const maxLen = Math.max(torrentSeriesName.length, cleanExpected.length);
+                                const startSimilarity = minLen / maxLen;
+                                if (startSimilarity >= SIMILARITY_THRESHOLD) {
+                                    bestMatch = { title: cleanExpected, similarity: Math.max(similarity, startSimilarity) };
+                                    return true;
+                                }
+                            }
+
+                            return similarity >= SIMILARITY_THRESHOLD;
+                        });
+
+                        if (!matchesExpectedTitle) {
+                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Series name mismatch: "${torrentSeriesName}" vs expected [${expectedTitles.join(', ')}] (best: ${(bestMatch.similarity * 100).toFixed(0)}% < 75%): "${title.substring(0, 70)}..."`);
+                            return false;
                         } else {
-                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
-                            return false;
-                        }
-                    }
-                }
-            }
-
-            // 5. If we found a specific episode that doesn't match, reject it
-            // Check S01E01 format
-            const singleEpMatch = title.match(/[Ss](0?\d+)[Ee](0?\d+)/i);
-            if (singleEpMatch) {
-                const matchedSeason = parseInt(singleEpMatch[1]);
-                const matchedEpisode = parseInt(singleEpMatch[2]);
-                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
-                    return false;
-                }
-            }
-
-            // 5b. Check NxNN format (1x03, 2x15, etc.) - same as S01E03
-            const nxnMatch = title.match(/(\d+)x(0?\d+)(?![0-9\-])/i);
-            if (nxnMatch) {
-                const matchedSeason = parseInt(nxnMatch[1]);
-                const matchedEpisode = parseInt(nxnMatch[2]);
-                if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
-                    if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
-                    return false;
-                }
-            }
-
-            // 6. Default: accept (might be a movie or unrecognized format)
-            return true;
-        };
-
-        // Smart Deduplication
-        const bestResults = new Map();
-        for (const result of allRawResults) {
-            if (!result.infoHash) continue;
-
-            // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
-            if (type === 'series' && season && episode) {
-                // Pass expected titles to also validate series name
-                const expectedTitles = mediaDetails.titles || [mediaDetails.title];
-                if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
-                    continue; // Skip this result
-                }
-            }
-
-            const hash = result.infoHash;
-            const newLangInfo = getLanguageInfo(result.title, italianTitle, result.source);
-
-            if (!bestResults.has(hash)) {
-                bestResults.set(hash, result);
-                if (DEBUG_MODE) console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
-            } else {
-                const existing = bestResults.get(hash);
-                if (DEBUG_MODE) console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
-                if (DEBUG_MODE) console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
-                if (DEBUG_MODE) console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
-                const existingLangInfo = getLanguageInfo(existing.title, italianTitle, existing.source);
-
-                let isNewBetter = false;
-                // An Italian version is always better than a non-Italian one.
-                if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
-                    isNewBetter = true;
-                } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
-                    // Helper to check source type (handles "💾 CorsaroNero" etc.)
-                    const isJackettio = (src) => src && (src === 'Jackettio' || src.includes('Jackettio'));
-                    const isCorsaro = (src) => src && (src === 'CorsaroNero' || src.includes('CorsaroNero'));
-
-                    // If language is the same, prefer Jackettio (private instance)
-                    if (isJackettio(result.source) && !isJackettio(existing.source)) {
-                        isNewBetter = true;
-                    } else if (isJackettio(existing.source) && !isJackettio(result.source)) {
-                        isNewBetter = false; // Keep Jackettio
-                    } else if (isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(existing.source)) {
-                        isNewBetter = true;
-                    } else if (result.source === existing.source || (!isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(result.source) && !isJackettio(existing.source))) {
-                        // If source is also the same, or neither is the preferred one, prefer more seeders
-                        if ((result.seeders || 0) > (existing.seeders || 0)) {
-                            isNewBetter = true;
+                            if (DEBUG_MODE) console.log(`✅ [SERIES MATCH] "${torrentSeriesName}" matches "${bestMatch.title}" (${(bestMatch.similarity * 100).toFixed(0)}%)`);
                         }
                     }
                 }
 
-                if (isNewBetter) {
-                    if (DEBUG_MODE) console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
-                    // Preserve file_title from existing if new doesn't have it
-                    if (!result.file_title && existing.file_title) {
-                        result.file_title = existing.file_title;
-                        result.fileIndex = existing.fileIndex;
-                        if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
-                    }
-                    bestResults.set(hash, result);
-                } else {
-                    if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
-                    // Preserve file_title from new if existing doesn't have it
-                    if (!existing.file_title && result.file_title) {
-                        existing.file_title = result.file_title;
-                        existing.fileIndex = result.fileIndex;
-                        bestResults.set(hash, existing); // Update map with modified object
-                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
-                    }
-                }
-            }
-        }
+                // 1. Check if it's a COMPLETE SEASON PACK (no specific episodes)
+                // Patterns: "S01" alone, "Stagione 1", "Season 1", "[COMPLETA]", "Complete"
+                // IMPORTANT: S01.E01.E02 or S01.E01-02 are NOT season packs, they are episode packs!
 
-        let results = Array.from(bestResults.values());
-        if (DEBUG_MODE) console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
-        // --- FINE NUOVA LOGICA ---
+                const isCompletePack = /\[COMPLETA\]|Complete\s*Series|Complete\s*Season|Serie\s*Completa|Stagione\s*Completa/i.test(title);
 
-        // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
-        // ✅ STRICT ITALIAN FILTER: Only save Italian/Multi torrents to DB
-        if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
-            try {
-                const torrentsToSave = results
-                    .filter(r => {
-                        if (!r.infoHash) return false;
+                // Check for episode indicators that mean it's NOT a complete season
+                // S01E01, S01.E01, S01 E01, S01-E01, 1x01, etc.
+                const hasEpisodeIndicator = /[Ss]\d+[.\s-]*[Ee]\d+|[Ss]\d+[Ee]\d+|\d+x\d+/i.test(title);
+                // Episode range like E01-E10, E01-10
+                const hasEpisodeRange = /[Ee](p)?\.?\s*\d+\s*[-–]\s*(E(p)?\.?\s*)?\d+/i.test(title);
+                // Multi-episode list like .E01.E02 or .01.02 after season
+                const hasMultiEpisodeList = /[Ss]\d+[.\s][Ee]?\d+[.\s][Ee]?\d+/i.test(title);
 
-                        // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
-                        const title = r.title || r.websiteTitle || '';
-                        const langInfo = getLanguageInfo(title);
-                        const isItalian = langInfo.isItalian;
-
-                        // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
-                        // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
-                        // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
-                        const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
-                        const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
-                            (mainAddon && /^torrentio$/i.test(mainAddon));
-
-                        if (!isItalian && !isTrustedProvider) {
-                            if (DEBUG_MODE) console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
-                            return false;
-                        }
-                        return true;
-                    })
-                    .map(r => ({
-                        info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
-                        title: r.title || r.websiteTitle || 'Unknown',
-                        provider: r.source || r.externalAddon || 'unknown',
-                        size: r.sizeInBytes || null,
-                        type: type,
-                        seeders: r.seeders || 0,
-                        imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
-                        tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
-                        upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
-                        cached_rd: r.cached || false // Save cached status if available
-                    }));
-
-                if (torrentsToSave.length > 0) {
-                    // 🚀 Fire-and-forget: Save to DB in background without blocking response
-                    dbHelper.batchInsertTorrents(torrentsToSave)
-                        .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
-                        .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
-                } else {
-                    if (DEBUG_MODE) console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
-                }
-            } catch (dbSaveError) {
-                console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
-            }
-        }
-
-        if (!results || results.length === 0) {
-            if (DEBUG_MODE) console.log('❌ No results found from any source after all fallbacks');
-            return { streams: [] };
-        }
-
-        if (DEBUG_MODE) console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
-
-        // ✅ Apply exact matching filters (use existing variable from outer scope)
-        filteredResults = results;
-
-        // ⚠️ FULL ITA FILTER MOVED: Applied AFTER cache block (so cache contains ALL results)
-
-        if (type === 'series') {
-            const originalCount = filteredResults.length;
-            const displayEpisode = kitsuId && mediaDetails.absoluteEpisode
-                ? `absolute ${mediaDetails.absoluteEpisode} (S${season}E${episode})`
-                : `S${season}E${episode}`;
-            if (DEBUG_MODE) console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
-
-            filteredResults = filteredResults.filter(result => {
-                // For Kitsu anime, we need to check BOTH:
-                // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
-                // 2. Season/Episode format (S03E01) - fallback for season-based packs
-                // CRITICAL: episodeNum parameter = SEASON episode (not absolute!)
-                const match = isExactEpisodeMatch(
-                    result.title || result.websiteTitle,
-                    mediaDetails.titles || mediaDetails.title,
-                    parseInt(season),
-                    parseInt(episode), // Season episode (e.g., 1 for S03E01)
-                    !!kitsuId,
-                    mediaDetails.absoluteEpisode, // Absolute episode (e.g., 38)
-                    false, // skipTitleCheck default
-                    mediaDetails.year // ✅ Pass requiredYear
+                // It's a season pack only if it has season number but NO episode indicators
+                const hasSeasonOnly = !hasEpisodeIndicator && !hasEpisodeRange && !hasMultiEpisodeList && (
+                    // S01 or S1 pattern
+                    new RegExp(`[Ss](0?${seasonNum})(?![0-9])`, 'i').test(title) ||
+                    // "Stagione X" or "Season X" pattern
+                    new RegExp(`(stagione|season)\\s*${seasonNum}(?![0-9])`, 'i').test(title)
                 );
 
-                if (!match) {
-                    if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
+                if (isCompletePack || hasSeasonOnly) {
+                    // Verify it's the right season
+                    const seasonMatch = title.match(/[Ss](0?\d+)|[Ss]tagione?\s*(\d+)|[Ss]eason\s*(\d+)/i);
+                    if (seasonMatch) {
+                        const foundSeason = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
+                        if (foundSeason === seasonNum) {
+                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Season pack detected: "${title.substring(0, 60)}..."`);
+                            return true;
+                        }
+                    }
+                    // Complete series pack
+                    if (/\[COMPLETA\]|Complete\s*Series|Serie\s*Completa/i.test(title)) {
+                        if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Complete series pack: "${title.substring(0, 60)}..."`);
+                        return true;
+                    }
+                }
+
+                // 2. Check for EXACT EPISODE match
+                const exactPatterns = [
+                    new RegExp(`[Ss](0?${seasonNum})[Ee](0?${episodeNum})(?![0-9])`, 'i'),  // S01E06
+                    new RegExp(`${seasonNum}x(0?${episodeNum})(?![0-9])`, 'i'),              // 1x06
+                    new RegExp(`[Ss](0?${seasonNum})\\s*[Ee](0?${episodeNum})(?![0-9])`, 'i'), // S01 E06
+                ];
+
+                if (exactPatterns.some(p => p.test(title))) {
+                    if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Exact episode match: "${title.substring(0, 60)}..."`);
+                    return true;
+                }
+
+                // 3. Check for EPISODE RANGE that includes the requested episode
+                // Patterns: S01E01-E10, S01E01-10, E01-E10, S01E01.E02.E03
+                const rangePatterns = [
+                    // S01E01-E10 or S01E01-10
+                    /[Ss](0?\d+)[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                    // E01-E10 or E01-10 (without season, assume current)
+                    /[Ee](0?\d+)[-–](E)?(0?\d+)/i,
+                    // 1x01-1x10 or 1x01-10
+                    /(\d+)x(0?\d+)[-–](\d+x)?(0?\d+)/i,
+                ];
+
+                for (const pattern of rangePatterns) {
+                    const match = title.match(pattern);
+                    if (match) {
+                        let startEp, endEp, matchedSeason;
+
+                        if (pattern.source.includes('[Ss]')) {
+                            // S01E01-E10 format
+                            matchedSeason = parseInt(match[1]);
+                            startEp = parseInt(match[2]);
+                            endEp = parseInt(match[4] || match[3]);
+                        } else if (pattern.source.includes('x')) {
+                            // 1x01-10 format
+                            matchedSeason = parseInt(match[1]);
+                            startEp = parseInt(match[2]);
+                            endEp = parseInt(match[4]);
+                        } else {
+                            // E01-E10 format (no season in pattern, check separately)
+                            const seasonCheck = title.match(/[Ss](0?\d+)/i);
+                            matchedSeason = seasonCheck ? parseInt(seasonCheck[1]) : seasonNum;
+                            startEp = parseInt(match[1]);
+                            endEp = parseInt(match[3] || match[2]);
+                        }
+
+                        if (matchedSeason === seasonNum && episodeNum >= startEp && episodeNum <= endEp) {
+                            if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Episode range ${startEp}-${endEp} includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return true;
+                        } else if (matchedSeason === seasonNum) {
+                            if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Episode range ${startEp}-${endEp} does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                            return false;
+                        }
+                    }
+                }
+
+                // 4. Check for MULTI-EPISODE list (S01E01.E02.E03 or S01 E01 E02 E03)
+                const multiEpMatch = title.match(/[Ss](0?\d+)[.\s]*([Ee]\d+[.\s]*)+/i);
+                if (multiEpMatch) {
+                    const matchedSeason = parseInt(multiEpMatch[1]);
+                    if (matchedSeason === seasonNum) {
+                        // Extract all episode numbers
+                        const episodes = title.match(/[Ee](0?\d+)/gi);
+                        if (episodes) {
+                            const epNumbers = episodes.map(e => parseInt(e.replace(/[Ee]/i, '')));
+                            if (epNumbers.includes(episodeNum)) {
+                                if (DEBUG_MODE) console.log(`✅ [EPISODE FILTER] Multi-episode list includes E${episodeNum}: "${title.substring(0, 60)}..."`);
+                                return true;
+                            } else {
+                                if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Multi-episode list [${epNumbers.join(',')}] does NOT include E${episodeNum}: "${title.substring(0, 60)}..."`);
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // 5. If we found a specific episode that doesn't match, reject it
+                // Check S01E01 format
+                const singleEpMatch = title.match(/[Ss](0?\d+)[Ee](0?\d+)/i);
+                if (singleEpMatch) {
+                    const matchedSeason = parseInt(singleEpMatch[1]);
+                    const matchedEpisode = parseInt(singleEpMatch[2]);
+                    if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode S${matchedSeason}E${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        return false;
+                    }
+                }
+
+                // 5b. Check NxNN format (1x03, 2x15, etc.) - same as S01E03
+                const nxnMatch = title.match(/(\d+)x(0?\d+)(?![0-9\-])/i);
+                if (nxnMatch) {
+                    const matchedSeason = parseInt(nxnMatch[1]);
+                    const matchedEpisode = parseInt(nxnMatch[2]);
+                    if (matchedSeason === seasonNum && matchedEpisode !== episodeNum) {
+                        if (DEBUG_MODE) console.log(`❌ [EPISODE FILTER] Single episode ${matchedSeason}x${matchedEpisode} != requested E${episodeNum}: "${title.substring(0, 60)}..."`);
+                        return false;
+                    }
+                }
+
+                // 6. Default: accept (might be a movie or unrecognized format)
+                return true;
+            };
+
+            // Smart Deduplication
+            const bestResults = new Map();
+            for (const result of allRawResults) {
+                if (!result.infoHash) continue;
+
+                // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
+                if (type === 'series' && season && episode) {
+                    // Pass expected titles to also validate series name
+                    const expectedTitles = mediaDetails.titles || [mediaDetails.title];
+                    if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
+                        continue; // Skip this result
+                    }
+                }
+
+                const hash = result.infoHash;
+                const newLangInfo = getLanguageInfo(result.title, italianTitle, result.source);
+
+                if (!bestResults.has(hash)) {
+                    bestResults.set(hash, result);
+                    if (DEBUG_MODE) console.log(`✅ [Dedup] NEW hash: ${hash.substring(0, 8)}... -> ${result.title.substring(0, 60)}... (${result.size}, ${result.seeders} seeds)`);
                 } else {
-                    if (DEBUG_MODE) console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
-                }
+                    const existing = bestResults.get(hash);
+                    if (DEBUG_MODE) console.log(`🔍 [Dedup] DUPLICATE hash: ${hash.substring(0, 8)}... comparing "${existing.title.substring(0, 50)}..." vs "${result.title.substring(0, 50)}..."`);
+                    if (DEBUG_MODE) console.log(`   Existing: size=${existing.size}, seeders=${existing.seeders}, fileIndex=${existing.fileIndex}`);
+                    if (DEBUG_MODE) console.log(`   New: size=${result.size}, seeders=${result.seeders}, fileIndex=${result.fileIndex}`);
+                    const existingLangInfo = getLanguageInfo(existing.title, italianTitle, existing.source);
 
-                return match;
-            });
+                    let isNewBetter = false;
+                    // An Italian version is always better than a non-Italian one.
+                    if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
+                        isNewBetter = true;
+                    } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
+                        // Helper to check source type (handles "💾 CorsaroNero" etc.)
+                        const isJackettio = (src) => src && (src === 'Jackettio' || src.includes('Jackettio'));
+                        const isCorsaro = (src) => src && (src === 'CorsaroNero' || src.includes('CorsaroNero'));
 
-            if (DEBUG_MODE) console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
+                        // If language is the same, prefer Jackettio (private instance)
+                        if (isJackettio(result.source) && !isJackettio(existing.source)) {
+                            isNewBetter = true;
+                        } else if (isJackettio(existing.source) && !isJackettio(result.source)) {
+                            isNewBetter = false; // Keep Jackettio
+                        } else if (isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(existing.source)) {
+                            isNewBetter = true;
+                        } else if (result.source === existing.source || (!isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(result.source) && !isJackettio(existing.source))) {
+                            // If source is also the same, or neither is the preferred one, prefer more seeders
+                            if ((result.seeders || 0) > (existing.seeders || 0)) {
+                                isNewBetter = true;
+                            }
+                        }
+                    }
 
-            // ✅ PACK FILES VERIFICATION for scraped results
-            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
-                const seasonNum = parseInt(season);
-                const episodeNum = parseInt(episode);
-                const seriesImdbId = mediaDetails.imdbId;
-                const MAX_PACK_VERIFY = 6;
-                const DELAY_MS = 200; // Balance between rate limiting and speed
-
-                // Separate verified from unverified packs
-                const verifiedPacks = [];
-                const unverifiedPacks = [];
-                const nonPacks = [];
-
-                for (const result of filteredResults) {
-                    const hasFileIndex = result.fileIndex !== null && result.fileIndex !== undefined;
-                    const isPack = packFilesHandler.isSeasonPack(result.title);
-
-                    if (!isPack) {
-                        nonPacks.push(result);
-                    } else if (hasFileIndex) {
-                        verifiedPacks.push(result);
+                    if (isNewBetter) {
+                        if (DEBUG_MODE) console.log(`🔄 [Dedup] REPLACE hash ${hash.substring(0, 8)}...: "${existing.title}" -> "${result.title}" (better)`);
+                        // Preserve file_title from existing if new doesn't have it
+                        if (!result.file_title && existing.file_title) {
+                            result.file_title = existing.file_title;
+                            result.fileIndex = existing.fileIndex;
+                            if (DEBUG_MODE) console.log(`🔄 [Dedup] Preserved file_title: ${existing.file_title}`);
+                        }
+                        bestResults.set(hash, result);
                     } else {
-                        unverifiedPacks.push(result);
+                        if (DEBUG_MODE) console.log(`⏭️  [Dedup] SKIP hash ${hash.substring(0, 8)}...: "${result.title}" (keeping "${existing.title}")`);
+                        // Preserve file_title from new if existing doesn't have it
+                        if (!existing.file_title && result.file_title) {
+                            existing.file_title = result.file_title;
+                            existing.fileIndex = result.fileIndex;
+                            bestResults.set(hash, existing); // Update map with modified object
+                            if (DEBUG_MODE) console.log(`⏭️  [Dedup] Added file_title from skipped: ${result.file_title}`);
+                        }
                     }
                 }
+            }
 
-                // Sort by size (largest first)
-                unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+            let results = Array.from(bestResults.values());
+            if (DEBUG_MODE) console.log(`✨ After smart deduplication, we have ${results.length} unique, high-quality results.`);
+            // --- FINE NUOVA LOGICA ---
 
-                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+            // 🔧 SAVE ALL TORRENTS TO DB (from all providers, not just CorsaroNero)
+            // ✅ STRICT ITALIAN FILTER: Only save Italian/Multi torrents to DB
+            if (dbHelper && typeof dbHelper.batchInsertTorrents === 'function' && results.length > 0) {
+                try {
+                    const torrentsToSave = results
+                        .filter(r => {
+                            if (!r.infoHash) return false;
 
-                // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
-                const needsExternalVerification = [];
-                const newlyVerified = [];
-                const excluded = [];
+                            // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
+                            const title = r.title || r.websiteTitle || '';
+                            const langInfo = getLanguageInfo(title);
+                            const isItalian = langInfo.isItalian;
 
-                // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
-                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+                            // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
+                            // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
+                            // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
+                            const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
+                            const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
+                                (mainAddon && /^torrentio$/i.test(mainAddon));
 
-                for (const result of unverifiedPacks) {
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                            if (!isItalian && !isTrustedProvider) {
+                                if (DEBUG_MODE) console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
+                                return false;
+                            }
+                            return true;
+                        })
+                        .map(r => ({
+                            info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
+                            title: r.title || r.websiteTitle || 'Unknown',
+                            provider: r.source || r.externalAddon || 'unknown',
+                            size: r.sizeInBytes || null,
+                            type: type,
+                            seeders: r.seeders || 0,
+                            imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
+                            tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
+                            upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
+                            cached_rd: r.cached || false // Save cached status if available
+                        }));
 
-                    if (!infoHash) {
-                        newlyVerified.push(result); // Cannot verify without hash
-                        continue;
+                    if (torrentsToSave.length > 0) {
+                        // 🚀 Fire-and-forget: Save to DB in background without blocking response
+                        dbHelper.batchInsertTorrents(torrentsToSave)
+                            .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
+                            .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
+                    } else {
+                        if (DEBUG_MODE) console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
+                    }
+                } catch (dbSaveError) {
+                    console.warn(`⚠️ [DB] Failed to save torrents: ${dbSaveError.message}`);
+                }
+            }
+
+            if (!results || results.length === 0) {
+                if (DEBUG_MODE) console.log('❌ No results found from any source after all fallbacks');
+                return { streams: [] };
+            }
+
+            if (DEBUG_MODE) console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
+
+            // ✅ Apply exact matching filters (use existing variable from outer scope)
+            filteredResults = results;
+
+            // ⚠️ FULL ITA FILTER MOVED: Applied AFTER cache block (so cache contains ALL results)
+
+            if (type === 'series') {
+                const originalCount = filteredResults.length;
+                const displayEpisode = kitsuId && mediaDetails.absoluteEpisode
+                    ? `absolute ${mediaDetails.absoluteEpisode} (S${season}E${episode})`
+                    : `S${season}E${episode}`;
+                if (DEBUG_MODE) console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
+
+                filteredResults = filteredResults.filter(result => {
+                    // For Kitsu anime, we need to check BOTH:
+                    // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
+                    // 2. Season/Episode format (S03E01) - fallback for season-based packs
+                    // CRITICAL: episodeNum parameter = SEASON episode (not absolute!)
+                    const match = isExactEpisodeMatch(
+                        result.title || result.websiteTitle,
+                        mediaDetails.titles || mediaDetails.title,
+                        parseInt(season),
+                        parseInt(episode), // Season episode (e.g., 1 for S03E01)
+                        !!kitsuId,
+                        mediaDetails.absoluteEpisode, // Absolute episode (e.g., 38)
+                        false, // skipTitleCheck default
+                        mediaDetails.year // ✅ Pass requiredYear
+                    );
+
+                    if (!match) {
+                        if (DEBUG_MODE) console.log(`❌ [Episode Filtering] REJECTED: "${result.title}"`);
+                    } else {
+                        if (DEBUG_MODE) console.log(`✅ [Episode Filtering] ACCEPTED: "${result.title}"`);
                     }
 
-                    try {
-                        // Check if we have files for this pack in DB
-                        const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                    return match;
+                });
 
-                        if (cachedFiles && cachedFiles.length > 0) {
-                            // ✅ CACHE HIT: Verify immediately
+                if (DEBUG_MODE) console.log(`📺 Episode filtering: ${filteredResults.length} of ${originalCount} results match`);
+
+                // ✅ PACK FILES VERIFICATION for scraped results
+                if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+                    const seasonNum = parseInt(season);
+                    const episodeNum = parseInt(episode);
+                    const seriesImdbId = mediaDetails.imdbId;
+                    const MAX_PACK_VERIFY = 6;
+                    const DELAY_MS = 200; // Balance between rate limiting and speed
+
+                    // Separate verified from unverified packs
+                    const verifiedPacks = [];
+                    const unverifiedPacks = [];
+                    const nonPacks = [];
+
+                    for (const result of filteredResults) {
+                        const hasFileIndex = result.fileIndex !== null && result.fileIndex !== undefined;
+                        const isPack = packFilesHandler.isSeasonPack(result.title);
+
+                        if (!isPack) {
+                            nonPacks.push(result);
+                        } else if (hasFileIndex) {
+                            verifiedPacks.push(result);
+                        } else {
+                            unverifiedPacks.push(result);
+                        }
+                    }
+
+                    // Sort by size (largest first)
+                    unverifiedPacks.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Found ${verifiedPacks.length} verified, ${unverifiedPacks.length} unverified, ${nonPacks.length} non-packs`);
+
+                    // ✅ REFACTORED VERIFICATION: Check DB Cache for ALL packs first!
+                    const needsExternalVerification = [];
+                    const newlyVerified = [];
+                    const excluded = [];
+
+                    // 1️⃣ FAST PATH: Check DB Cache for ALL unverified packs
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Checking DB cache for ${unverifiedPacks.length} packs...`);
+
+                    for (const result of unverifiedPacks) {
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+
+                        if (!infoHash) {
+                            newlyVerified.push(result); // Cannot verify without hash
+                            continue;
+                        }
+
+                        try {
+                            // Check if we have files for this pack in DB
+                            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+
+                            if (cachedFiles && cachedFiles.length > 0) {
+                                // ✅ CACHE HIT: Verify immediately
+                                const fileInfo = await packFilesHandler.resolveSeriesPackFile(
+                                    infoHash,
+                                    config,
+                                    seriesImdbId,
+                                    seasonNum,
+                                    episodeNum,
+                                    dbHelper
+                                );
+
+                                if (fileInfo) {
+                                    if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                    result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                    result.file_size = fileInfo.fileSize;
+                                    result.fileIndex = fileInfo.fileIndex;
+                                    result.file_title = fileInfo.fileName;
+                                    result.sizeInBytes = fileInfo.fileSize;
+                                    result.size = formatBytes(fileInfo.fileSize);
+                                    newlyVerified.push(result);
+                                } else {
+                                    if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                    excluded.push(result);
+                                }
+                            } else {
+                                // ❌ CACHE MISS
+                                needsExternalVerification.push(result);
+                            }
+                        } catch (err) {
+                            console.warn(`⚠️ [SCRAPE VERIFY] Cache check error: ${err.message}`);
+                            needsExternalVerification.push(result);
+                        }
+                    }
+
+                    // 2️⃣ SLOW PATH: External Verification (LIMITED)
+                    const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
+                    const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
+
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
+
+                    for (let i = 0; i < toVerifyExternal.length; i++) {
+                        const result = toVerifyExternal[i];
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                        // (infoHash checked above, but good to be safe if Logic moved)
+
+                        if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+
+                        if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+
+                        const originalPackSize = result.sizeInBytes || 0;
+
+                        try {
                             const fileInfo = await packFilesHandler.resolveSeriesPackFile(
                                 infoHash,
                                 config,
@@ -7342,8 +7440,8 @@ async function handleStream(type, id, config, workerOrigin) {
                             );
 
                             if (fileInfo) {
-                                if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
-                                result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
+                                result.packSize = fileInfo.totalPackSize || originalPackSize;
                                 result.file_size = fileInfo.fileSize;
                                 result.fileIndex = fileInfo.fileIndex;
                                 result.file_title = fileInfo.fileName;
@@ -7351,280 +7449,295 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.size = formatBytes(fileInfo.fileSize);
                                 newlyVerified.push(result);
                             } else {
-                                if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
                                 excluded.push(result);
                             }
+                        } catch (err) {
+                            console.warn(`⚠️ [SCRAPE VERIFY] Error: ${err.message} - keeping pack`);
+                            newlyVerified.push(result);
+                        }
+                    }
+
+                    // 3️⃣ STRICT FILTERING: Exclude skipped packs!
+                    if (skippedSize > 0) {
+                        if (DEBUG_MODE) console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
+                    }
+
+                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
+
+                    // Combine results SKIPPED ARE EXCLUDED
+                    filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
+                }
+
+                // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
+                if (filteredResults.length === 0 && originalCount > 0) {
+                    if (DEBUG_MODE) console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
+                }
+            } else if (type === 'movie') {
+                const originalCount = filteredResults.length;
+                let movieDetails = null;
+                if (mediaDetails.tmdbId) {
+                    movieDetails = await getTMDBDetails(mediaDetails.tmdbId, 'movie', tmdbKey);
+                }
+                filteredResults = filteredResults.filter(result => {
+                    const torrentTitle = result.title || result.websiteTitle;
+
+                    // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
+                    // Packs are identified by having a fileIndex (from pack_files table)
+                    if (result.fileIndex !== null && result.fileIndex !== undefined) {
+                        if (DEBUG_MODE) console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
+                        return true; // Always keep packs, they're already filtered by IMDb ID in DB query
+                    }
+
+                    // Try matching with English title
+                    const mainTitleMatch = isExactMovieMatch(
+                        torrentTitle,
+                        mediaDetails.title,
+                        mediaDetails.year
+                    );
+                    if (mainTitleMatch) return true;
+
+                    // Try matching with Italian title
+                    if (italianTitle && italianTitle !== mediaDetails.title) {
+                        const italianMatch = isExactMovieMatch(
+                            torrentTitle,
+                            italianTitle,
+                            mediaDetails.year
+                        );
+                        if (italianMatch) return true;
+                    }
+
+                    // Try matching with original title
+                    if (movieDetails && movieDetails.original_title && movieDetails.original_title !== mediaDetails.title) {
+                        return isExactMovieMatch(
+                            torrentTitle,
+                            movieDetails.original_title,
+                            mediaDetails.year
+                        );
+                    }
+                    return false;
+                });
+                if (DEBUG_MODE) console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
+
+                // If exact matching removed too many results, be more lenient
+                if (filteredResults.length === 0 && originalCount > 0) {
+                    if (DEBUG_MODE) console.log('⚠️ Exact filtering removed all results, using broader match');
+                    filteredResults = results.slice(0, Math.min(15, results.length));
+                }
+
+                // ✅ MOVIE PACK VERIFICATION
+                // Trigger: Only if Debrid key is present
+                if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
+                    const MAX_MOVIE_VERIFY = 5;
+                    const DELAY_MS = 200;
+
+                    // Separate known/verified from unverified
+                    const verifiedMovies = [];
+                    const unverifiedMovies = [];
+                    const corruptedCacheHashes = new Set(); // 🔧 Track hashes with corrupted cache
+
+                    // 🔧 Helper: Normalize filename for comparison (remove quality, year, extension, etc.)
+                    const normalizeForMatch = (str) => {
+                        if (!str) return '';
+                        return str
+                            .toLowerCase()
+                            .replace(/\.(mkv|mp4|avi|m2ts|iso|ts|mov|wmv)$/i, '') // Remove extension
+                            .replace(/[\._\-]+/g, ' ')                              // Dots/underscores to spaces
+                            .replace(/\b(1080p|720p|2160p|4k|hdr|dv|bluray|bdrip|bdremux|remux|x264|x265|hevc|avc|ac3|dts|truehd|eng|ita|spa|fre|multi|dual|audio|sub|subs|ita|hdremux|nahom|mircrew|jeddak)\b/gi, '') // Remove quality tags
+                            .replace(/\s+/g, ' ')                                   // Collapse spaces
+                            .trim();
+                    };
+
+                    // 🔧 Helper: Check if title is contained in filename
+                    const titleContainedIn = (filename, title) => {
+                        if (!filename || !title) return false;
+                        const normFile = normalizeForMatch(filename);
+                        const normTitle = normalizeForMatch(title);
+                        // Check if all words of title appear in filename
+                        const titleWords = normTitle.split(' ').filter(w => w.length > 2);
+                        const matchedWords = titleWords.filter(w => normFile.includes(w));
+                        return matchedWords.length >= Math.ceil(titleWords.length * 0.7); // 70% of words match
+                    };
+
+                    for (const res of filteredResults) {
+                        // If it already has fileIndex, it's a known pack file from DB
+                        // 🚨 SANITY CHECK: Verify file_title matches the REQUESTED movie!
+                        let isClean = false;
+                        if (res.fileIndex !== undefined && res.fileIndex !== null && res.file_title) {
+                            // ✅ Check ALL titles: English, Italian, Original
+                            const allTitles = [
+                                mediaDetails.title,
+                                mediaDetails.originalName,
+                                italianTitle,  // Use the Italian title we already have!
+                                ...(mediaDetails.titles || [])
+                            ].filter(Boolean);
+
+                            // 🔧 FIX: Use substring matching instead of Levenshtein
+                            // Levenshtein fails on "The.Godfather.1972.4K..." vs "The Godfather" (20% similarity)
+                            for (const title of allTitles) {
+                                if (titleContainedIn(res.file_title, title)) {
+                                    isClean = true;
+                                    break;
+                                }
+                            }
+
+                            if (!isClean) {
+                                console.log(`⚠️ [MOVIE SANITY] Cached file "${res.file_title}" does NOT match any title. Re-verifying pack.`);
+                                // 🔧 Mark this hash as having corrupted cache
+                                const hash = res.infoHash?.toLowerCase() || res.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                                if (hash) corruptedCacheHashes.add(hash);
+                            }
+                        }
+
+                        if (isClean) {
+                            verifiedMovies.push(res);
                         } else {
-                            // ❌ CACHE MISS
+                            // Force re-verification
+                            unverifiedMovies.push(res);
+                        }
+                    }
+
+                    unverifiedMovies.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+
+                    const newlyVerified = [];
+                    const excluded = [];
+                    const needsExternalVerification = [];
+
+                    // ✅ FIRST: Filter to only actual packs (title-based)
+                    // Non-pack torrents are assumed valid (single movie = no need to verify)
+                    const actualPacks = [];
+                    for (const result of unverifiedMovies) {
+                        const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                        if (isPack) {
+                            actualPacks.push(result);
+                        } else {
+                            newlyVerified.push(result); // Not a pack, assume valid single movie
+                        }
+                    }
+
+                    if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Found ${actualPacks.length} actual packs (${unverifiedMovies.length - actualPacks.length} single movies skipped)`);
+
+                    // 1️⃣ FAST PATH: Check DB Cache ONLY for actual packs
+                    const PACK_TTL_DAYS = 30;
+                    for (const result of actualPacks) {
+                        const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
+                        if (!infoHash) {
+                            newlyVerified.push(result);
+                            continue;
+                        }
+
+                        try {
+                            // 🔧 Check if this hash was marked as having corrupted cache
+                            const needsForceRefresh = corruptedCacheHashes.has(infoHash);
+
+                            // If corrupted cache, delete it first
+                            if (needsForceRefresh && typeof dbHelper.deletePackFilesCache === 'function') {
+                                if (DEBUG_MODE) console.log(`🗑️ [MOVIE VERIFY] Deleting corrupted cache for ${infoHash.substring(0, 8)}...`);
+                                await dbHelper.deletePackFilesCache(infoHash);
+                            }
+
+                            // 🚀 SPEEDUP: Check DB with TTL BEFORE calling resolveMoviePackFile
+                            // This avoids API calls for expired cache
+                            let hasFreshCache = false;
+                            if (!needsForceRefresh && typeof dbHelper.getPackFiles === 'function') {
+                                const { files: packFiles, expired } = await dbHelper.getPackFiles(infoHash, PACK_TTL_DAYS);
+                                hasFreshCache = packFiles && packFiles.length > 0 && !expired;
+                                if (expired && DEBUG_MODE) {
+                                    console.log(`⏰ [MOVIE VERIFY] Pack ${infoHash.substring(0, 8)} TTL expired - queue for refresh`);
+                                }
+                            }
+
+                            // Fallback to old method for files table
+                            if (!hasFreshCache && !needsForceRefresh) {
+                                const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
+                                hasFreshCache = cachedFiles && cachedFiles.length > 0;
+                            }
+
+                            if (hasFreshCache) {
+                                // CACHE HIT with valid TTL: Safe to call resolveMoviePackFile (won't make API calls)
+                                const candidateTitles = [
+                                    mediaDetails.title,
+                                    mediaDetails.originalName,
+                                    ...(mediaDetails.titles || [])
+                                ].filter(Boolean);
+                                const uniqueTitles = [...new Set(candidateTitles)];
+
+                                const fileInfo = await packFilesHandler.resolveMoviePackFile(
+                                    infoHash,
+                                    config,
+                                    mediaDetails.imdbId,
+                                    uniqueTitles,
+                                    mediaDetails.year,
+                                    dbHelper
+                                );
+
+                                if (fileInfo) {
+                                    if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
+                                    result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
+                                    result.file_size = fileInfo.fileSize;
+                                    result.fileIndex = fileInfo.fileIndex;
+                                    result.file_title = fileInfo.fileName;
+                                    result.sizeInBytes = fileInfo.fileSize;
+                                    result.size = formatBytes(fileInfo.fileSize);
+                                    newlyVerified.push(result);
+                                } else {
+                                    if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
+                                    excluded.push(result);
+                                }
+                            } else {
+                                // CACHE MISS or TTL expired: Add to external queue for API call
+                                needsExternalVerification.push(result);
+                            }
+                        } catch (e) {
                             needsExternalVerification.push(result);
                         }
-                    } catch (err) {
-                        console.warn(`⚠️ [SCRAPE VERIFY] Cache check error: ${err.message}`);
-                        needsExternalVerification.push(result);
-                    }
-                }
-
-                // 2️⃣ SLOW PATH: External Verification (LIMITED)
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_PACK_VERIFY);
-                const skippedSize = needsExternalVerification.length - toVerifyExternal.length;
-
-                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External Check: ${toVerifyExternal.length} packs (Skipped: ${skippedSize})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const result = toVerifyExternal[i];
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
-                    // (infoHash checked above, but good to be safe if Logic moved)
-
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-
-                    if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
-
-                    const originalPackSize = result.sizeInBytes || 0;
-
-                    try {
-                        const fileInfo = await packFilesHandler.resolveSeriesPackFile(
-                            infoHash,
-                            config,
-                            seriesImdbId,
-                            seasonNum,
-                            episodeNum,
-                            dbHelper
-                        );
-
-                        if (fileInfo) {
-                            if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
-                            result.packSize = fileInfo.totalPackSize || originalPackSize;
-                            result.file_size = fileInfo.fileSize;
-                            result.fileIndex = fileInfo.fileIndex;
-                            result.file_title = fileInfo.fileName;
-                            result.sizeInBytes = fileInfo.fileSize;
-                            result.size = formatBytes(fileInfo.fileSize);
-                            newlyVerified.push(result);
-                        } else {
-                            if (DEBUG_MODE) console.log(`❌ [SCRAPE VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
-                            excluded.push(result);
-                        }
-                    } catch (err) {
-                        console.warn(`⚠️ [SCRAPE VERIFY] Error: ${err.message} - keeping pack`);
-                        newlyVerified.push(result);
-                    }
-                }
-
-                // 3️⃣ STRICT FILTERING: Exclude skipped packs!
-                if (skippedSize > 0) {
-                    if (DEBUG_MODE) console.log(`🚫 [SCRAPE VERIFY] STRICT MODE: Excluding ${skippedSize} unverified packs.`);
-                }
-
-                if (DEBUG_MODE) console.log(`📦 [SCRAPE VERIFY] Results: ${newlyVerified.length} verified, ${excluded.length} excluded, ${skippedSize} skipped`);
-
-                // Combine results SKIPPED ARE EXCLUDED
-                filteredResults = [...nonPacks, ...verifiedPacks, ...newlyVerified];
-            }
-
-            // ⚠️ FALLBACK REMOVED: Strict season matching enforced.
-            if (filteredResults.length === 0 && originalCount > 0) {
-                if (DEBUG_MODE) console.log('❌ Exact filtering removed all results. Strict season matching enforced: returning 0 results.');
-            }
-        } else if (type === 'movie') {
-            const originalCount = filteredResults.length;
-            let movieDetails = null;
-            if (mediaDetails.tmdbId) {
-                movieDetails = await getTMDBDetails(mediaDetails.tmdbId, 'movie', tmdbKey);
-            }
-            filteredResults = filteredResults.filter(result => {
-                const torrentTitle = result.title || result.websiteTitle;
-
-                // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
-                // Packs are identified by having a fileIndex (from pack_files table)
-                if (result.fileIndex !== null && result.fileIndex !== undefined) {
-                    if (DEBUG_MODE) console.log(`🎬 [Pack] SKIP year filter for pack: ${torrentTitle.substring(0, 60)}... (fileIndex=${result.fileIndex})`);
-                    return true; // Always keep packs, they're already filtered by IMDb ID in DB query
-                }
-
-                // Try matching with English title
-                const mainTitleMatch = isExactMovieMatch(
-                    torrentTitle,
-                    mediaDetails.title,
-                    mediaDetails.year
-                );
-                if (mainTitleMatch) return true;
-
-                // Try matching with Italian title
-                if (italianTitle && italianTitle !== mediaDetails.title) {
-                    const italianMatch = isExactMovieMatch(
-                        torrentTitle,
-                        italianTitle,
-                        mediaDetails.year
-                    );
-                    if (italianMatch) return true;
-                }
-
-                // Try matching with original title
-                if (movieDetails && movieDetails.original_title && movieDetails.original_title !== mediaDetails.title) {
-                    return isExactMovieMatch(
-                        torrentTitle,
-                        movieDetails.original_title,
-                        mediaDetails.year
-                    );
-                }
-                return false;
-            });
-            if (DEBUG_MODE) console.log(`🎬 Movie filtering: ${filteredResults.length} of ${originalCount} results match`);
-
-            // If exact matching removed too many results, be more lenient
-            if (filteredResults.length === 0 && originalCount > 0) {
-                if (DEBUG_MODE) console.log('⚠️ Exact filtering removed all results, using broader match');
-                filteredResults = results.slice(0, Math.min(15, results.length));
-            }
-
-            // ✅ MOVIE PACK VERIFICATION
-            // Trigger: Only if Debrid key is present
-            if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
-                const MAX_MOVIE_VERIFY = 5;
-                const DELAY_MS = 200;
-
-                // Separate known/verified from unverified
-                const verifiedMovies = [];
-                const unverifiedMovies = [];
-                const corruptedCacheHashes = new Set(); // 🔧 Track hashes with corrupted cache
-
-                // 🔧 Helper: Normalize filename for comparison (remove quality, year, extension, etc.)
-                const normalizeForMatch = (str) => {
-                    if (!str) return '';
-                    return str
-                        .toLowerCase()
-                        .replace(/\.(mkv|mp4|avi|m2ts|iso|ts|mov|wmv)$/i, '') // Remove extension
-                        .replace(/[\._\-]+/g, ' ')                              // Dots/underscores to spaces
-                        .replace(/\b(1080p|720p|2160p|4k|hdr|dv|bluray|bdrip|bdremux|remux|x264|x265|hevc|avc|ac3|dts|truehd|eng|ita|spa|fre|multi|dual|audio|sub|subs|ita|hdremux|nahom|mircrew|jeddak)\b/gi, '') // Remove quality tags
-                        .replace(/\s+/g, ' ')                                   // Collapse spaces
-                        .trim();
-                };
-
-                // 🔧 Helper: Check if title is contained in filename
-                const titleContainedIn = (filename, title) => {
-                    if (!filename || !title) return false;
-                    const normFile = normalizeForMatch(filename);
-                    const normTitle = normalizeForMatch(title);
-                    // Check if all words of title appear in filename
-                    const titleWords = normTitle.split(' ').filter(w => w.length > 2);
-                    const matchedWords = titleWords.filter(w => normFile.includes(w));
-                    return matchedWords.length >= Math.ceil(titleWords.length * 0.7); // 70% of words match
-                };
-
-                for (const res of filteredResults) {
-                    // If it already has fileIndex, it's a known pack file from DB
-                    // 🚨 SANITY CHECK: Verify file_title matches the REQUESTED movie!
-                    let isClean = false;
-                    if (res.fileIndex !== undefined && res.fileIndex !== null && res.file_title) {
-                        // ✅ Check ALL titles: English, Italian, Original
-                        const allTitles = [
-                            mediaDetails.title,
-                            mediaDetails.originalName,
-                            italianTitle,  // Use the Italian title we already have!
-                            ...(mediaDetails.titles || [])
-                        ].filter(Boolean);
-                        
-                        // 🔧 FIX: Use substring matching instead of Levenshtein
-                        // Levenshtein fails on "The.Godfather.1972.4K..." vs "The Godfather" (20% similarity)
-                        for (const title of allTitles) {
-                            if (titleContainedIn(res.file_title, title)) {
-                                isClean = true;
-                                break;
-                            }
-                        }
-
-                        if (!isClean) {
-                            console.log(`⚠️ [MOVIE SANITY] Cached file "${res.file_title}" does NOT match any title. Re-verifying pack.`);
-                            // 🔧 Mark this hash as having corrupted cache
-                            const hash = res.infoHash?.toLowerCase() || res.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
-                            if (hash) corruptedCacheHashes.add(hash);
-                        }
                     }
 
-                    if (isClean) {
-                        verifiedMovies.push(res);
-                    } else {
-                        // Force re-verification
-                        unverifiedMovies.push(res);
-                    }
-                }
+                    // 2️⃣ SLOW PATH: External Verification (limited to MAX_MOVIE_VERIFY)
+                    const toVerifyExternal = needsExternalVerification.slice(0, MAX_MOVIE_VERIFY);
+                    const skipped = needsExternalVerification.slice(MAX_MOVIE_VERIFY);
 
-                unverifiedMovies.sort((a, b) => (b.sizeInBytes || 0) - (a.sizeInBytes || 0));
+                    if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
 
-                const newlyVerified = [];
-                const excluded = [];
-                const needsExternalVerification = [];
+                    for (let i = 0; i < toVerifyExternal.length; i++) {
+                        const result = toVerifyExternal[i];
+                        const infoHash = result.infoHash?.toLowerCase();
 
-                // ✅ FIRST: Filter to only actual packs (title-based)
-                // Non-pack torrents are assumed valid (single movie = no need to verify)
-                const actualPacks = [];
-                for (const result of unverifiedMovies) {
-                    const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
-                    if (isPack) {
-                        actualPacks.push(result);
-                    } else {
-                        newlyVerified.push(result); // Not a pack, assume valid single movie
-                    }
-                }
-                
-                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Found ${actualPacks.length} actual packs (${unverifiedMovies.length - actualPacks.length} single movies skipped)`);
+                        // ✅ FIXED: Only check if TITLE indicates pack (trilogia, collection, etc.)
+                        // NOT size-based - a single 4K movie can be >4GB!
+                        const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
 
-                // 1️⃣ FAST PATH: Check DB Cache ONLY for actual packs
-                const PACK_TTL_DAYS = 30;
-                for (const result of actualPacks) {
-                    const infoHash = result.infoHash?.toLowerCase() || result.magnetLink?.match(/btih:([a-fA-F0-9]{40})/i)?.[1]?.toLowerCase();
-                    if (!infoHash) {
-                        newlyVerified.push(result);
-                        continue;
-                    }
-
-                    try {
-                        // 🔧 Check if this hash was marked as having corrupted cache
-                        const needsForceRefresh = corruptedCacheHashes.has(infoHash);
-                        
-                        // If corrupted cache, delete it first
-                        if (needsForceRefresh && typeof dbHelper.deletePackFilesCache === 'function') {
-                            if (DEBUG_MODE) console.log(`🗑️ [MOVIE VERIFY] Deleting corrupted cache for ${infoHash.substring(0, 8)}...`);
-                            await dbHelper.deletePackFilesCache(infoHash);
+                        if (!isLikelyPack) {
+                            newlyVerified.push(result); // Assume valid single movie
+                            continue;
                         }
-                        
-                        // 🚀 SPEEDUP: Check DB with TTL BEFORE calling resolveMoviePackFile
-                        // This avoids API calls for expired cache
-                        let hasFreshCache = false;
-                        if (!needsForceRefresh && typeof dbHelper.getPackFiles === 'function') {
-                            const { files: packFiles, expired } = await dbHelper.getPackFiles(infoHash, PACK_TTL_DAYS);
-                            hasFreshCache = packFiles && packFiles.length > 0 && !expired;
-                            if (expired && DEBUG_MODE) {
-                                console.log(`⏰ [MOVIE VERIFY] Pack ${infoHash.substring(0, 8)} TTL expired - queue for refresh`);
-                            }
-                        }
-                        
-                        // Fallback to old method for files table
-                        if (!hasFreshCache && !needsForceRefresh) {
-                            const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
-                            hasFreshCache = cachedFiles && cachedFiles.length > 0;
-                        }
-                        
-                        if (hasFreshCache) {
-                            // CACHE HIT with valid TTL: Safe to call resolveMoviePackFile (won't make API calls)
+
+                        if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+                        if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+
+                        try {
+                            // Construct array of ALL possible titles to match against
                             const candidateTitles = [
                                 mediaDetails.title,
                                 mediaDetails.originalName,
                                 ...(mediaDetails.titles || [])
                             ].filter(Boolean);
+                            // Dedup
                             const uniqueTitles = [...new Set(candidateTitles)];
+
+                            if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Resolving pack using titles: ${JSON.stringify(uniqueTitles)}`);
 
                             const fileInfo = await packFilesHandler.resolveMoviePackFile(
                                 infoHash,
                                 config,
                                 mediaDetails.imdbId,
-                                uniqueTitles,
+                                uniqueTitles, // ✅ Pass Array of Titles
                                 mediaDetails.year,
                                 dbHelper
                             );
 
                             if (fileInfo) {
-                                if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Cache HIT & Verified: ${fileInfo.fileName}`);
+                                if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
                                 result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                                 result.file_size = fileInfo.fileSize;
                                 result.fileIndex = fileInfo.fileIndex;
@@ -7633,288 +7746,223 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.size = formatBytes(fileInfo.fileSize);
                                 newlyVerified.push(result);
                             } else {
-                                if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
+                                // If resolve returns null, it means it's a pack but movie NOT found.
+                                // OR fetch failed.
+                                if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
                                 excluded.push(result);
                             }
-                        } else {
-                            // CACHE MISS or TTL expired: Add to external queue for API call
-                            needsExternalVerification.push(result);
+                        } catch (err) {
+                            console.warn(`⚠️ [MOVIE VERIFY] Error, keeping: ${err.message}`);
+                            newlyVerified.push(result);
                         }
-                    } catch (e) {
-                        needsExternalVerification.push(result);
-                    }
-                }
-
-                // 2️⃣ SLOW PATH: External Verification (limited to MAX_MOVIE_VERIFY)
-                const toVerifyExternal = needsExternalVerification.slice(0, MAX_MOVIE_VERIFY);
-                const skipped = needsExternalVerification.slice(MAX_MOVIE_VERIFY);
-
-                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External Check: ${toVerifyExternal.length} movies (Skipped: ${skipped.length})`);
-
-                for (let i = 0; i < toVerifyExternal.length; i++) {
-                    const result = toVerifyExternal[i];
-                    const infoHash = result.infoHash?.toLowerCase();
-
-                    // ✅ FIXED: Only check if TITLE indicates pack (trilogia, collection, etc.)
-                    // NOT size-based - a single 4K movie can be >4GB!
-                    const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
-
-                    if (!isLikelyPack) {
-                        newlyVerified.push(result); // Assume valid single movie
-                        continue;
                     }
 
-                    if (i > 0) await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-                    if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] External (${i + 1}/${toVerifyExternal.length}) Checking "${result.title.substring(0, 50)}..."`);
+                    // Combined
+                    // Note: We do NOT exclude skipped movies (unlike series packs) because 
+                    // for movies, "unverified" usually just means "we didn't check inside", 
+                    // but likely it IS the movie itself (single file).
+                    // We only exclude if we POSITIVELY identified it as a pack missing the file.
+                    filteredResults = [...verifiedMovies, ...newlyVerified, ...skipped];
+                    if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results (${skipped.length} unverified in background)`);
 
-                    try {
-                        // Construct array of ALL possible titles to match against
+                    // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
+                    // This pre-fetches pack files for future searches
+                    // ⚠️ RUNS AFTER response is sent - 1 second between calls
+                    if (skipped.length > 0 && (config.rd_key || config.torbox_key)) {
                         const candidateTitles = [
                             mediaDetails.title,
                             mediaDetails.originalName,
                             ...(mediaDetails.titles || [])
                         ].filter(Boolean);
-                        // Dedup
                         const uniqueTitles = [...new Set(candidateTitles)];
 
-                        if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Resolving pack using titles: ${JSON.stringify(uniqueTitles)}`);
+                        // Fire and forget - DELAYED to not interfere with response
+                        setTimeout(() => {
+                            (async () => {
+                                console.log(`🔄 [MOVIE VERIFY BG] Starting background verification...`);
+                                const BG_DELAY_MS = 1000; // 1 second between calls (RD: 200/min limit)
+                                let processed = 0;
+                                let skippedNotPack = 0;
 
-                        const fileInfo = await packFilesHandler.resolveMoviePackFile(
-                            infoHash,
-                            config,
-                            mediaDetails.imdbId,
-                            uniqueTitles, // ✅ Pass Array of Titles
-                            mediaDetails.year,
-                            dbHelper
-                        );
+                                for (let i = 0; i < skipped.length; i++) {
+                                    const result = skipped[i];
+                                    const infoHash = result.infoHash?.toLowerCase();
+                                    if (!infoHash) continue;
 
-                        if (fileInfo) {
-                            if (DEBUG_MODE) console.log(`✅ [MOVIE VERIFY] Verified: ${fileInfo.fileName}`);
-                            result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
-                            result.file_size = fileInfo.fileSize;
-                            result.fileIndex = fileInfo.fileIndex;
-                            result.file_title = fileInfo.fileName;
-                            result.sizeInBytes = fileInfo.fileSize;
-                            result.size = formatBytes(fileInfo.fileSize);
-                            newlyVerified.push(result);
-                        } else {
-                            // If resolve returns null, it means it's a pack but movie NOT found.
-                            // OR fetch failed.
-                            if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
-                            excluded.push(result);
-                        }
-                    } catch (err) {
-                        console.warn(`⚠️ [MOVIE VERIFY] Error, keeping: ${err.message}`);
-                        newlyVerified.push(result);
+                                    // ✅ FIXED: Only process if TITLE indicates pack (trilogia, collection, etc.)
+                                    // NOT size-based - a single 4K movie can be >4GB!
+                                    const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                                    if (!isLikelyPack) {
+                                        skippedNotPack++;
+                                        continue;
+                                    }
+
+                                    await new Promise(resolve => setTimeout(resolve, BG_DELAY_MS));
+
+                                    try {
+                                        await packFilesHandler.resolveMoviePackFile(
+                                            infoHash,
+                                            config,
+                                            mediaDetails.imdbId,
+                                            uniqueTitles,
+                                            mediaDetails.year,
+                                            dbHelper
+                                        );
+                                        processed++;
+                                        console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
+                                    } catch (e) {
+                                        // Ignore errors in background
+                                    }
+                                }
+                                console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified (${skippedNotPack} non-pack skipped)`);
+                            })().catch(() => { });
+                        }, 5000); // 5 second delay to let response complete first
                     }
                 }
-
-                // Combined
-                // Note: We do NOT exclude skipped movies (unlike series packs) because 
-                // for movies, "unverified" usually just means "we didn't check inside", 
-                // but likely it IS the movie itself (single file).
-                // We only exclude if we POSITIVELY identified it as a pack missing the file.
-                filteredResults = [...verifiedMovies, ...newlyVerified, ...skipped];
-                if (DEBUG_MODE) console.log(`🎬 [MOVIE VERIFY] Final: ${filteredResults.length} results (${skipped.length} unverified in background)`);
-                
-                // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
-                // This pre-fetches pack files for future searches
-                // ⚠️ RUNS AFTER response is sent - 1 second between calls
-                if (skipped.length > 0 && (config.rd_key || config.torbox_key)) {
-                    const candidateTitles = [
-                        mediaDetails.title,
-                        mediaDetails.originalName,
-                        ...(mediaDetails.titles || [])
-                    ].filter(Boolean);
-                    const uniqueTitles = [...new Set(candidateTitles)];
-                    
-                    // Fire and forget - DELAYED to not interfere with response
-                    setTimeout(() => {
-                        (async () => {
-                            console.log(`🔄 [MOVIE VERIFY BG] Starting background verification...`);
-                            const BG_DELAY_MS = 1000; // 1 second between calls (RD: 200/min limit)
-                            let processed = 0;
-                            let skippedNotPack = 0;
-                            
-                            for (let i = 0; i < skipped.length; i++) {
-                                const result = skipped[i];
-                                const infoHash = result.infoHash?.toLowerCase();
-                                if (!infoHash) continue;
-                                
-                                // ✅ FIXED: Only process if TITLE indicates pack (trilogia, collection, etc.)
-                                // NOT size-based - a single 4K movie can be >4GB!
-                                const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
-                                if (!isLikelyPack) {
-                                    skippedNotPack++;
-                                    continue;
-                                }
-                                
-                                await new Promise(resolve => setTimeout(resolve, BG_DELAY_MS));
-                                
-                                try {
-                                    await packFilesHandler.resolveMoviePackFile(
-                                        infoHash,
-                                        config,
-                                        mediaDetails.imdbId,
-                                        uniqueTitles,
-                                        mediaDetails.year,
-                                        dbHelper
-                                    );
-                                    processed++;
-                                    console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
-                                } catch (e) {
-                                    // Ignore errors in background
-                                }
-                            }
-                            console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified (${skippedNotPack} non-pack skipped)`);
-                        })().catch(() => {});
-                    }, 5000); // 5 second delay to let response complete first
-                }
             }
-        }
 
-        // ✅ LANGUAGE FILTERING (Post-Season Filter)
-        // Apply "Italian Preference" ONLY after we have filtered for the correct season/episode.
-        // This ensures we don't discard English S02 just because we found Italian S01.
-        if (filteredResults.length > 0) {
-            const hasItalianResults = filteredResults.some(r => {
-                const lang = getLanguageInfo(r.title, italianTitle, r.source);
-                return lang.isItalian || lang.isMulti;
-            });
-
-            if (hasItalianResults) {
-                const originalCount = filteredResults.length;
-                const italianOnly = filteredResults.filter(r => {
+            // ✅ LANGUAGE FILTERING (Post-Season Filter)
+            // Apply "Italian Preference" ONLY after we have filtered for the correct season/episode.
+            // This ensures we don't discard English S02 just because we found Italian S01.
+            if (filteredResults.length > 0) {
+                const hasItalianResults = filteredResults.some(r => {
                     const lang = getLanguageInfo(r.title, italianTitle, r.source);
                     return lang.isItalian || lang.isMulti;
                 });
 
-                // Only apply if we actually filter something out
-                if (italianOnly.length < originalCount) {
-                    // console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
+                if (hasItalianResults) {
+                    const originalCount = filteredResults.length;
+                    const italianOnly = filteredResults.filter(r => {
+                        const lang = getLanguageInfo(r.title, italianTitle, r.source);
+                        return lang.isItalian || lang.isMulti;
+                    });
 
-                    // ✅ STRICT FILTER: Even if we keep non-Italian as fallback for display,
-                    // we mark them so they don't get saved to the DB if the user wants strict DB
-                    // Actually, user said "non ita non metterli nel db".
-                    // So we will just STRICTLY filter them out here if Italians are found.
-                    // But if NO Italians are found, we might want to return them for viewing but NOT save them.
+                    // Only apply if we actually filter something out
+                    if (italianOnly.length < originalCount) {
+                        // console.log(`🇮🇹 [Lang Filter] Found ${italianOnly.length} Italian results for correct season. Hiding ${originalCount - italianOnly.length} non-Italian results.`);
 
-                    // Current implementation: filteredResults = italianOnly;
-                    // This already hides them from view AND DB because we continue with `filteredResults`.
-                    filteredResults = italianOnly;
-                }
-            } else {
-                // No Italian results found.
-                // User said: "non ita non metterli nel db... non servono..."
-                // If we want to prevent them from hitting the DB, we must filter them out.
-                // BUT if we filter them out here, the user sees "No streams".
-                // If we want to show them but not save them, we need a flag.
-                // Let's implement Strict Filtering: If no ITA, return NOTHING (or keep logic but block DB save).
-                // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
+                        // ✅ STRICT FILTER: Even if we keep non-Italian as fallback for display,
+                        // we mark them so they don't get saved to the DB if the user wants strict DB
+                        // Actually, user said "non ita non metterli nel db".
+                        // So we will just STRICTLY filter them out here if Italians are found.
+                        // But if NO Italians are found, we might want to return them for viewing but NOT save them.
 
-                console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
-                filteredResults.forEach(r => r.skipDbSave = true);
-            }
-        }
+                        // Current implementation: filteredResults = italianOnly;
+                        // This already hides them from view AND DB because we continue with `filteredResults`.
+                        filteredResults = italianOnly;
+                    }
+                } else {
+                    // No Italian results found.
+                    // User said: "non ita non metterli nel db... non servono..."
+                    // If we want to prevent them from hitting the DB, we must filter them out.
+                    // BUT if we filter them out here, the user sees "No streams".
+                    // If we want to show them but not save them, we need a flag.
+                    // Let's implement Strict Filtering: If no ITA, return NOTHING (or keep logic but block DB save).
+                    // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
 
-        // ⚠️ LIMIT + LANG FILTER MOVED: Applied AFTER cache block (so cache contains complete results)
-
-        // ✅ SAVE TO GLOBAL CACHE - raw torrent results for all users (BEFORE full_ita filter)
-        // Conditions to save:
-        // 1. Global cache must be enabled
-        // 2. Must have results
-        // 3. User must have use_global_cache enabled (default: true)
-        // 4. User must NOT be db_only (db_only can read but never saves)
-        // 5. User must have ALL essential providers enabled (UIndex is optional)
-        // 6. User must NOT have full_ita=true (cache stores COMPLETE results)
-        // 7. Content must NOT be too recent (< 48 hours) - fresh releases get incomplete results
-        const hasAllEssentialProviders = (
-            config.use_corsaronero !== false &&
-            config.use_knaben !== false &&
-            config.use_torrentgalaxy !== false &&
-            config.use_rarbg !== false &&
-            config.use_torrentio !== false &&
-            config.use_mediafusion !== false &&
-            config.use_comet !== false
-            // UIndex is intentionally NOT required
-        );
-        
-        // ✅ Check if content is too recent (< 96 hours / 4 days since release)
-        let contentReleaseDate = null;
-        let isTooRecent = false;
-        
-        if (type === 'series' && season && episode && mediaDetails?.tmdbId) {
-            // For series: get episode air_date
-            contentReleaseDate = await getEpisodeAirDate(mediaDetails.tmdbId, season, episode, tmdbKey);
-        } else if (type === 'movie' && mediaDetails?.releaseDate) {
-            // For movies: use release_date from mediaDetails
-            contentReleaseDate = mediaDetails.releaseDate;
-        }
-        
-        if (contentReleaseDate) {
-            isTooRecent = isContentTooRecent(contentReleaseDate);
-            if (isTooRecent) {
-                const release = new Date(contentReleaseDate);
-                const hoursAgo = Math.round((new Date() - release) / (1000 * 60 * 60));
-                const daysAgo = (hoursAgo / 24).toFixed(1);
-                console.log(`📅 [CACHE] Content released ${daysAgo}d ago (${hoursAgo}h) - too recent for cache (<4 days)`);
-            }
-        }
-        
-        const canSaveToCache = (
-            GLOBAL_CACHE_ENABLED &&
-            filteredResults.length > 0 &&
-            useGlobalCache &&
-            !config.db_only &&
-            !config.full_ita &&  // ✅ Only save if full_ita=false (cache stores COMPLETE results)
-            hasAllEssentialProviders &&
-            !isTooRecent  // ✅ Don't cache fresh releases (< 4 days / 96h)
-        );
-        
-        if (canSaveToCache) {
-            const cacheData = {
-                filteredResults: filteredResults,
-                mediaDetails: mediaDetails,
-                season: season,
-                episode: episode,
-                imdbId: imdbId,
-                kitsuId: kitsuId,
-                searchQueries: searchQueries || [],
-                italianTitle: italianTitle,
-                originalTitle: originalTitle
-            };
-            
-            // Save to DB cache (persistent)
-            if (USE_DB_CACHE) {
-                try {
-                    await dbHelper.setTorrentSearchCache(globalCacheKey, cacheData);
-                    const ttlUsed = type === 'movie' ? GLOBAL_CACHE_TTL_MOVIE : GLOBAL_CACHE_TTL_SERIES;
-                    console.log(`💾 [DB CACHE SAVE] Key: ${globalCacheKey}... | Results: ${filteredResults.length} | TTL: ${ttlUsed}h`);
-                } catch (dbError) {
-                    console.error(`⚠️ [DB Cache] Error saving: ${dbError.message}`);
+                    console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
+                    filteredResults.forEach(r => r.skipDbSave = true);
                 }
             }
-            
-            // Also save to in-memory cache (fast fallback)
-            if (globalTorrentCache.size >= MAX_GLOBAL_CACHE_ENTRIES) {
-                const entriesToDelete = Math.floor(MAX_GLOBAL_CACHE_ENTRIES * 0.2);
-                const keysToDelete = Array.from(globalTorrentCache.keys()).slice(0, entriesToDelete);
-                keysToDelete.forEach(key => globalTorrentCache.delete(key));
+
+            // ⚠️ LIMIT + LANG FILTER MOVED: Applied AFTER cache block (so cache contains complete results)
+
+            // ✅ SAVE TO GLOBAL CACHE - raw torrent results for all users (BEFORE full_ita filter)
+            // Conditions to save:
+            // 1. Global cache must be enabled
+            // 2. Must have results
+            // 3. User must have use_global_cache enabled (default: true)
+            // 4. User must NOT be db_only (db_only can read but never saves)
+            // 5. User must have ALL essential providers enabled (UIndex is optional)
+            // 6. User must NOT have full_ita=true (cache stores COMPLETE results)
+            // 7. Content must NOT be too recent (< 48 hours) - fresh releases get incomplete results
+            const hasAllEssentialProviders = (
+                config.use_corsaronero !== false &&
+                config.use_knaben !== false &&
+                config.use_torrentgalaxy !== false &&
+                config.use_rarbg !== false &&
+                config.use_torrentio !== false &&
+                config.use_mediafusion !== false &&
+                config.use_comet !== false
+                // UIndex is intentionally NOT required
+            );
+
+            // ✅ Check if content is too recent (< 96 hours / 4 days since release)
+            let contentReleaseDate = null;
+            let isTooRecent = false;
+
+            if (type === 'series' && season && episode && mediaDetails?.tmdbId) {
+                // For series: get episode air_date
+                contentReleaseDate = await getEpisodeAirDate(mediaDetails.tmdbId, season, episode, tmdbKey);
+            } else if (type === 'movie' && mediaDetails?.releaseDate) {
+                // For movies: use release_date from mediaDetails
+                contentReleaseDate = mediaDetails.releaseDate;
             }
-            globalTorrentCache.set(globalCacheKey, {
-                data: cacheData,
-                timestamp: Date.now()
-            });
-        } else if (filteredResults.length > 0) {
-            // Log why we're not saving
-            const reasons = [];
-            if (!useGlobalCache) reasons.push('use_global_cache=false');
-            if (config.db_only) reasons.push('db_only=true');
-            if (config.full_ita) reasons.push('full_ita=true (need complete results)');
-            if (!hasAllEssentialProviders) reasons.push('missing providers');
-            if (isTooRecent) reasons.push(`too recent (< 48h since release: ${contentReleaseDate})`);
-            console.log(`⏭️ [CACHE SKIP] Not saving to cache: ${reasons.join(', ')}`);
-        }
+
+            if (contentReleaseDate) {
+                isTooRecent = isContentTooRecent(contentReleaseDate);
+                if (isTooRecent) {
+                    const release = new Date(contentReleaseDate);
+                    const hoursAgo = Math.round((new Date() - release) / (1000 * 60 * 60));
+                    const daysAgo = (hoursAgo / 24).toFixed(1);
+                    console.log(`📅 [CACHE] Content released ${daysAgo}d ago (${hoursAgo}h) - too recent for cache (<4 days)`);
+                }
+            }
+
+            const canSaveToCache = (
+                GLOBAL_CACHE_ENABLED &&
+                filteredResults.length > 0 &&
+                useGlobalCache &&
+                !config.db_only &&
+                !config.full_ita &&  // ✅ Only save if full_ita=false (cache stores COMPLETE results)
+                hasAllEssentialProviders &&
+                !isTooRecent  // ✅ Don't cache fresh releases (< 4 days / 96h)
+            );
+
+            if (canSaveToCache) {
+                const cacheData = {
+                    filteredResults: filteredResults,
+                    mediaDetails: mediaDetails,
+                    season: season,
+                    episode: episode,
+                    imdbId: imdbId,
+                    kitsuId: kitsuId,
+                    searchQueries: searchQueries || [],
+                    italianTitle: italianTitle,
+                    originalTitle: originalTitle
+                };
+
+                // Save to DB cache (persistent)
+                if (USE_DB_CACHE) {
+                    try {
+                        await dbHelper.setTorrentSearchCache(globalCacheKey, cacheData);
+                        const ttlUsed = type === 'movie' ? GLOBAL_CACHE_TTL_MOVIE : GLOBAL_CACHE_TTL_SERIES;
+                        console.log(`💾 [DB CACHE SAVE] Key: ${globalCacheKey}... | Results: ${filteredResults.length} | TTL: ${ttlUsed}h`);
+                    } catch (dbError) {
+                        console.error(`⚠️ [DB Cache] Error saving: ${dbError.message}`);
+                    }
+                }
+
+                // Also save to in-memory cache (fast fallback)
+                if (globalTorrentCache.size >= MAX_GLOBAL_CACHE_ENTRIES) {
+                    const entriesToDelete = Math.floor(MAX_GLOBAL_CACHE_ENTRIES * 0.2);
+                    const keysToDelete = Array.from(globalTorrentCache.keys()).slice(0, entriesToDelete);
+                    keysToDelete.forEach(key => globalTorrentCache.delete(key));
+                }
+                globalTorrentCache.set(globalCacheKey, {
+                    data: cacheData,
+                    timestamp: Date.now()
+                });
+            } else if (filteredResults.length > 0) {
+                // Log why we're not saving
+                const reasons = [];
+                if (!useGlobalCache) reasons.push('use_global_cache=false');
+                if (config.db_only) reasons.push('db_only=true');
+                if (config.full_ita) reasons.push('full_ita=true (need complete results)');
+                if (!hasAllEssentialProviders) reasons.push('missing providers');
+                if (isTooRecent) reasons.push(`too recent (< 48h since release: ${contentReleaseDate})`);
+                console.log(`⏭️ [CACHE SKIP] Not saving to cache: ${reasons.join(', ')}`);
+            }
 
         } // END of if (!fromGlobalCache) block
 
@@ -7955,6 +8003,11 @@ async function handleStream(type, id, config, workerOrigin) {
 
         // Limit results for performance (after all filters)
         const maxResults = 30;
+
+        // 🚀 TRIGGER SEEDER UPDATE (Fire and forget)
+        // Update seeders for the top results that the user will actually see
+        triggerSeederUpdate(filteredResults.slice(0, 100)); // Send up to 100 candidates to queue
+
         filteredResults = filteredResults.slice(0, maxResults);
 
         console.log(`🔄 Checking debrid services for ${filteredResults.length} results... (User: ${configHashForLog})`);
@@ -8220,7 +8273,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     console.warn(`⚠️ [Stream] Skipping result without magnetLink: ${result.title?.substring(0, 50)}...`);
                     continue;
                 }
-                
+
                 const qualityDisplay = result.quality ? result.quality.toUpperCase() : 'Unknown';
                 const qualitySymbol = getQualitySymbol(qualityDisplay);
                 const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle);
@@ -9204,33 +9257,34 @@ async function handleStream(type, id, config, workerOrigin) {
 
             if (DEBUG_MODE) console.log(`🚀 [Webhook] Calling VPS enrichment (server ${global.enrichmentServerIndex === 0 ? 2 : 1}): ${enrichmentUrl}`);
 
-            try {
-                const webhookResponse = await fetch(enrichmentUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': enrichmentApiKey
-                    },
-                    body: JSON.stringify({
-                        imdbId: mediaDetails.imdbId,
-                        tmdbId: mediaDetails.tmdbId,
-                        italianTitle: italianTitle,
-                        originalTitle: originalTitle || mediaDetails.title,
-                        type: type,
-                        year: mediaDetails.year,
-                        searchQueries: searchQueries || [] // ✅ Use searchQueries (available from cache)
-                    }),
-                    signal: AbortSignal.timeout(5000)
-                });
-
+            // 🚀 FIRE-AND-FORGET: Do NOT await!
+            fetch(enrichmentUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': enrichmentApiKey
+                },
+                body: JSON.stringify({
+                    imdbId: mediaDetails.imdbId,
+                    tmdbId: mediaDetails.tmdbId,
+                    italianTitle: italianTitle,
+                    originalTitle: originalTitle || mediaDetails.title,
+                    type: type,
+                    year: mediaDetails.year,
+                    searchQueries: searchQueries || []
+                }),
+                signal: AbortSignal.timeout(5000)
+            }).then(webhookResponse => {
                 if (webhookResponse.ok) {
                     if (DEBUG_MODE) console.log(`✅ [Webhook] Enrichment queued (${webhookResponse.status})`);
                 } else {
                     console.warn(`⚠️ [Webhook] Failed: ${webhookResponse.status}`);
                 }
-            } catch (err) {
+            }).catch(err => {
                 console.warn(`⚠️ [Webhook] Unreachable:`, err.message);
-            }
+            });
+
+            // Proceed immediately without waiting
         } else {
             if (DEBUG_MODE) console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
         }
@@ -9604,7 +9658,7 @@ export default async function handler(req, res) {
                 try {
                     const encodedConfigStr = pathParts[1];
                     let config = null;
-                    
+
                     // Try multiple decode strategies for complex configs with emoji/special chars
                     try {
                         config = JSON.parse(atob(encodedConfigStr));
@@ -9626,7 +9680,7 @@ export default async function handler(req, res) {
                             }
                         }
                     }
-                    
+
                     if (!config) {
                         // Skip addon name customization, use default
                         throw new Error('skip');
@@ -9919,22 +9973,22 @@ export default async function handler(req, res) {
                     // ✅ PRIORITY 1.5: For movie packs WITHOUT fileIdx, use title+year fuzzy matching
                     if (!targetFile && type === 'movie' && movieTitleForMatch) {
                         console.log(`[RealDebrid] 🎬 Movie pack - fuzzy matching for "${movieTitleForMatch}" (${movieYearForMatch || 'no year'})`);
-                        
+
                         const cleanTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
                         const targetWords = cleanTitle(movieTitleForMatch);
-                        
+
                         let bestMatch = null;
                         let maxScore = 0;
-                        
+
                         for (const file of videoFilesForPack) {
                             const filename = file.path.split('/').pop().toLowerCase();
                             let score = 0;
-                            
+
                             // Year check (+50 points)
                             if (movieYearForMatch && filename.includes(movieYearForMatch)) {
                                 score += 50;
                             }
-                            
+
                             // Title word match (+50 points proportional)
                             let matchedWords = 0;
                             for (const word of targetWords) {
@@ -9943,18 +9997,18 @@ export default async function handler(req, res) {
                             if (targetWords.length > 0) {
                                 score += (matchedWords / targetWords.length) * 50;
                             }
-                            
+
                             // Negative keywords
                             if (filename.includes('trailer') || filename.includes('sample')) score -= 50;
-                            
+
                             console.log(`[RealDebrid] 🔍 "${filename}" -> Score: ${score.toFixed(0)}`);
-                            
+
                             if (score > maxScore && score >= 40) { // Lower threshold for runtime matching
                                 maxScore = score;
                                 bestMatch = file;
                             }
                         }
-                        
+
                         if (bestMatch) {
                             targetFile = bestMatch;
                             console.log(`[RealDebrid] ✅ Fuzzy matched: ${bestMatch.path} (score: ${maxScore.toFixed(0)})`);
@@ -10032,7 +10086,7 @@ export default async function handler(req, res) {
                     if (targetFile) {
                         // ✅ For series AND movie packs: Select ALL video files so all can be streamed
                         const isMoviePack = type === 'movie' && packFileIdx !== null && videoFilesForPack.length > 1;
-                        
+
                         if ((type === 'series' && videoFiles.length > 1) || isMoviePack) {
                             // For movie packs, use videoFilesForPack (same filter as pack-files-handler)
                             // For series, use videoFiles (with junk keywords filtered)
@@ -10094,7 +10148,7 @@ export default async function handler(req, res) {
                     // This handles BOTH series packs AND movie packs (like Disney collection)
                     const isPackWithMissingFiles = (type === 'series' && videos.length < allVideoFiles.length && allVideoFiles.length > 1) ||
                         (type === 'movie' && packFileIdx !== null && videos.length < allVideoFilesForPack.length && allVideoFilesForPack.length > 1);
-                    
+
                     if (isPackWithMissingFiles) {
                         const targetVideoList = type === 'movie' ? allVideoFilesForPack : allVideoFiles;
                         console.log(`⚠️ [RD] Incomplete file selection: ${videos.length}/${targetVideoList.length} videos selected`);
@@ -10120,7 +10174,7 @@ export default async function handler(req, res) {
                                 return !junkKeywords.some(junk => lowerPath.includes(junk)) || file.bytes > 250 * 1024 * 1024;
                             })
                             .sort((a, b) => b.bytes - a.bytes));
-                            
+
                         // Also refresh allVideoFilesForPack for movie pack lookup
                         allVideoFilesForPack = (torrent.files || []).filter(file => {
                             const lowerPath = file.path.toLowerCase();
@@ -10250,7 +10304,7 @@ export default async function handler(req, res) {
 
                                                         // ✅ FIX: Calculate correct torrent file index
                                                         // For P2P, torrent files are typically ordered ALPHABETICALLY by path
-                                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) =>
                                                             (a.path || '').localeCompare(b.path || ''));
                                                         const fileIdToTorrentIndex = new Map();
                                                         sortedAlphabetically.forEach((file, index) => {
@@ -10284,7 +10338,7 @@ export default async function handler(req, res) {
 
                                                                     // ✅ Use correct torrent index
                                                                     const correctTorrentIndex = fileIdToTorrentIndex.get(file.id) ?? file.id;
-                                                                    
+
                                                                     await dbHelper.updateTorrentFileInfo(
                                                                         infoHash,
                                                                         correctTorrentIndex,
@@ -10335,7 +10389,7 @@ export default async function handler(req, res) {
                     // 🔥 OPTIMIZED RD LINK RESOLUTION with DB cache
                     let selectedForLink = (torrent.files || []).filter(f => f.selected === 1);
                     const targetFilename = targetFile.path.split('/').pop().toLowerCase();
-                    
+
                     console.log(`[RealDebrid] 🔍 Target: ${targetFilename} (${torrent.links.length} links)`);
 
                     // 🔥 FIX: For movie packs, if target file is not selected, SELECT ALL VIDEO FILES
@@ -10377,11 +10431,11 @@ export default async function handler(req, res) {
                         if (dbEnabled && allVideoFiles.length > 0) {
                             try {
                                 console.log(`📦 [DB] Bulk saving ALL ${allVideoFiles.length} pack files for future lookups...`);
-                                
+
                                 // Sort alphabetically for consistent indexing
-                                const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                const sortedAlphabetically = [...allVideoFiles].sort((a, b) =>
                                     (a.path || '').localeCompare(b.path || ''));
-                                
+
                                 // Create pack file entries for ALL files (imdb_id = NULL for now)
                                 const packFilesData = sortedAlphabetically.map((file, index) => ({
                                     pack_hash: infoHash.toLowerCase(),
@@ -10390,7 +10444,7 @@ export default async function handler(req, res) {
                                     file_path: file.path,
                                     file_size: file.bytes || 0
                                 }));
-                                
+
                                 await dbHelper.insertPackFiles(packFilesData);
                                 console.log(`✅ [DB] Bulk saved ${packFilesData.length} pack files to DB`);
                             } catch (bulkErr) {
@@ -10409,11 +10463,11 @@ export default async function handler(req, res) {
                             const episodeImdbId = await dbHelper.getImdbIdByHash(infoHash);
                             if (episodeImdbId) {
                                 const cachedFiles = await dbHelper.searchEpisodeFiles(episodeImdbId, parseInt(season), parseInt(episode));
-                                const cachedEntry = cachedFiles.find(f => 
-                                    f.info_hash?.toLowerCase() === infoHash.toLowerCase() && 
+                                const cachedEntry = cachedFiles.find(f =>
+                                    f.info_hash?.toLowerCase() === infoHash.toLowerCase() &&
                                     f.rd_link_index !== null && f.rd_link_index !== undefined
                                 );
-                                
+
                                 if (cachedEntry && cachedEntry.rd_link_index >= 0 && cachedEntry.rd_link_index < torrent.links.length) {
                                     console.log(`[RealDebrid] 💾 DB HIT! Using cached rd_link_index=${cachedEntry.rd_link_index}`);
                                     try {
@@ -10443,7 +10497,7 @@ export default async function handler(req, res) {
                     if (!unrestricted) {
                         const sortedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
                         const predictedIndex = sortedBySize.findIndex(f => f.id === targetFile.id);
-                        
+
                         if (predictedIndex >= 0 && predictedIndex < torrent.links.length) {
                             console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (size-descending)...`);
                             try {
@@ -10451,7 +10505,7 @@ export default async function handler(req, res) {
                                 if (testUnrestricted && testUnrestricted.filename) {
                                     const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
                                     console.log(`[RealDebrid] 📂 Predicted[${predictedIndex}]: ${testUnrestricted.filename}`);
-                                    
+
                                     if (unrestrictedFilename === targetFilename) {
                                         console.log(`[RealDebrid] ✅ PREDICTED HIT! Using index ${predictedIndex}`);
                                         unrestricted = testUnrestricted;
@@ -10464,7 +10518,7 @@ export default async function handler(req, res) {
                                 console.log(`[RealDebrid] ⚠️ Predicted index error: ${err.message}`);
                             }
                         }
-                        
+
                         // 🔄 STEP 2: Fallback - loop through all links if prediction failed
                         // RD allows 250 requests/min (~4/sec) so we can be fast
                         // Track which indices we've already processed for background job
@@ -10472,18 +10526,18 @@ export default async function handler(req, res) {
                         if (!unrestricted) {
                             const predictedIdx = sortedBySize.findIndex(f => f.id === targetFile.id);
                             if (predictedIdx >= 0) processedIndices.add(predictedIdx);
-                            
+
                             console.log(`[RealDebrid] 🔄 Fallback: scanning all ${torrent.links.length} links...`);
                             for (let i = 0; i < torrent.links.length; i++) {
                                 if (processedIndices.has(i)) continue; // Already tried this one
                                 processedIndices.add(i);
-                                
+
                                 try {
                                     const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[i]);
                                     if (testUnrestricted && testUnrestricted.filename) {
                                         const unrestrictedFilename = testUnrestricted.filename.toLowerCase();
                                         console.log(`[RealDebrid] 📂 Link[${i}]: ${testUnrestricted.filename}`);
-                                        
+
                                         if (unrestrictedFilename === targetFilename) {
                                             console.log(`[RealDebrid] ✅ FALLBACK MATCH at index ${i}!`);
                                             unrestricted = testUnrestricted;
@@ -10510,27 +10564,27 @@ export default async function handler(req, res) {
                             for (let i = 0; i < torrent.links.length; i++) {
                                 if (!processedIndices.has(i)) remainingIndices.push(i);
                             }
-                            
+
                             if (remainingIndices.length > 0) {
                                 console.log(`[RealDebrid] 🔄 Background job: will map ${remainingIndices.length} remaining links after response`);
-                                
+
                                 // Fire and forget - don't await!
                                 (async () => {
                                     try {
                                         console.log(`[RealDebrid] 🔄 Background: Starting to map ${remainingIndices.length} links...`);
-                                        
+
                                         for (const idx of remainingIndices) {
                                             try {
                                                 // Rate limit: wait 250ms between calls (4 req/sec safe)
                                                 await new Promise(resolve => setTimeout(resolve, 250));
-                                                
+
                                                 const bgUnrestricted = await realdebrid.unrestrictLink(torrent.links[idx]);
                                                 if (bgUnrestricted && bgUnrestricted.filename) {
                                                     const bgFilename = bgUnrestricted.filename;
                                                     console.log(`[RealDebrid] 📦 Background mapped: link[${idx}] = ${bgFilename}`);
-                                                    
+
                                                     // Save to DB: find the file.id that matches this filename
-                                                    const matchingFile = allVideoFilesForPack.find(f => 
+                                                    const matchingFile = allVideoFilesForPack.find(f =>
                                                         f.path.split('/').pop().toLowerCase() === bgFilename.toLowerCase()
                                                     );
                                                     if (matchingFile && dbHelper.updateRdLinkIndexForPack) {
@@ -10560,7 +10614,7 @@ export default async function handler(req, res) {
                             const allVideoFiles = (torrent.files || []).filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
                             const sortedAlphabetically = [...allVideoFiles].sort((a, b) => (a.path || '').localeCompare(b.path || ''));
                             const alphabeticalIndex = sortedAlphabetically.findIndex(f => f.id === targetFile.id);
-                            
+
                             if (alphabeticalIndex >= 0) {
                                 await dbHelper.updateRdLinkIndex(infoHash, alphabeticalIndex, matchedIndex);
                                 console.log(`[RealDebrid] 💾 Saved rd_link_index=${matchedIndex} for file_index=${alphabeticalIndex}`);
@@ -10569,12 +10623,12 @@ export default async function handler(req, res) {
                             console.log(`[RealDebrid] ⚠️ Failed to save rd_link_index: ${saveErr.message}`);
                         }
                     }
-                    
+
                     if (!unrestricted) {
                         console.log(`[RealDebrid] ❌ No matching link found for: ${targetFilename}`);
                         return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
                     }
-                    
+
                     console.log(`[RealDebrid] ✅ Final: link[${matchedIndex}] -> ${unrestricted.filename}`);
 
                     // 🔥 Torrentio-style: Check for access denied errors
@@ -10635,9 +10689,9 @@ export default async function handler(req, res) {
                                         // ✅ FIX: Calculate correct torrent file index
                                         // For P2P, torrent files are ordered ALPHABETICALLY by path
                                         const allVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
-                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) => 
+                                        const sortedAlphabetically = [...allVideoFiles].sort((a, b) =>
                                             (a.path || '').localeCompare(b.path || ''));
-                                        
+
                                         // Create a map: file.id -> correct torrent index (ALPHABETICAL order)
                                         const fileIdToTorrentIndex = new Map();
                                         sortedAlphabetically.forEach((file, index) => {
@@ -10680,7 +10734,7 @@ export default async function handler(req, res) {
 
                                                     // ✅ Use correct torrent index, not RealDebrid's file.id
                                                     const correctTorrentIndex = fileIdToTorrentIndex.get(file.id) ?? file.id;
-                                                    
+
                                                     await dbHelper.updateTorrentFileInfo(
                                                         infoHash,
                                                         correctTorrentIndex,
@@ -10717,7 +10771,7 @@ export default async function handler(req, res) {
                                     // ✅ FIX: Calculate correct torrent file index
                                     // For P2P, torrent files are ordered ALPHABETICALLY by path
                                     const allPackVideoFiles = torrent.files.filter(f => f.path.match(/\.(mkv|mp4|avi|mov|wmv|flv|webm)$/i));
-                                    const sortedAlphabetically = [...allPackVideoFiles].sort((a, b) => 
+                                    const sortedAlphabetically = [...allPackVideoFiles].sort((a, b) =>
                                         (a.path || '').localeCompare(b.path || ''));
                                     const movieFileIdToTorrentIndex = new Map();
                                     sortedAlphabetically.forEach((file, index) => {
@@ -11543,10 +11597,10 @@ export default async function handler(req, res) {
                     if (packFileName) {
                         console.log(`[Torbox] 🎬 Pack movie - looking for file by name: "${packFileName}"`);
                         console.log(`[Torbox] 📂 Available files:`);
-                        
+
                         // Normalize filename for comparison (lowercase, remove path)
                         const targetName = packFileName.toLowerCase().split('/').pop();
-                        
+
                         videosForPack.forEach((f) => {
                             const name = (f.short_name || f.name || 'unknown').toLowerCase().split('/').pop();
                             const isMatch = name === targetName || name.includes(targetName) || targetName.includes(name);
@@ -11559,7 +11613,7 @@ export default async function handler(req, res) {
                             const name = (f.short_name || f.name || '').toLowerCase().split('/').pop();
                             return name === targetName || name.includes(targetName) || targetName.includes(name);
                         });
-                        
+
                         if (targetVideo) {
                             console.log(`[Torbox] ✅ Found pack file by name: ${targetVideo.short_name || targetVideo.name}`);
                         } else {
@@ -11588,22 +11642,22 @@ export default async function handler(req, res) {
                     // ✅ PRIORITY 1.5: For movie packs WITHOUT fileIdx, use title+year fuzzy matching
                     else if (movieTitleForMatch) {
                         console.log(`[Torbox] 🎬 Movie pack - fuzzy matching for "${movieTitleForMatch}" (${movieYearForMatch || 'no year'})`);
-                        
+
                         const cleanTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
                         const targetWords = cleanTitle(movieTitleForMatch);
-                        
+
                         let bestMatch = null;
                         let maxScore = 0;
-                        
+
                         for (const file of videosForPack) {
                             const filename = (file.short_name || file.name || '').toLowerCase();
                             let score = 0;
-                            
+
                             // Year check (+50 points)
                             if (movieYearForMatch && filename.includes(movieYearForMatch)) {
                                 score += 50;
                             }
-                            
+
                             // Title word match (+50 points proportional)
                             let matchedWords = 0;
                             for (const word of targetWords) {
@@ -11612,18 +11666,18 @@ export default async function handler(req, res) {
                             if (targetWords.length > 0) {
                                 score += (matchedWords / targetWords.length) * 50;
                             }
-                            
+
                             // Negative keywords
                             if (filename.includes('trailer') || filename.includes('sample')) score -= 50;
-                            
+
                             console.log(`[Torbox] 🔍 "${filename}" -> Score: ${score.toFixed(0)}`);
-                            
+
                             if (score > maxScore && score >= 40) {
                                 maxScore = score;
                                 bestMatch = file;
                             }
                         }
-                        
+
                         if (bestMatch) {
                             targetVideo = bestMatch;
                             console.log(`[Torbox] ✅ Fuzzy matched: ${bestMatch.short_name || bestMatch.name} (score: ${maxScore.toFixed(0)})`);

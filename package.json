@@ -4,11 +4,14 @@
   "private": true,
   "description": "Addon Stremio per UIndex, CorsaroNero con DB interno e Knaben con supporto Real-Debrid con MFP per la condivisione, Torbox, Alldebrid e Jackett.",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
-    "start": "node api/index.js",
-    "start:docker": "PORT=7860 node api/index.js"
+    "start": "node server.js",
+    "start:docker": "PORT=7860 node server.js"
   },
   "dependencies": {
     "all-debrid-api": "^1.2.0",

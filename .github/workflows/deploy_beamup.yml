@@ -1,0 +1,25 @@
+name: Deploy to Beamup
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to Beamup
+        uses: bealearts/deploy-stremio-addons-to-beamup@v1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          beamup-host: ${{ secrets.BEAMUP_HOST }}
+          username: ${{ secrets.USERNAME_GITHUB }}
+          project-name: ${{ secrets.PROJECT_NAME }}
+          env: |
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            SEEDER_UPDATE_URL=${{ secrets.SEEDER_UPDATE_URL }}
+            ENRICHMENT_API_KEY=${{ secrets.ENRICHMENT_API_KEY }}
+            DEBUG_MODE=false

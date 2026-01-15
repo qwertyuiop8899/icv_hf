@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "all-debrid-api": "^1.2.0",
+    "node-fetch": "^2.7.0",
     "axios": "^1.6.2",
     "bittorrent-dht": "^11.0.11",
     "bittorrent-tracker": "^11.2.2",

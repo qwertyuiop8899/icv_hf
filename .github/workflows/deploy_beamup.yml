@@ -2,6 +2,8 @@ name: Deploy to Beamup
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   deploy:
@@ -14,12 +16,20 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
+      - name: Generate Beamup Hash
+        id: hash
+        run: |
+          # OFFICIAL LOGIC: echo (with newline) -> lowercase -> shasum -> cut 12
+          HASH=$(echo "${{ secrets.USERNAME_GITHUB }}" | awk '{print tolower($0)}' | shasum -a 256 | cut -c1-12)
+          echo "USER_HASH=$HASH" >> $GITHUB_ENV
+          echo "Generated Hash: $HASH"
+
       - name: Add Beamup Remote
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan ${{ secrets.BEAMUP_HOST }} >> ~/.ssh/known_hosts
-          # Standard Dokku format: dokku@HOST:PROJECT (Authentication handles user mapping)
-          git remote add beamup dokku@${{ secrets.BEAMUP_HOST }}:${{ secrets.PROJECT_NAME }}
+          # URL format: dokku@HOST:HASH/PROJECT
+          git remote add beamup dokku@${{ secrets.BEAMUP_HOST }}:${{ env.USER_HASH }}/${{ secrets.PROJECT_NAME }}
 
       - name: Deploy to Beamup
         run: |

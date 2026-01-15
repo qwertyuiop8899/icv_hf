@@ -7,20 +7,22 @@
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
-    "start": "node server.js",
-    "start:docker": "PORT=7860 node server.js"
+    "start": "node api/index.js",
+    "start:docker": "PORT=7860 node api/index.js"
   },
   "dependencies": {
     "all-debrid-api": "^1.2.0",
     "axios": "^1.6.2",
+    "bittorrent-dht": "^11.0.11",
+    "bittorrent-tracker": "^11.2.2",
     "cheerio": "^1.0.0-rc.12",
-    "express": "^4.18.2",
+    "dotenv": "^17.2.3",
+    "express": "^4.22.1",
     "fuzzball": "^2.2.3",
-    "pg": "^8.11.3"
+    "pg": "^8.16.3",
+    "webtorrent": "^2.8.5"
   },
   "devDependencies": {
     "vercel": "^34.2.0"
   }
 }
-
-

@@ -11,24 +11,33 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Deploy to Beamup
-        uses: bealearts/deploy-stremio-addons-to-beamup@v1
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-          beamup-host: ${{ secrets.BEAMUP_HOST }}
-          username: ${{ secrets.USERNAME_GITHUB }}
-          project-name: ${{ secrets.PROJECT_NAME }}
-          env: |
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            DB_USER=${{ secrets.DB_USER }}
-            DEBUG_MODE=${{ secrets.DEBUG_MODE }}
-            ENRICHMENT_API_KEY=${{ secrets.ENRICHMENT_API_KEY }}
-            ENRICHMENT_PORT=${{ secrets.ENRICHMENT_PORT }}
-            ENRICHMENT_SERVER_URL=${{ secrets.ENRICHMENT_SERVER_URL }}
-            ENRICHMENT_SERVER_URL_2=${{ secrets.ENRICHMENT_SERVER_URL_2 }}
-            SEEDER_UPDATE_URL=${{ secrets.SEEDER_UPDATE_URL }}
-            TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+
+      - name: Add Beamup Remote
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan ${{ secrets.BEAMUP_HOST }} >> ~/.ssh/known_hosts
+          git remote add beamup ssh://${{ secrets.USERNAME_GITHUB }}@${{ secrets.BEAMUP_HOST }}/${{ secrets.PROJECT_NAME }}
+
+      - name: Deploy to Beamup
+        run: |
+          # Create .env file for Beamup to use during build/start
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+          echo "DB_HOST=${{ secrets.DB_HOST }}" >> .env
+          echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+          echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env
+          echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+          echo "DEBUG_MODE=${{ secrets.DEBUG_MODE }}" >> .env
+          echo "ENRICHMENT_API_KEY=${{ secrets.ENRICHMENT_API_KEY }}" >> .env
+          echo "ENRICHMENT_PORT=${{ secrets.ENRICHMENT_PORT }}" >> .env
+          echo "ENRICHMENT_SERVER_URL=${{ secrets.ENRICHMENT_SERVER_URL }}" >> .env
+          echo "ENRICHMENT_SERVER_URL_2=${{ secrets.ENRICHMENT_SERVER_URL_2 }}" >> .env
+          echo "SEEDER_UPDATE_URL=${{ secrets.SEEDER_UPDATE_URL }}" >> .env
+          echo "TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}" >> .env
+          
+          # Force push to beamup master/main
+          git push beamup HEAD:master --force

@@ -18,7 +18,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan ${{ secrets.BEAMUP_HOST }} >> ~/.ssh/known_hosts
-          git remote add beamup ssh://${{ secrets.USERNAME_GITHUB }}@${{ secrets.BEAMUP_HOST }}/${{ secrets.PROJECT_NAME }}
+          git remote add beamup ssh://dokku@${{ secrets.BEAMUP_HOST }}/${{ secrets.PROJECT_NAME }}
 
       - name: Deploy to Beamup
         run: |

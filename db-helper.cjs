@@ -37,10 +37,10 @@ function initDatabase(config = {}) {
   });
 
   console.log('✅ PostgreSQL Pool initialized');
-  
+
   // Run migrations
   runMigrations().catch(err => console.error('❌ Migration error:', err.message));
-  
+
   return pool;
 }
 
@@ -49,7 +49,7 @@ function initDatabase(config = {}) {
  */
 async function runMigrations() {
   if (!pool) return;
-  
+
   try {
     // Add rd_link_index column to pack_files if not exists
     await pool.query(`
@@ -63,7 +63,7 @@ async function runMigrations() {
       console.error('⚠️ Migration warning:', error.message);
     }
   }
-  
+
   // 🚀 SPEEDUP: Add created_at column for TTL management (30 days)
   try {
     await pool.query(`
@@ -76,19 +76,19 @@ async function runMigrations() {
       console.error('⚠️ Migration warning (created_at):', error.message);
     }
   }
-  
+
   // 🔧 FIX: Create unique index on (pack_hash, file_index) for proper bulk insert
   try {
     // First drop the old constraint if it exists (on pack_hash, imdb_id)
     await pool.query(`
       ALTER TABLE pack_files DROP CONSTRAINT IF EXISTS pack_files_pack_hash_imdb_id_key
     `);
-    
+
     // 🔧 FIX: Drop foreign key constraint that causes errors when pack not in torrents yet
     await pool.query(`
       ALTER TABLE pack_files DROP CONSTRAINT IF EXISTS fk_pack_hash
     `);
-    
+
     // Create new unique index on (pack_hash, file_index)
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS pack_files_hash_fileindex_idx 
@@ -129,6 +129,8 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
         all_imdb_ids,
         cached_rd,
         last_cached_check,
+        cached_tb,
+        last_cached_check_tb,
         file_index,
         file_title
       FROM torrents 
@@ -192,6 +194,8 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
         all_imdb_ids,
         cached_rd,
         last_cached_check,
+        cached_tb,
+        last_cached_check_tb,
         file_index,
         file_title
       FROM torrents 
@@ -255,7 +259,9 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
         t.imdb_id,
         t.tmdb_id,
         t.cached_rd,
-        t.last_cached_check
+        t.last_cached_check,
+        t.cached_tb,
+        t.last_cached_check_tb
       FROM files f
       JOIN torrents t ON f.info_hash = t.info_hash
       WHERE f.imdb_id = $1 
@@ -317,8 +323,8 @@ async function insertTorrent(torrent) {
     await client.query(
       `INSERT INTO torrents (
         info_hash, provider, title, size, type, 
-        upload_date, seeders, imdb_id, tmdb_id
-      ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8)`,
+        upload_date, seeders, imdb_id, tmdb_id, cached_tb, last_cached_check_tb
+      ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9, $10)`,
       [
         torrent.infoHash,
         torrent.provider || 'ilcorsaronero',
@@ -327,7 +333,9 @@ async function insertTorrent(torrent) {
         torrent.type,
         torrent.seeders || 0,
         torrent.imdbId || null,
-        torrent.tmdbId || null
+        torrent.tmdbId || null,
+        torrent.cached_tb || null,
+        torrent.last_cached_check_tb || null
       ]
     );
 
@@ -361,7 +369,7 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
       if (!result.hash) continue;
 
       const hashLower = result.hash.toLowerCase();
-      
+
       // ✅ Get real title (not placeholder)
       const realTitle = result.torrent_title || result.file_title || null;
       const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
@@ -383,7 +391,7 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
         skipped++;
         continue; // Don't create garbage record
       }
-      
+
       // ✅ FIX: Never create new records without a real title
       // Only UPDATE existing records, never INSERT garbage placeholders
       if (!existsInDb && !realTitle) {
@@ -432,6 +440,83 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
 
   } catch (error) {
     console.error(`❌ [DB] Error updating RD cache:`, error.message);
+    return 0;
+  }
+}
+
+/**
+ * Update TB cache status for multiple hashes
+ * @param {Array} cacheResults - Array of {hash, cached} objects
+ * @returns {Promise<number>} Number of updated records
+ */
+async function updateTbCacheStatus(cacheResults, mediaType = null) {
+  if (!pool) throw new Error('Database not initialized');
+  if (!cacheResults || cacheResults.length === 0) return 0;
+
+  try {
+    let updated = 0;
+    let skipped = 0;
+
+    for (const result of cacheResults) {
+      if (!result.hash) continue;
+
+      const hashLower = result.hash.toLowerCase();
+
+      const realTitle = result.torrent_title || result.file_title || null;
+      const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+      const torrentSize = result.size || result.file_size || null;
+
+      const existsCheck = await pool.query(
+        'SELECT info_hash, provider FROM torrents WHERE info_hash = $1',
+        [hashLower]
+      );
+      const existsInDb = existsCheck.rows.length > 0;
+
+      if (!existsInDb && cachedValue === false) {
+        skipped++;
+        continue;
+      }
+
+      if (!existsInDb && !realTitle) {
+        skipped++;
+        continue;
+      }
+
+      const titleToSave = realTitle || null;
+
+      const upsertQuery = `
+        INSERT INTO torrents (
+          info_hash, provider, title, type, upload_date, 
+          cached_tb, last_cached_check_tb, file_title, size
+        )
+        VALUES ($1, 'tb_cache', $2, $6, NOW(), $3, NOW(), $4, $5)
+        ON CONFLICT (info_hash) DO UPDATE SET
+          cached_tb = EXCLUDED.cached_tb,
+          last_cached_check_tb = NOW(),
+          file_title = COALESCE(NULLIF(EXCLUDED.file_title, ''), torrents.file_title),
+          size = COALESCE(EXCLUDED.size, torrents.size),
+          title = CASE WHEN torrents.provider = 'tb_cache' THEN COALESCE(EXCLUDED.title, torrents.title) ELSE torrents.title END,
+          type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
+      `;
+
+      const params = [
+        hashLower,                           // $1
+        titleToSave || 'PLACEHOLDER',        // $2
+        cachedValue,                         // $3 cached_tb
+        result.file_title || null,           // $4
+        torrentSize,                         // $5
+        mediaType || 'unknown'               // $6
+      ];
+
+      const res = await pool.query(upsertQuery, params);
+      updated += res.rowCount;
+    }
+
+    if (DEBUG_MODE) console.log(`✅ [DB] Updated TB cache status for ${updated} torrents`);
+    return updated;
+
+  } catch (error) {
+    console.error(`❌ [DB] Error updating TB cache:`, error.message);
     return 0;
   }
 }
@@ -488,6 +573,50 @@ async function getRdCachedAvailability(hashes) {
 }
 
 /**
+ * Get cached TB availability for hashes (within 10 days)
+ * @param {Array} hashes - Array of info hashes
+ * @returns {Promise<Object>} Map of hash -> {cached: boolean, lastCheck: Date}
+ */
+async function getTbCachedAvailability(hashes) {
+  if (!pool) throw new Error('Database not initialized');
+  if (!hashes || hashes.length === 0) return {};
+
+  try {
+    const lowerHashes = hashes.map(h => h.toLowerCase());
+
+    const query = `
+      SELECT info_hash, cached_tb, last_cached_check_tb, file_title, size
+      FROM torrents
+      WHERE info_hash = ANY($1)
+        AND cached_tb IS NOT NULL
+        AND last_cached_check_tb IS NOT NULL
+        AND last_cached_check_tb > NOW() - INTERVAL '10 days'
+    `;
+
+    const result = await pool.query(query, [lowerHashes]);
+
+    const cachedMap = {};
+    result.rows.forEach(row => {
+      cachedMap[row.info_hash] = {
+        cached: row.cached_tb,
+        lastCheck: row.last_cached_check_tb,
+        fromCache: true,
+        file_title: row.file_title || null,
+        size: row.size ? parseInt(row.size) : null
+      };
+    });
+
+    if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length}/${hashes.length} hashes with valid TB cache (< 10 days)`);
+
+    return cachedMap;
+
+  } catch (error) {
+    console.error(`❌ [DB] Error getting TB cached availability:`, error.message);
+    return {};
+  }
+}
+
+/**
  * Refresh RD cache timestamp when user plays a cached file
  * This extends the cache validity to 10 more days
  * @param {string} infoHash - The torrent hash to refresh
@@ -511,6 +640,34 @@ async function refreshRdCacheTimestamp(infoHash) {
     return result.rowCount > 0;
   } catch (error) {
     console.error(`❌ [DB] Error refreshing RD cache timestamp:`, error.message);
+    return false;
+  }
+}
+
+/**
+ * Refresh TB cache timestamp when user plays a cached file
+ * This extends the cache validity to 10 more days
+ * @param {string} infoHash - The torrent hash to refresh
+ * @returns {Promise<boolean>} Success status
+ */
+async function refreshTbCacheTimestamp(infoHash) {
+  if (!pool) return false;
+  if (!infoHash) return false;
+
+  try {
+    const query = `
+      UPDATE torrents 
+      SET last_cached_check_tb = NOW()
+      WHERE info_hash = $1 AND cached_tb = true
+    `;
+    const result = await pool.query(query, [infoHash.toLowerCase()]);
+
+    if (result.rowCount > 0) {
+      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed TB cache timestamp for ${infoHash.substring(0, 8)}... (+10 days)`);
+    }
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error(`❌ [DB] Error refreshing TB cache timestamp:`, error.message);
     return false;
   }
 }
@@ -543,9 +700,10 @@ async function batchInsertTorrents(torrents) {
         const query = `
           INSERT INTO torrents (
             info_hash, provider, title, size, type, upload_date, 
-            seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index
+            seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index,
+            cached_tb, last_cached_check_tb
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           ON CONFLICT (info_hash) DO UPDATE SET
             imdb_id = COALESCE(torrents.imdb_id, EXCLUDED.imdb_id),
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
@@ -561,7 +719,17 @@ async function batchInsertTorrents(torrents) {
               THEN GREATEST(EXCLUDED.last_cached_check, COALESCE(torrents.last_cached_check, EXCLUDED.last_cached_check))
               ELSE torrents.last_cached_check
             END,
-            file_index = COALESCE(EXCLUDED.file_index, torrents.file_index)
+            file_index = COALESCE(EXCLUDED.file_index, torrents.file_index),
+            cached_tb = CASE 
+              WHEN torrents.cached_tb = true THEN true
+              WHEN EXCLUDED.cached_tb = true THEN true
+              ELSE COALESCE(torrents.cached_tb, EXCLUDED.cached_tb)
+            END,
+            last_cached_check_tb = CASE 
+              WHEN EXCLUDED.last_cached_check_tb IS NOT NULL 
+              THEN GREATEST(EXCLUDED.last_cached_check_tb, COALESCE(torrents.last_cached_check_tb, EXCLUDED.last_cached_check_tb))
+              ELSE torrents.last_cached_check_tb
+            END
         `;
 
         const values = [
@@ -576,7 +744,9 @@ async function batchInsertTorrents(torrents) {
           torrent.tmdb_id,
           torrent.cached_rd,
           torrent.last_cached_check,
-          torrent.file_index
+          torrent.file_index,
+          torrent.cached_tb || null,
+          torrent.last_cached_check_tb || null
         ];
 
         const res = await pool.query(query, values);
@@ -742,7 +912,7 @@ async function deleteFileInfo(infoHash) {
  */
 async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
   if (!pool) throw new Error('Database not initialized');
-  
+
   try {
     const query = `
       UPDATE files 
@@ -750,12 +920,12 @@ async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
       WHERE info_hash = $1 AND file_index = $2
     `;
     const res = await pool.query(query, [infoHash.toLowerCase(), fileIndex, rdLinkIndex]);
-    
+
     if (res.rowCount > 0) {
-      if (DEBUG_MODE) console.log(`✅ [DB] Saved rd_link_index=${rdLinkIndex} for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      if (DEBUG_MODE) console.log(`✅ [DB] Saved rd_link_index=${rdLinkIndex} for ${infoHash.substring(0, 8)}... file_index=${fileIndex}`);
       return true;
     } else {
-      if (DEBUG_MODE) console.warn(`⚠️ [DB] No file found to update rd_link_index for ${infoHash.substring(0,8)}... file_index=${fileIndex}`);
+      if (DEBUG_MODE) console.warn(`⚠️ [DB] No file found to update rd_link_index for ${infoHash.substring(0, 8)}... file_index=${fileIndex}`);
       return false;
     }
   } catch (error) {
@@ -775,7 +945,7 @@ async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
  */
 async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename) {
   if (!pool) throw new Error('Database not initialized');
-  
+
   try {
     // Update pack_files table with rd_link_index
     const query = `
@@ -784,7 +954,7 @@ async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename)
       WHERE pack_hash = $1 AND file_index = $2
     `;
     const res = await pool.query(query, [infoHash.toLowerCase(), fileId, rdLinkIndex]);
-    
+
     if (res.rowCount > 0) {
       if (DEBUG_MODE) console.log(`✅ [DB] Pack: Saved rd_link_index=${rdLinkIndex} for file_id=${fileId} (${filename})`);
       return true;
@@ -1031,7 +1201,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
       .replace(/[^a-z0-9\s]/g, ' ')  // Remove special chars
       .replace(/\s+/g, '%')          // Replace spaces with wildcards
       .trim();
-    
+
     const searchPattern = `%${cleanTitle}%`;
     const yearPattern = year ? `%${year}%` : null;
 
@@ -1062,7 +1232,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
 
     const params = yearPattern ? [searchPattern, yearPattern] : [searchPattern];
     const result = await pool.query(query, params);
-    
+
     console.log(`   ✅ Found ${result.rows.length} pack file(s) matching "${title}"`);
 
     // If we found matches and have an imdbId, update pack_files to add the mapping
@@ -1074,7 +1244,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
             SET imdb_id = $1 
             WHERE pack_hash = $2 AND file_index = $3 AND (imdb_id IS NULL OR imdb_id = '')
           `, [imdbId, row.info_hash, row.file_index]);
-          
+
           // Also update all_imdb_ids on torrents table
           await pool.query(`
             UPDATE torrents 
@@ -1082,8 +1252,8 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
             WHERE info_hash = $2 
               AND NOT (COALESCE(all_imdb_ids, '[]'::jsonb) @> $1::jsonb)
           `, [JSON.stringify(imdbId), row.info_hash]);
-          
-          if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0,8)}... file_idx=${row.file_index}`);
+
+          if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0, 8)}... file_idx=${row.file_index}`);
         } catch (updateErr) {
           // Ignore update errors (e.g., constraint violations)
         }
@@ -1154,22 +1324,22 @@ async function getPackFiles(packHash, ttlDays = 30) {
     `;
 
     const result = await pool.query(query, [packHash]);
-    
+
     if (result.rows.length === 0) {
       return { files: [], expired: false };
     }
-    
+
     // Check TTL using first row's created_at
     const createdAt = result.rows[0].created_at;
     const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
     const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
     const expired = ageMs > ttlMs;
-    
+
     if (expired) {
       console.log(`⏰ [DB] Pack files for ${packHash.substring(0, 8)} expired (${Math.floor(ageMs / 86400000)} days > ${ttlDays})`);
     }
-    
-    return { 
+
+    return {
       files: result.rows,
       expired,
       ageInDays: Math.floor(ageMs / 86400000)
@@ -1292,7 +1462,7 @@ async function getSeriesPackFiles(infoHash) {
 
   try {
     const hashLower = infoHash.toLowerCase();
-    
+
     // 1️⃣ PRIORITY: Check pack_files first (has correct RD file.id indices)
     const packFilesQuery = `
       SELECT file_index as id, file_path as path, file_size as bytes
@@ -1301,7 +1471,7 @@ async function getSeriesPackFiles(infoHash) {
       ORDER BY file_path ASC
     `;
     const packResult = await pool.query(packFilesQuery, [hashLower]);
-    
+
     if (packResult.rows.length > 0) {
       if (DEBUG_MODE) console.log(`💾 [DB] Found ${packResult.rows.length} files in pack_files for ${infoHash.substring(0, 8)}`);
       return packResult.rows.map(row => ({
@@ -1311,7 +1481,7 @@ async function getSeriesPackFiles(infoHash) {
         selected: 1
       }));
     }
-    
+
     // 2️⃣ FALLBACK: Check files table (for series packs)
     const filesQuery = `
       SELECT file_index as id, title as path, size as bytes
@@ -1320,11 +1490,11 @@ async function getSeriesPackFiles(infoHash) {
       ORDER BY file_index ASC
     `;
     const filesResult = await pool.query(filesQuery, [hashLower]);
-    
+
     if (filesResult.rows.length > 0) {
       if (DEBUG_MODE) console.log(`💾 [DB] Found ${filesResult.rows.length} files in files table for ${infoHash.substring(0, 8)}`);
     }
-    
+
     return filesResult.rows.map(row => ({
       id: row.id,
       path: row.path,
@@ -1401,7 +1571,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     query += ' ORDER BY t.cached_rd DESC NULLS LAST, t.seeders DESC LIMIT 20';
     const result = await pool.query(query, params);
     if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
-    
+
     // 🔧 AUTO-INDEX: Update files.imdb_id when we find matches by title
     // This allows future searches to find files directly by IMDb ID
     if (result.rows.length > 0 && movieImdbId) {
@@ -1412,14 +1582,14 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
               'UPDATE files SET imdb_id = $1 WHERE info_hash = $2 AND file_index = $3 AND imdb_id IS NULL',
               [movieImdbId, row.info_hash, row.file_index]
             );
-            if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0,8)}`);
+            if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${movieImdbId} -> file "${row.file_title}" in ${row.info_hash.substring(0, 8)}`);
           } catch (updateErr) {
             // Ignore update errors
           }
         }
       }
     }
-    
+
     return result.rows;
   };
 
@@ -1479,7 +1649,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
     const result = await pool.query(query, params);
     if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (FTS) for "${titleQuery}"`);
-    
+
     // 🔧 FIX: If FTS returns 0 results, also try ILIKE fallback
     // This is needed for file titles like "(2013) Frozen.mkv" where FTS doesn't index well
     if (result.rows.length > 0) {
@@ -1508,7 +1678,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
  */
 async function deletePackFilesCache(infoHash) {
   if (!pool) throw new Error('Database not initialized');
-  
+
   try {
     const hashLower = infoHash.toLowerCase();
     const result = await pool.query(
@@ -1535,7 +1705,7 @@ async function deletePackFilesCache(infoHash) {
  */
 async function getTorrentSearchCache(cacheKey, ttlHours = 6) {
   if (!pool) return null;
-  
+
   try {
     const result = await pool.query(`
       SELECT filtered_results, media_details, season, episode, imdb_id, created_at
@@ -1543,15 +1713,15 @@ async function getTorrentSearchCache(cacheKey, ttlHours = 6) {
       WHERE cache_key = $1
         AND created_at > NOW() - INTERVAL '${ttlHours} hours'
     `, [cacheKey]);
-    
+
     if (result.rows.length === 0) {
       return null;
     }
-    
+
     const row = result.rows[0];
     const ageMinutes = Math.round((Date.now() - new Date(row.created_at).getTime()) / 60000);
     console.log(`💾 [DB CACHE HIT] Key: ${cacheKey.substring(0, 50)}... | Age: ${ageMinutes}m`);
-    
+
     return {
       filteredResults: row.filtered_results,
       mediaDetails: row.media_details,
@@ -1574,7 +1744,7 @@ async function getTorrentSearchCache(cacheKey, ttlHours = 6) {
  */
 async function setTorrentSearchCache(cacheKey, data) {
   if (!pool) return false;
-  
+
   try {
     await pool.query(`
       INSERT INTO torrent_search_cache 
@@ -1596,7 +1766,7 @@ async function setTorrentSearchCache(cacheKey, data) {
       data.episode || null,
       data.imdbId || null
     ]);
-    
+
     console.log(`💾 [DB CACHE SAVE] Key: ${cacheKey.substring(0, 50)}... | Results: ${data.filteredResults?.length || 0}`);
     return true;
   } catch (error) {
@@ -1612,13 +1782,13 @@ async function setTorrentSearchCache(cacheKey, data) {
  */
 async function cleanupTorrentSearchCache(ttlHours = 6) {
   if (!pool) return 0;
-  
+
   try {
     const result = await pool.query(`
       DELETE FROM torrent_search_cache
       WHERE created_at < NOW() - INTERVAL '${ttlHours} hours'
     `);
-    
+
     if (result.rowCount > 0) {
       console.log(`🧹 [DB Cache] Cleaned up ${result.rowCount} expired entries`);
     }
@@ -1639,6 +1809,9 @@ module.exports = {
   updateRdCacheStatus,
   getRdCachedAvailability,
   refreshRdCacheTimestamp,
+  updateTbCacheStatus,
+  getTbCachedAvailability,
+  refreshTbCacheTimestamp,
   batchInsertTorrents,
   updateTorrentFileInfo,
   deleteFileInfo,

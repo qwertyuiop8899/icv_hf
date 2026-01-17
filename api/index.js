@@ -8293,33 +8293,38 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         if (itemsToCheck.length > 0) {
                             const dbCachedCount = hashes.filter(h => dbCachedResults[h]?.cached === true).length;
-                            const syncLimit = Math.max(0, 5 - dbCachedCount);
+                            const syncLimit = Math.max(0, 20 - dbCachedCount);
                             const syncItems = itemsToCheck.slice(0, syncLimit);
 
                             if (syncItems.length > 0) {
-                                if (DEBUG_MODE) console.log(`⏩ [TB Cache] Running background check for ${syncItems.length} items...`);
-                                tbCacheChecker.checkCacheSync(syncItems, config.torbox_key, syncLimit)
-                                    .then(async (liveCheckResults) => {
-                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
-                                            const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                                            if (originalResult?.skipDbSave) return null;
-                                            return {
-                                                hash,
-                                                cached: data.cached,
-                                                file_title: data.file_title || null,
-                                                file_size: data.file_size || null
-                                            };
-                                        }).filter(Boolean);
+                                console.log(`🔍 [TB Live Check] Checking ${syncItems.length} torrents via API...`);
+                                try {
+                                    // ✅ AWAIT: Wait for live check results to include in current response
+                                    const liveCheckResults = await tbCacheChecker.checkCacheSync(syncItems, config.torbox_key, syncLimit);
 
-                                        if (liveResultsToSave.length > 0 && dbEnabled) {
-                                            await dbHelper.updateTbCacheStatus(liveResultsToSave, type);
-                                            console.log(`💾 [DB TB] Saved ${liveResultsToSave.length} background live check results`);
-                                        }
+                                    // Save to DB
+                                    const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
+                                        const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                        if (originalResult?.skipDbSave) return null;
+                                        return {
+                                            hash,
+                                            cached: data.cached,
+                                            file_title: data.file_title || null,
+                                            file_size: data.file_size || null
+                                        };
+                                    }).filter(Boolean);
 
-                                        // Merge into valid results for current response
-                                        Object.assign(torboxCacheResults, liveCheckResults);
-                                    })
-                                    .catch(err => console.warn(`⚠️ [TB Cache] Background check failed: ${err.message}`));
+                                    if (liveResultsToSave.length > 0 && dbEnabled) {
+                                        await dbHelper.updateTbCacheStatus(liveResultsToSave, type);
+                                        console.log(`💾 [DB TB] Saved ${liveResultsToSave.length} live check results`);
+                                    }
+
+                                    // ✅ Merge into results for CURRENT response
+                                    Object.assign(torboxCacheResults, liveCheckResults);
+                                    console.log(`✅ [TB Live Check] ${Object.values(liveCheckResults).filter(r => r.cached).length}/${syncItems.length} cached`);
+                                } catch (err) {
+                                    console.warn(`⚠️ [TB Cache] Live check failed: ${err.message}`);
+                                }
                             }
 
                             const asyncItems = itemsToCheck.slice(syncLimit);

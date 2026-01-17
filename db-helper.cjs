@@ -624,7 +624,7 @@ async function getTbCachedAvailability(hashes) {
 
 /**
  * Refresh RD cache timestamp when user plays a cached file
- * This extends the cache validity to 10 more days
+ * This extends the cache validity to 25 days total (NOW + 18 days + 7 day validity)
  * @param {string} infoHash - The torrent hash to refresh
  * @returns {Promise<boolean>} Success status
  */
@@ -635,13 +635,13 @@ async function refreshRdCacheTimestamp(infoHash) {
   try {
     const query = `
       UPDATE torrents 
-      SET last_cached_check = NOW()
+      SET last_cached_check = NOW() + INTERVAL '18 days'
       WHERE info_hash = $1 AND cached_rd = true
     `;
     const result = await pool.query(query, [infoHash.toLowerCase()]);
 
     if (result.rowCount > 0) {
-      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed RD cache timestamp for ${infoHash.substring(0, 8)}... (+10 days)`);
+      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed RD cache timestamp for ${infoHash.substring(0, 8)}... (+25 days total)`);
     }
     return result.rowCount > 0;
   } catch (error) {
@@ -652,7 +652,7 @@ async function refreshRdCacheTimestamp(infoHash) {
 
 /**
  * Refresh TB cache timestamp when user plays a cached file
- * This extends the cache validity to 10 more days
+ * This extends the cache validity to 25 days total (NOW + 18 days + 7 day validity)
  * @param {string} infoHash - The torrent hash to refresh
  * @returns {Promise<boolean>} Success status
  */
@@ -663,13 +663,13 @@ async function refreshTbCacheTimestamp(infoHash) {
   try {
     const query = `
       UPDATE torrents 
-      SET last_cached_check_tb = NOW()
+      SET last_cached_check_tb = NOW() + INTERVAL '18 days'
       WHERE info_hash = $1 AND cached_tb = true
     `;
     const result = await pool.query(query, [infoHash.toLowerCase()]);
 
     if (result.rowCount > 0) {
-      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed TB cache timestamp for ${infoHash.substring(0, 8)}... (+10 days)`);
+      if (DEBUG_MODE) console.log(`🔄 [DB] Refreshed TB cache timestamp for ${infoHash.substring(0, 8)}... (+25 days total)`);
     }
     return result.rowCount > 0;
   } catch (error) {

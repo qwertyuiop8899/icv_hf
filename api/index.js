@@ -6861,7 +6861,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         filename: fileName || torrentTitle,
                         source: `💾 ${dbResult.provider || 'Database'}`,
                         fileIndex: finalFileIndex, // For series episodes and pack movies
-                        file_title: fileName // Real filename from DB (only for specific episode)
+                        file_title: fileName, // Real filename from DB (only for specific episode)
+                        trusted: true // ✅ DB results are pre-verified, skip strict year check
                     });
 
                     // DEBUG: Log file info from DB
@@ -7306,6 +7307,39 @@ async function handleStream(type, id, config, workerOrigin) {
                     // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
                     // 2. Season/Episode format (S03E01) - fallback for season-based packs
                     // CRITICAL: episodeNum parameter = SEASON episode (not absolute!)
+
+                    // ✅ SMART YEAR CHECK: Only enforce year if title similarity < 80% AND not trusted
+                    // This fixes: Masterchef Italia S15 (2025) vs series start year (2011)
+                    // But still protects: Spartacus (2010) vs Spartacus House of Ashur (2025)
+                    let requiredYear = null;
+                    if (!result.trusted && mediaDetails.year) {
+                        // Calculate title similarity to decide if year check is needed
+                        const resultTitle = (result.title || result.websiteTitle || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                        const searchTitles = Array.isArray(mediaDetails.titles) ? mediaDetails.titles : [mediaDetails.title];
+                        const maxSimilarity = searchTitles.reduce((max, searchTitle) => {
+                            const cleanSearch = (searchTitle || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                            // Simple similarity: containment check + word overlap
+                            if (resultTitle.includes(cleanSearch) || cleanSearch.includes(resultTitle)) {
+                                return Math.max(max, 0.85); // High similarity if one contains the other
+                            }
+                            const searchWords = cleanSearch.split(' ').filter(w => w.length > 2);
+                            const resultWords = resultTitle.split(' ').filter(w => w.length > 2);
+                            const matchingWords = searchWords.filter(w => resultWords.includes(w));
+                            const similarity = searchWords.length > 0 ? matchingWords.length / searchWords.length : 0;
+                            return Math.max(max, similarity);
+                        }, 0);
+
+                        // Only enforce year check if similarity < 80% (ambiguous match)
+                        if (maxSimilarity < 0.80) {
+                            requiredYear = mediaDetails.year;
+                            if (DEBUG_MODE) console.log(`    🔍 [Year Check] "${result.title?.substring(0, 40)}..." similarity=${(maxSimilarity * 100).toFixed(0)}% < 80%, checking year`);
+                        } else {
+                            if (DEBUG_MODE) console.log(`    ⏩ [Year Skip] "${result.title?.substring(0, 40)}..." similarity=${(maxSimilarity * 100).toFixed(0)}% >= 80%, ignoring year`);
+                        }
+                    } else if (result.trusted) {
+                        if (DEBUG_MODE) console.log(`    ⏩ [Year Skip] "${result.title?.substring(0, 40)}..." is TRUSTED (DB), ignoring year`);
+                    }
+
                     const match = isExactEpisodeMatch(
                         result.title || result.websiteTitle,
                         mediaDetails.titles || mediaDetails.title,
@@ -7314,7 +7348,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         !!kitsuId,
                         mediaDetails.absoluteEpisode, // Absolute episode (e.g., 38)
                         false, // skipTitleCheck default
-                        mediaDetails.year // ✅ Pass requiredYear
+                        requiredYear // ✅ Smart year check (null if trusted or high similarity)
                     );
 
                     if (!match) {
@@ -11565,6 +11599,7 @@ export default async function handler(req, res) {
             const episodeOrFileIdxOrTitle = pathParts[5] ? pathParts[5] : null; // episode number, fileIdx, filename, or movie title
             const yearIfMovie = pathParts[6] ? pathParts[6] : null; // year for movie pack resolution
             const workerOrigin = url.origin; // For placeholder video URLs
+            const dbEnabled = !!process.env.DATABASE_URL;
 
             // Determine type and extract parameters (same logic as RD)
             let packFileIdx = null;

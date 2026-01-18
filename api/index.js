@@ -8059,6 +8059,79 @@ async function handleStream(type, id, config, workerOrigin) {
         // ✅ POST-CACHE FILTERS: Applied to BOTH cache hit AND cache miss results
         // ═══════════════════════════════════════════════════════════════════════════════
 
+        // 🛡️ ADVANCED FILTERS (User Preferences: Quality & Size)
+        const hasAdvancedFilters = config.exclude_4k || config.exclude_1080p || config.exclude_720p || config.exclude_sd || config.exclude_remux || config.exclude_unknown || config.max_size;
+
+        if (hasAdvancedFilters && filteredResults.length > 0) {
+            const beforeCount = filteredResults.length;
+            filteredResults = filteredResults.filter(result => {
+                const title = (result.title || result.websiteTitle || result.filename || '').toLowerCase();
+                const filename = (result.filename || title).toLowerCase(); // Fallback to title
+
+                // --- 1. QUALITY FILTER (Exclusion) ---
+                if (config.exclude_4k) {
+                    if (/\b(2160p?|4k|uhd)\b/i.test(title) || /\b(2160p?|4k|uhd)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_1080p) {
+                    if (/\b(1080p?|fhd|full\s?hd)\b/i.test(title) || /\b(1080p?|fhd|full\s?hd)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_720p) {
+                    // Removed 'hd' to avoid false positives with 'Full HD' (1080p)
+                    if (/\b(720p?)\b/i.test(title) || /\b(720p?)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_sd) {
+                    // Logic: Exclude ONLY explicit SD/CAM tags.
+                    // Unknown quality (no tags) -> ALLOW (Safe Pass)
+                    if (/\b(480p?|576p?|sd|cam|ts|screener|telecine|r5|dvdscr|vhs)\b/i.test(title) ||
+                        /\b(480p?|576p?|sd|cam|ts|screener|telecine|r5|dvdscr|vhs)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_remux) {
+                    if (/\b(remux)\b/i.test(title) || /\b(remux)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_unknown) {
+                    // Check if ANY known quality tag is present
+                    const hasUnknownQuality = !/\b(2160p?|4k|uhd|1080p?|fhd|full\s?hd|720p?|hd|480p?|576p?|sd|cam|ts|screener|telecine|r5|dvdscr|vhs)\b/i.test(title) &&
+                        !/\b(2160p?|4k|uhd|1080p?|fhd|full\s?hd|720p?|hd|480p?|576p?|sd|cam|ts|screener|telecine|r5|dvdscr|vhs)\b/i.test(filename);
+                    if (hasUnknownQuality) return false;
+                }
+
+                // --- 2. SIZE LIMIT FILTER ---
+                if (config.max_size > 0) {
+                    const maxBytes = config.max_size * 1024 * 1024 * 1024;
+
+                    // Determine which size to check
+                    // - result.file_size = size of the specific resolved file in a pack (ACCURATE)
+                    // - result.sizeInBytes = usually total torrent size
+                    let sizeToCheck = result.file_size || result.sizeInBytes;
+
+                    // SAFETY CHECK FOR PACKS:
+                    // If it's a pack (Series or Collection) AND we don't have the specific 'file_size',
+                    // then 'sizeToCheck' is the TOTAL pack size (e.g. 100GB).
+                    // We must NOT filter this out because the episode might be small (2GB).
+                    // How do we know if it's a pack?
+                    const isPack = result.fileIndex !== undefined || // It has an index, so it came from a pack logic
+                        /\b(trilog|saga|collection|pack|complete|season)\b/i.test(title) ||
+                        (type === 'series'); // Series search always implies pack potential
+
+                    // If it is a pack/series result AND we rely on the TOTAL size (no specific file_size),
+                    // we allow it to pass (Safe Pass).
+                    if (isPack && !result.file_size) {
+                        return true; // SKIP size check (Safe Pass)
+                    }
+
+                    // Otherwise (Single Movie or Resolved Pack File), check size
+                    if (sizeToCheck && sizeToCheck > maxBytes) {
+                        return false; // Too big
+                    }
+                }
+
+                return true;
+            });
+            if (DEBUG_MODE && filteredResults.length < beforeCount) {
+                console.log(`🛡️ [Advanced Filters] Hidden ${beforeCount - filteredResults.length} results (Quality/Size). Remaining: ${filteredResults.length}`);
+            }
+        }
+
         // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
         if (config.full_ita) {
             const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];

@@ -645,6 +645,25 @@
             <div class="service-card two-rows">
                 <div class="section-title">🔎 Siti di Ricerca Torrent</div>
                 <small>Seleziona su quali siti cercare i torrent:</small>
+
+                <!-- Configurazioni Consigliate -->
+                <div
+                    style="margin: 15px 0; padding: 10px; background: rgba(255, 0, 0, 0.1); border: 1px solid rgba(255, 0, 0, 0.3); border-radius: 8px; text-align: center;">
+                    <div
+                        style="color: #ff4444; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; font-size: 0.9em;">
+                        !!! Configurazioni Consigliate (installare tutte e due) !!!
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button type="button" id="preset_install_1"
+                            style="font-size: 0.9em; padding: 8px; background: linear-gradient(135deg, #4f46e5, #4338ca);">
+                            Installazione 1
+                        </button>
+                        <button type="button" id="preset_install_2"
+                            style="font-size: 0.9em; padding: 8px; background: linear-gradient(135deg, #059669, #047857);">
+                            Installazione 2
+                        </button>
+                    </div>
+                </div>
                 <div class="search-sites">
                     <label>
                         <input type="checkbox" id="use_corsaronero" checked>
@@ -690,22 +709,7 @@
                         <input type="checkbox" id="use_global_cache" checked>
                         <span>💾 Usa Cache Globale (Ricerche più veloci, condivise)</span>
                     </label>
-                    <label>
-                        <input type="checkbox" id="use_max_res_limit">
-                        <span>✂️ Limita Risultati per Risoluzione</span>
-                        <select id="max_res_limit"
-                            style="margin-left: auto; width: 50px; background: rgba(10, 10, 26, 0.6); color: white; border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; padding: 4px; cursor: pointer;"
-                            disabled>
-                            <option value="1">1</option>
-                            <option value="2">2</option>
-                            <option value="3" selected>3</option>
-                            <option value="4">4</option>
-                            <option value="5">5</option>
-                            <option value="10">10</option>
-                            <option value="15">15</option>
-                            <option value="20">20</option>
-                        </select>
-                    </label>
+
                 </div>
             </div>
 
@@ -748,6 +752,11 @@
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             <label
                                 style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                                <input type="checkbox" id="exclude_remux" style="margin-right: 8px;"> <span>BluRay
+                                    REMUX</span>
+                            </label>
+                            <label
+                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
                                 <input type="checkbox" id="exclude_4k" style="margin-right: 8px;"> <span>4K / UHD</span>
                             </label>
                             <label
@@ -761,11 +770,6 @@
                             <label
                                 style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
                                 <input type="checkbox" id="exclude_sd" style="margin-right: 8px;"> <span>SD / CAM</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_remux" style="margin-right: 8px;"> <span>BluRay
-                                    REMUX</span>
                             </label>
                             <label
                                 style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
@@ -793,6 +797,32 @@
                             <small style="display: block; margin-top: 4px; color: #6b7280; font-size: 0.75em;">*Non
                                 limita i Pack Serie</small>
                         </div>
+
+                        <!-- Limit by Resolution Count -->
+                        <div
+                            style="margin-top: 15px; background: rgba(10, 10, 26, 0.4); padding: 15px; border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                            <label
+                                style="display: flex; align-items: center; justify-content: center; margin-bottom: 10px; cursor: pointer;">
+                                <input type="checkbox" id="use_max_res_limit" style="margin-right: 8px;">
+                                <span style="font-size: 0.9em; color: #e0e0e0;">✂️ Limita Num. Risultati</span>
+                            </label>
+
+                            <div style="display: flex; justify-content: center; align-items: center; gap: 8px;">
+                                <span style="font-size: 0.8em; color: #9ca3af;">Max per risoluzione:</span>
+                                <select id="max_res_limit"
+                                    style="width: 60px; text-align: center; padding: 6px; border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.4); background: rgba(20, 20, 40, 0.6); color: white;"
+                                    disabled>
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="3" selected>3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                    <option value="10">10</option>
+                                    <option value="15">15</option>
+                                    <option value="20">20</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- COL 3: Features & Modes -->
@@ -817,7 +847,8 @@
                                 <input type="checkbox" id="introskip_enabled" style="margin-right: 10px;">
                                 <div>
                                     <div style="font-size: 0.95em; font-weight: bold;">⏩ IntroSkip</div>
-                                    <small style="color: #9ca3af; font-size: 0.75em;">Salta Intro (VIMU/Stremio)</small>
+                                    <small style="color: #9ca3af; font-size: 0.75em;">Salta Intro (Solo player VIMU o
+                                        Stremio app IOS)</small>
                                 </div>
                             </label>
 
@@ -1073,11 +1104,11 @@
                     }
 
                     // Advanced Filters
+                    if (document.getElementById('exclude_remux').checked) config.exclude_remux = true;
                     if (document.getElementById('exclude_4k').checked) config.exclude_4k = true;
                     if (document.getElementById('exclude_1080p').checked) config.exclude_1080p = true;
                     if (document.getElementById('exclude_720p').checked) config.exclude_720p = true;
                     if (document.getElementById('exclude_sd').checked) config.exclude_sd = true;
-                    if (document.getElementById('exclude_remux').checked) config.exclude_remux = true;
                     if (document.getElementById('exclude_unknown').checked) config.exclude_unknown = true;
 
                     const maxSizeVal = document.getElementById('max_size').value;
@@ -1341,11 +1372,11 @@
                         }
 
                         // Advanced Filters Loading
+                        if (cfg.exclude_remux) document.getElementById('exclude_remux').checked = true;
                         if (cfg.exclude_4k) document.getElementById('exclude_4k').checked = true;
                         if (cfg.exclude_1080p) document.getElementById('exclude_1080p').checked = true;
                         if (cfg.exclude_720p) document.getElementById('exclude_720p').checked = true;
                         if (cfg.exclude_sd) document.getElementById('exclude_sd').checked = true;
-                        if (cfg.exclude_remux) document.getElementById('exclude_remux').checked = true;
                         if (cfg.exclude_unknown) document.getElementById('exclude_unknown').checked = true;
                         if (cfg.max_size) document.getElementById('max_size').value = cfg.max_size;
 
@@ -1422,11 +1453,11 @@
                 useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
 
                 // Advanced Filters Listeners
+                document.getElementById('exclude_remux').addEventListener('change', updateInstallLink);
                 document.getElementById('exclude_4k').addEventListener('change', updateInstallLink);
                 document.getElementById('exclude_1080p').addEventListener('change', updateInstallLink);
                 document.getElementById('exclude_720p').addEventListener('change', updateInstallLink);
                 document.getElementById('exclude_sd').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_remux').addEventListener('change', updateInstallLink);
                 document.getElementById('exclude_unknown').addEventListener('change', updateInstallLink);
                 document.getElementById('max_size').addEventListener('input', updateInstallLink);
 
@@ -1528,6 +1559,47 @@
                     setTimeout(() => {
                         formatterSaveStatus.textContent = '';
                     }, 3000);
+                });
+
+                // Recommended Configurations Presets
+                document.getElementById('preset_install_1').addEventListener('click', () => {
+                    // Installazione 1: All providers ON, DB Only OFF, Full ITA OFF
+                    useCorsaroNeroCheckbox.checked = true;
+                    useUIndexCheckbox.checked = false;
+                    useKnabenCheckbox.checked = true;
+                    useTorrentGalaxyCheckbox.checked = true;
+                    useTorrentioCheckbox.checked = true;
+                    useMediaFusionCheckbox.checked = true;
+                    useCometCheckbox.checked = true;
+                    useRarbgCheckbox.checked = true;
+
+                    dbOnlyCheckbox.checked = false;
+                    fullItaCheckbox.checked = false;
+
+                    updateProviderState(); // Enable checkboxes
+                    updateInstallLink();
+
+                    // Visual feedback
+                    const btn = document.getElementById('preset_install_1');
+                    const originalText = btn.textContent;
+                    btn.textContent = "✅ Applicato!";
+                    setTimeout(() => btn.textContent = originalText, 1500);
+                });
+
+                document.getElementById('preset_install_2').addEventListener('click', () => {
+                    // Installazione 2: DB Only ON, Full ITA ON, Global Cache ON
+                    dbOnlyCheckbox.checked = true;
+                    fullItaCheckbox.checked = true;
+                    useGlobalCacheCheckbox.checked = true;
+
+                    updateProviderState(); // Disable provider checkboxes (grey out)
+                    updateInstallLink();
+
+                    // Visual feedback
+                    const btn = document.getElementById('preset_install_2');
+                    const originalText = btn.textContent;
+                    btn.textContent = "✅ Applicato!";
+                    setTimeout(() => btn.textContent = originalText, 1500);
                 });
 
                 // Initial call to enable buttons

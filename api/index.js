@@ -8770,7 +8770,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     // ✅ Apply custom formatter if configured
                     applyCustomFormatter(rdStream, result, config, 'RD', isCached);
 
-                    streams.push(rdStream);
+                    // ⚡ ONLY CACHED FILTER
+                    if (!config.only_debrid_cache || isCached) {
+                        streams.push(rdStream);
+                    }
                 }
 
                 // ✅ TORBOX STREAM (if enabled)
@@ -9002,7 +9005,10 @@ async function handleStream(type, id, config, workerOrigin) {
                     // ✅ Apply custom formatter if configured
                     applyCustomFormatter(torboxStream, result, config, 'TB', isCached);
 
-                    streams.push(torboxStream);
+                    // ⚡ ONLY CACHED FILTER
+                    if (!config.only_debrid_cache || isCached) {
+                        streams.push(torboxStream);
+                    }
                 }
 
                 // ✅ ALLDEBRID STREAM (if enabled)
@@ -9179,12 +9185,14 @@ async function handleStream(type, id, config, workerOrigin) {
                         }
                     };
 
-                    // Add fileIdx for pack torrents (P2P fallback support)
                     if (result.fileIndex !== null && result.fileIndex !== undefined) {
                         adStream.fileIdx = result.fileIndex;
                     }
 
-                    streams.push(adStream);
+                    // ⚡ ONLY CACHED FILTER
+                    if (!config.only_debrid_cache || isCached) {
+                        streams.push(adStream);
+                    }
                 }
 
                 // ✅ P2P STREAM (if no debrid service enabled)

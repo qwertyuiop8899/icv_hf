@@ -614,35 +614,75 @@
 
         <!-- Configuration Grid -->
         <div class="config-grid">
-            <!-- Debrid Services Row -->
-            <div class="service-card">
-                <div class="service-header">
-                    <div class="service-title">
-                        👑 Real-Debrid (Opzionale)
-                        <a href="https://real-debrid.com/apitoken" target="_blank" title="Ottieni API Key">
-                            <span class="key-icon">🔑</span>
-                        </a>
+            <!-- COL 1: Real-Debrid + Proxy -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- Real-Debrid -->
+                <div class="service-card">
+                    <div class="service-header">
+                        <div class="service-title">
+                            👑 Real-Debrid (Opzionale)
+                            <a href="https://real-debrid.com/apitoken" target="_blank" title="Ottieni API Key">
+                                <span class="key-icon">🔑</span>
+                            </a>
+                        </div>
+                        <input type="checkbox" id="use_rd">
                     </div>
-                    <input type="checkbox" id="use_rd">
+                    <input id="rd_key" placeholder="Real-Debrid API Key" type="password" disabled>
+                    <div style="text-align: right; margin-top: 4px; font-size: 0.8em;">
+                        <a href="https://real-debrid.com/apitoken" target="_blank"
+                            style="color: #4EC9B0; text-decoration: none;">Clicca qui per la tua chiave 🔑</a>
+                    </div>
                 </div>
-                <input id="rd_key" placeholder="Real-Debrid API Key" type="password" disabled>
+
+                <!-- Proxy -->
+                <div class="service-card">
+                    <div class="service-header">
+                        <div class="service-title">🔀 Proxy (Opzionale)</div>
+                    </div>
+                    <small>Per condividere Real-Debrid tra più utenti</small>
+                    <input id="mediaflow_url" placeholder="Proxy URL (es: https://your-proxy.com)" type="text">
+                    <input id="mediaflow_password" placeholder="Password (opzionale)" type="password">
+                    <div id="proxy_no_password_warning"
+                        style="display: none; background: rgba(255, 100, 100, 0.15); border: 1px solid #FF6B6B; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 0.85em; color: #FF6B6B;">
+                        ⚠️ Proxy senza Password - Connessione non protetta!
+                    </div>
+                </div>
             </div>
 
-            <div class="service-card">
-                <div class="service-header">
-                    <div class="service-title">
-                        📦 Torbox (Opzionale)
-                        <a href="https://torbox.app/settings" target="_blank" title="Ottieni API Key">
-                            <span class="key-icon">🔑</span>
-                        </a>
+            <!-- COL 2: Torbox + Jackett -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- Torbox -->
+                <div class="service-card">
+                    <div class="service-header">
+                        <div class="service-title">
+                            📦 Torbox (Opzionale)
+                            <a href="https://torbox.app/settings" target="_blank" title="Ottieni API Key">
+                                <span class="key-icon">🔑</span>
+                            </a>
+                        </div>
+                        <input type="checkbox" id="use_torbox">
                     </div>
-                    <input type="checkbox" id="use_torbox">
+                    <input id="torbox_key" placeholder="Torbox API Key" type="password" disabled>
+                    <div style="text-align: right; margin-top: 4px; font-size: 0.8em;">
+                        <a href="https://torbox.app/settings" target="_blank"
+                            style="color: #4EC9B0; text-decoration: none;">Clicca qui per la tua chiave 🔑</a>
+                    </div>
                 </div>
-                <input id="torbox_key" placeholder="Torbox API Key" type="password" disabled>
+
+                <!-- Jackett -->
+                <div class="service-card">
+                    <div class="service-header">
+                        <div class="service-title">🔍 Jackett (Opzionale)</div>
+                    </div>
+                    <small>Cerca su indexer configurati (solo risultati italiani 🇮🇹)</small>
+                    <input id="jackett_url" placeholder="Jackett URL (es: https://jackett.your-domain.com)" type="text">
+                    <input id="jackett_api_key" placeholder="Jackett API Key" type="password">
+                    <input id="jackett_password" placeholder="Jackett Password (opzionale)" type="password">
+                </div>
             </div>
 
-            <!-- Siti di Ricerca Torrent (occupa 2 righe) -->
-            <div class="service-card two-rows">
+            <!-- COL 3: Siti di Ricerca Torrent -->
+            <div class="service-card">
                 <div class="section-title">🔎 Siti di Ricerca Torrent</div>
                 <small>Seleziona su quali siti cercare i torrent:</small>
 
@@ -650,8 +690,13 @@
                 <div
                     style="margin: 15px 0; padding: 10px; background: rgba(255, 0, 0, 0.1); border: 1px solid rgba(255, 0, 0, 0.3); border-radius: 8px; text-align: center;">
                     <div
-                        style="color: #ff4444; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; font-size: 0.9em;">
-                        !!! Configurazioni Consigliate (installare tutte e due) !!!
+                        style="color: #ff4444; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; font-size: 0.9em;">
+                        !!! Configurazioni Consigliate !!!
+                    </div>
+                    <div style="margin-bottom: 15px; display: flex; justify-content: center; align-items: center; gap: 5px; cursor: pointer;"
+                        id="info_btn" title="Info Doppia Installazione">
+                        <span style="font-weight: bold; font-size: 0.8em; color: #a78bfa;">INFO</span>
+                        <span style="font-size: 1.2em;">📖</span>
                     </div>
                     <div style="display: flex; gap: 10px;">
                         <button type="button" id="preset_install_1"
@@ -664,39 +709,51 @@
                         </button>
                     </div>
                 </div>
+
+                <!-- Collapsible Search Sites -->
+                <details id="sites_details"
+                    style="margin-bottom: 15px; background: rgba(0,0,0,0.2); border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+                    <summary
+                        style="padding: 10px; cursor: pointer; font-weight: bold; font-size: 0.9em; user-select: none;">
+                        📂 Seleziona Siti Torrent (Clicca per espandere)</summary>
+                    <div class="search-sites" style="padding: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <label>
+                            <input type="checkbox" id="use_corsaronero" checked>
+                            <span>🏴‍☠️ Il Corsaro Nero (Italiano)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_uindex">
+                            <span>📚 UIndex (Internazionale) ⚠️ Rate Limited</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_knaben" checked>
+                            <span>🦉 Knaben (Internazionale)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_torrentgalaxy">
+                            <span>🌌 TorrentGalaxy (Internazionale)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_torrentio" checked>
+                            <span>🅣 Torrentio (Esterno)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_mediafusion" checked>
+                            <span>🅜 MediaFusion (Esterno)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_comet" checked>
+                            <span>🅒 Comet (Esterno)</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="use_rarbg" checked>
+                            <span>🏴 RARBG (Proxy)</span>
+                        </label>
+                    </div>
+                </details>
+
+                <!-- Options: DB Only, Full ITA, Cache - Wrapped in search-sites for styling -->
                 <div class="search-sites">
-                    <label>
-                        <input type="checkbox" id="use_corsaronero" checked>
-                        <span>🏴‍☠️ Il Corsaro Nero (Italiano)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_uindex">
-                        <span>📚 UIndex (Internazionale) ⚠️ Rate Limited</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_knaben" checked>
-                        <span>🦉 Knaben (Internazionale)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_torrentgalaxy">
-                        <span>🌌 TorrentGalaxy (Internazionale)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_torrentio" checked>
-                        <span>🅣 Torrentio (Esterno)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_mediafusion" checked>
-                        <span>🅜 MediaFusion (Esterno)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_comet" checked>
-                        <span>🅒 Comet (Esterno)</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="use_rarbg" checked>
-                        <span>🏴 RARBG (Proxy)</span>
-                    </label>
                     <label style="background: rgba(0, 100, 200, 0.15); border-color: rgba(100, 150, 255, 0.4);">
                         <input type="checkbox" id="db_only">
                         <span>💾 Ricerca Solo DB (Ultra-veloce, no live search)</span>
@@ -709,995 +766,1058 @@
                         <input type="checkbox" id="use_global_cache" checked>
                         <span>💾 Usa Cache Globale (Ricerche più veloci, condivise)</span>
                     </label>
-
                 </div>
             </div>
+        </div>
 
-            <!-- MediaFlow and Jackett Row -->
-            <div class="service-card">
-                <div class="service-header">
-                    <div class="service-title">🔀 EasyProxy o Mediaflow (Opzionale - Solo per RD)</div>
-                </div>
-                <small>Per condividere Real-Debrid tra più utenti</small>
-                <input id="mediaflow_url" placeholder="Proxy URL (es: https://your-proxy.com)" type="text">
-                <input id="mediaflow_password" placeholder="Password (opzionale)" type="password">
-                <div id="proxy_no_password_warning"
-                    style="display: none; background: rgba(255, 100, 100, 0.15); border: 1px solid #FF6B6B; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 0.85em; color: #FF6B6B;">
-                    ⚠️ Proxy senza Password - Connessione non protetta!
-                </div>
+        <!-- Advanced Configuration (3 Columns) -->
+        <div class="service-card full-width">
+            <div class="service-header">
+                <div class="service-title">⚙️ Configurazione Avanzata</div>
             </div>
 
-            <div class="service-card">
-                <div class="service-header">
-                    <div class="service-title">🔍 Jackett Configuration (Opzionale - Solo Italiani)</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; align-items: start;">
+
+                <!-- COL 1: Quality Filters -->
+                <div>
+                    <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">🚫 Escludi Qualità
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_remux" style="margin-right: 8px;"> <span>BluRay
+                                REMUX</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_4k" style="margin-right: 8px;"> <span>4K / UHD</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_1080p" style="margin-right: 8px;"> <span>1080p</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_720p" style="margin-right: 8px;"> <span>720p</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_sd" style="margin-right: 8px;"> <span>SD / CAM</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_unknown" style="margin-right: 8px;"> <span>Unknown
+                                (No Tags)</span>
+                        </label>
+                    </div>
                 </div>
-                <small>Cerca su indexer configurati (solo risultati italiani 🇮🇹)</small>
-                <input id="jackett_url" placeholder="Jackett URL (es: https://jackett.your-domain.com)" type="text">
-                <input id="jackett_api_key" placeholder="Jackett API Key" type="password">
-                <input id="jackett_password" placeholder="Jackett Password (opzionale)" type="password">
-            </div>
 
-            <!-- Advanced Configuration (3 Columns) -->
-            <div class="service-card full-width">
-                <div class="service-header">
-                    <div class="service-title">⚙️ Configurazione Avanzata</div>
-                </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; align-items: start;">
-
-                    <!-- COL 1: Quality Filters -->
-                    <div>
-                        <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">🚫 Escludi Qualità
+                <!-- COL 2: Size Limits -->
+                <div style="text-align: center;">
+                    <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">⚖️ Limite Dimensioni
+                    </div>
+                    <div
+                        style="background: rgba(10, 10, 26, 0.4); padding: 20px; border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                        <label style="display: block; margin-bottom: 10px; font-size: 0.9em; color: #e0e0e0;">Max GB
+                            per File</label>
+                        <div style="display: flex; justify-content: center; align-items: center; gap: 8px;">
+                            <input type="number" id="max_size" placeholder="0" min="0" step="0.5"
+                                style="width: 80px; text-align: center; padding: 8px; border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.4); background: rgba(20, 20, 40, 0.6); color: white;">
+                            <span style="font-weight: bold; color: #c084fc;">GB</span>
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_remux" style="margin-right: 8px;"> <span>BluRay
-                                    REMUX</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_4k" style="margin-right: 8px;"> <span>4K / UHD</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_1080p" style="margin-right: 8px;"> <span>1080p</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_720p" style="margin-right: 8px;"> <span>720p</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_sd" style="margin-right: 8px;"> <span>SD / CAM</span>
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="exclude_unknown" style="margin-right: 8px;"> <span>Unknown
-                                    (No Tags)</span>
-                            </label>
-                        </div>
+                        <small style="display: block; margin-top: 8px; color: #9ca3af; font-size: 0.8em;">0 =
+                            Illimitato</small>
+                        <small style="display: block; margin-top: 4px; color: #6b7280; font-size: 0.75em;">*Non
+                            limita i Pack Serie</small>
                     </div>
 
-                    <!-- COL 2: Size Limits -->
-                    <div style="text-align: center;">
-                        <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">⚖️ Limite Dimensioni
+                    <!-- Limit by Resolution Count -->
+                    <div
+                        style="margin-top: 15px; background: rgba(10, 10, 26, 0.4); padding: 15px; border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                        <label
+                            style="display: flex; align-items: center; justify-content: center; margin-bottom: 10px; cursor: pointer;">
+                            <input type="checkbox" id="use_max_res_limit" style="margin-right: 8px;">
+                            <span style="font-size: 0.9em; color: #e0e0e0;">✂️ Limita Num. Risultati</span>
+                        </label>
+
+                        <div style="display: flex; justify-content: center; align-items: center; gap: 8px;">
+                            <span style="font-size: 0.8em; color: #9ca3af;">Max per risoluzione:</span>
+                            <select id="max_res_limit"
+                                style="width: 60px; text-align: center; padding: 6px; border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.4); background: rgba(20, 20, 40, 0.6); color: white;"
+                                disabled>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3" selected>3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                                <option value="10">10</option>
+                                <option value="15">15</option>
+                                <option value="20">20</option>
+                            </select>
                         </div>
-                        <div
-                            style="background: rgba(10, 10, 26, 0.4); padding: 20px; border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
-                            <label style="display: block; margin-bottom: 10px; font-size: 0.9em; color: #e0e0e0;">Max GB
-                                per File</label>
-                            <div style="display: flex; justify-content: center; align-items: center; gap: 8px;">
-                                <input type="number" id="max_size" placeholder="0" min="0" step="0.5"
-                                    style="width: 80px; text-align: center; padding: 8px; border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.4); background: rgba(20, 20, 40, 0.6); color: white;">
-                                <span style="font-weight: bold; color: #c084fc;">GB</span>
+                    </div>
+                </div>
+
+                <!-- COL 3: Features & Modes -->
+                <div>
+                    <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">🚀 Modalità & Extra
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+
+                        <!-- AIO Streams -->
+                        <label
+                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="aiostreams_mode" style="margin-right: 10px;">
+                            <div>
+                                <div style="font-size: 0.95em; font-weight: bold;">🔄 Modalità AIO</div>
+                                <small style="color: #9ca3af; font-size: 0.75em;">Compatibile AIOStreams</small>
                             </div>
-                            <small style="display: block; margin-top: 8px; color: #9ca3af; font-size: 0.8em;">0 =
-                                Illimitato</small>
-                            <small style="display: block; margin-top: 4px; color: #6b7280; font-size: 0.75em;">*Non
-                                limita i Pack Serie</small>
-                        </div>
+                        </label>
 
-                        <!-- Limit by Resolution Count -->
+                        <!-- IntroSkip -->
+                        <label
+                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="introskip_enabled" style="margin-right: 10px;">
+                            <div>
+                                <div style="font-size: 0.95em; font-weight: bold;">⏩ IntroSkip</div>
+                                <small style="color: #9ca3af; font-size: 0.75em;">Salta Intro (Solo player VIMU o
+                                    Stremio app IOS)</small>
+                            </div>
+                        </label>
+
+                        <!-- Formatter -->
                         <div
-                            style="margin-top: 15px; background: rgba(10, 10, 26, 0.4); padding: 15px; border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
-                            <label
-                                style="display: flex; align-items: center; justify-content: center; margin-bottom: 10px; cursor: pointer;">
-                                <input type="checkbox" id="use_max_res_limit" style="margin-right: 8px;">
-                                <span style="font-size: 0.9em; color: #e0e0e0;">✂️ Limita Num. Risultati</span>
-                            </label>
-
-                            <div style="display: flex; justify-content: center; align-items: center; gap: 8px;">
-                                <span style="font-size: 0.8em; color: #9ca3af;">Max per risoluzione:</span>
-                                <select id="max_res_limit"
-                                    style="width: 60px; text-align: center; padding: 6px; border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.4); background: rgba(20, 20, 40, 0.6); color: white;"
-                                    disabled>
-                                    <option value="1">1</option>
-                                    <option value="2">2</option>
-                                    <option value="3" selected>3</option>
-                                    <option value="4">4</option>
-                                    <option value="5">5</option>
-                                    <option value="10">10</option>
-                                    <option value="15">15</option>
-                                    <option value="20">20</option>
+                            style="padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
+                            <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 5px;">🎨 Formatter</div>
+                            <div style="display: flex; gap: 5px; align-items: center;">
+                                <select id="formatter_preset"
+                                    style="flex-grow: 1; padding: 4px; background: rgba(30, 30, 50, 0.8); border: 1px solid rgba(147, 51, 234, 0.4); border-radius: 4px; color: white; font-size: 11px;">
+                                    <option value="default">Default</option>
+                                    <option value="torrentio">Torrentio</option>
+                                    <option value="minimal">Minimal</option>
+                                    <option value="verbose">Verbose</option>
+                                    <option value="italiano">Italiano</option>
+                                    <option value="fra">Fra</option>
+                                    <option value="dav">Dav</option>
+                                    <option value="and">And</option>
+                                    <option value="lad">Lad</option>
+                                    <option value="pri">Pri</option>
+                                    <option value="custom">Custom...</option>
                                 </select>
+                                <a href="/formatter.html" target="_blank" id="formatter_preview_link"
+                                    style="font-size: 12px; color: #a78bfa; text-decoration: underline; cursor: pointer; white-space: nowrap; margin-left: 5px;"
+                                    title="Anteprima Template">📋 Anteprima</a>
                             </div>
+                            <small id="formatter_status"
+                                style="display: block; color: #9ca3af; font-size: 0.75em; margin-top: 2px;"></small>
                         </div>
+
                     </div>
-
-                    <!-- COL 3: Features & Modes -->
-                    <div>
-                        <div class="section-title" style="margin-bottom: 10px; font-size: 0.9em;">🚀 Modalità & Extra
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-
-                            <!-- AIO Streams -->
-                            <label
-                                style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="aiostreams_mode" style="margin-right: 10px;">
-                                <div>
-                                    <div style="font-size: 0.95em; font-weight: bold;">🔄 Modalità AIO</div>
-                                    <small style="color: #9ca3af; font-size: 0.75em;">Compatibile AIOStreams</small>
-                                </div>
-                            </label>
-
-                            <!-- IntroSkip -->
-                            <label
-                                style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                                <input type="checkbox" id="introskip_enabled" style="margin-right: 10px;">
-                                <div>
-                                    <div style="font-size: 0.95em; font-weight: bold;">⏩ IntroSkip</div>
-                                    <small style="color: #9ca3af; font-size: 0.75em;">Salta Intro (Solo player VIMU o
-                                        Stremio app IOS)</small>
-                                </div>
-                            </label>
-
-                            <!-- Formatter -->
-                            <div
-                                style="padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2);">
-                                <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 5px;">🎨 Formatter</div>
-                                <div style="display: flex; gap: 5px; align-items: center;">
-                                    <select id="formatter_preset"
-                                        style="flex-grow: 1; padding: 4px; background: rgba(30, 30, 50, 0.8); border: 1px solid rgba(147, 51, 234, 0.4); border-radius: 4px; color: white; font-size: 11px;">
-                                        <option value="default">Default</option>
-                                        <option value="torrentio">Torrentio</option>
-                                        <option value="minimal">Minimal</option>
-                                        <option value="verbose">Verbose</option>
-                                        <option value="italiano">Italiano</option>
-                                        <option value="fra">Fra</option>
-                                        <option value="dav">Dav</option>
-                                        <option value="and">And</option>
-                                        <option value="lad">Lad</option>
-                                        <option value="pri">Pri</option>
-                                        <option value="custom">Custom...</option>
-                                    </select>
-                                    <a href="/formatter.html" target="_blank" id="formatter_preview_link"
-                                        style="font-size: 12px; color: #a78bfa; text-decoration: underline; cursor: pointer; white-space: nowrap; margin-left: 5px;"
-                                        title="Anteprima Template">📋 Anteprima</a>
-                                </div>
-                                <small id="formatter_status"
-                                    style="display: block; color: #9ca3af; font-size: 0.75em; margin-top: 2px;"></small>
-                            </div>
-
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Custom Formatter Editor (Full Width) -->
-                <div id="custom_formatter_container"
-                    style="display: none; margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
-                    <div style="margin-bottom: 8px;">
-                        <label style="font-size: 11px; color: #9ca3af;">Name Template:</label>
-                        <textarea id="formatter_custom_name" rows="2"
-                            style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
-                            placeholder="Es: {stream.resolution} {stream.quality}"></textarea>
-                    </div>
-                    <div style="margin-bottom: 8px;">
-                        <label style="font-size: 11px; color: #9ca3af;">Description Template:</label>
-                        <textarea id="formatter_custom_desc" rows="3"
-                            style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
-                            placeholder="Es: {stream.filename}\n{stream.size::bytes}"></textarea>
-                    </div>
-                    <details style="font-size: 10px; color: #9ca3af;">
-                        <summary style="cursor: pointer; color: #a78bfa;">📖 Variabili disponibili</summary>
-                        <div
-                            style="margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-family: monospace;">
-                            <strong>Stream:</strong> {stream.quality}, {stream.resolution}, {stream.filename},
-                            {stream.size::bytes}, {stream.seeders}, {stream.codec}, {stream.encode},
-                            {stream.languageEmojis::join(' ')}, {stream.audioTags::join(' ')},
-                            {stream.visualTags::join(' ')}, {stream.releaseGroup}<br>
-                            <strong>Service:</strong> {service.name}, {service.shortName},
-                            {service.cached::istrue["⚡"||"❌"]}<br>
-                            <strong>Addon:</strong> {addon.name}<br>
-                            <strong>Syntax:</strong> {field::exists["show"||"hide"]}, {field::&gt;0["yes"||"no"]},
-                            {field::~pattern["match"||"no"]}, {text::small}
-                        </div>
-                    </details>
-                    <div style="margin-top: 10px; display: flex; gap: 10px;">
-                        <button type="button" id="formatter_save_btn"
-                            style="padding: 8px 16px; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer; font-weight: bold;">💾
-                            SALVA Template</button>
-                        <span id="formatter_save_status"
-                            style="color: #10b981; font-size: 11px; align-self: center;"></span>
-                    </div>
-                </div>
-
-                <!-- Action Buttons -->
-                <div class="button-group"
-                    style="margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(147, 51, 234, 0.3); padding-top: 20px;">
-                    <button id="install_button" disabled>Installa Addon</button>
-                    <button id="copy_button" disabled>Copia Link</button>
-                </div>
-
-                <div id="link-container">
-                    <p class="section-title"><small>Link di installazione generato:</small></p>
-                    <textarea id="install_link_display" rows="3" readonly></textarea>
                 </div>
             </div>
-            <script>
-                // Input fields
-                const useRdCheckbox = document.getElementById("use_rd");
-                const rdKeyInput = document.getElementById("rd_key");
-                const useTorboxCheckbox = document.getElementById("use_torbox");
-                const torboxKeyInput = document.getElementById("torbox_key");
 
-                const mediaflowUrlInput = document.getElementById("mediaflow_url");
-                const mediaflowPasswordInput = document.getElementById("mediaflow_password");
-                const jackettUrlInput = document.getElementById("jackett_url");
-                const jackettApiKeyInput = document.getElementById("jackett_api_key");
-                const jackettPasswordInput = document.getElementById("jackett_password");
+            <!-- Custom Formatter Editor (Full Width) -->
+            <div id="custom_formatter_container"
+                style="display: none; margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                <div style="margin-bottom: 8px;">
+                    <label style="font-size: 11px; color: #9ca3af;">Name Template:</label>
+                    <textarea id="formatter_custom_name" rows="2"
+                        style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
+                        placeholder="Es: {stream.resolution} {stream.quality}"></textarea>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label style="font-size: 11px; color: #9ca3af;">Description Template:</label>
+                    <textarea id="formatter_custom_desc" rows="3"
+                        style="width: 100%; background: rgba(20, 20, 40, 0.8); border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 4px; color: white; padding: 6px; font-size: 11px; font-family: monospace; resize: vertical;"
+                        placeholder="Es: {stream.filename}\n{stream.size::bytes}"></textarea>
+                </div>
+                <details style="font-size: 10px; color: #9ca3af;">
+                    <summary style="cursor: pointer; color: #a78bfa;">📖 Variabili disponibili</summary>
+                    <div
+                        style="margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-family: monospace;">
+                        <strong>Stream:</strong> {stream.quality}, {stream.resolution}, {stream.filename},
+                        {stream.size::bytes}, {stream.seeders}, {stream.codec}, {stream.encode},
+                        {stream.languageEmojis::join(' ')}, {stream.audioTags::join(' ')},
+                        {stream.visualTags::join(' ')}, {stream.releaseGroup}<br>
+                        <strong>Service:</strong> {service.name}, {service.shortName},
+                        {service.cached::istrue["⚡"||"❌"]}<br>
+                        <strong>Addon:</strong> {addon.name}<br>
+                        <strong>Syntax:</strong> {field::exists["show"||"hide"]}, {field::&gt;0["yes"||"no"]},
+                        {field::~pattern["match"||"no"]}, {text::small}
+                    </div>
+                </details>
+                <div style="margin-top: 10px; display: flex; gap: 10px;">
+                    <button type="button" id="formatter_save_btn"
+                        style="padding: 8px 16px; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer; font-weight: bold;">💾
+                        SALVA Template</button>
+                    <span id="formatter_save_status"
+                        style="color: #10b981; font-size: 11px; align-self: center;"></span>
+                </div>
+            </div>
 
-                // Checkboxes for search sites
-                const useCorsaroNeroCheckbox = document.getElementById("use_corsaronero");
-                const useUIndexCheckbox = document.getElementById("use_uindex");
-                const useKnabenCheckbox = document.getElementById("use_knaben");
-                const useTorrentGalaxyCheckbox = document.getElementById("use_torrentgalaxy");
-                const useTorrentioCheckbox = document.getElementById("use_torrentio");
-                const useMediaFusionCheckbox = document.getElementById("use_mediafusion");
-                const useCometCheckbox = document.getElementById("use_comet");
-                const useRarbgCheckbox = document.getElementById("use_rarbg");
-                const fullItaCheckbox = document.getElementById("full_ita");
-                const dbOnlyCheckbox = document.getElementById("db_only");
-                const useGlobalCacheCheckbox = document.getElementById("use_global_cache");
-                const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
-                const maxResLimitSelect = document.getElementById("max_res_limit");
+            <!-- Action Buttons -->
+            <div class="button-group"
+                style="margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(147, 51, 234, 0.3); padding-top: 20px;">
+                <button id="install_button" disabled>Installa Addon</button>
+                <button id="copy_button" disabled>Copia Link</button>
+            </div>
 
-                // Feature toggles
-                const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
-                const introSkipEnabledCheckbox = document.getElementById("introskip_enabled");
+            <div id="link-container">
+                <p class="section-title"><small>Link di installazione generato:</small></p>
+                <textarea id="install_link_display" rows="3" readonly></textarea>
+            </div>
+        </div>
+        <script>
+            // Input fields
+            const useRdCheckbox = document.getElementById("use_rd");
+            const rdKeyInput = document.getElementById("rd_key");
+            const useTorboxCheckbox = document.getElementById("use_torbox");
+            const torboxKeyInput = document.getElementById("torbox_key");
+
+            const mediaflowUrlInput = document.getElementById("mediaflow_url");
+            const mediaflowPasswordInput = document.getElementById("mediaflow_password");
+            const jackettUrlInput = document.getElementById("jackett_url");
+            const jackettApiKeyInput = document.getElementById("jackett_api_key");
+            const jackettPasswordInput = document.getElementById("jackett_password");
+
+            // Checkboxes for search sites
+            const useCorsaroNeroCheckbox = document.getElementById("use_corsaronero");
+            const useUIndexCheckbox = document.getElementById("use_uindex");
+            const useKnabenCheckbox = document.getElementById("use_knaben");
+            const useTorrentGalaxyCheckbox = document.getElementById("use_torrentgalaxy");
+            const useTorrentioCheckbox = document.getElementById("use_torrentio");
+            const useMediaFusionCheckbox = document.getElementById("use_mediafusion");
+            const useCometCheckbox = document.getElementById("use_comet");
+            const useRarbgCheckbox = document.getElementById("use_rarbg");
+            const fullItaCheckbox = document.getElementById("full_ita");
+            const dbOnlyCheckbox = document.getElementById("db_only");
+            const useGlobalCacheCheckbox = document.getElementById("use_global_cache");
+            const useMaxResLimitCheckbox = document.getElementById("use_max_res_limit");
+            const maxResLimitSelect = document.getElementById("max_res_limit");
+
+            // Feature toggles
+            const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
+            const introSkipEnabledCheckbox = document.getElementById("introskip_enabled");
 
 
-                // Buttons
-                const installButton = document.getElementById("install_button");
-                const copyButton = document.getElementById("copy_button");
-                const statusEl = document.getElementById("status");
-                const linkContainer = document.getElementById("link-container");
-                const installLinkDisplay = document.getElementById("install_link_display");
+            // Buttons
+            const installButton = document.getElementById("install_button");
+            const copyButton = document.getElementById("copy_button");
+            const statusEl = document.getElementById("status");
+            const linkContainer = document.getElementById("link-container");
+            const installLinkDisplay = document.getElementById("install_link_display");
 
-                // Enable/disable RD input based on checkbox
-                useRdCheckbox.addEventListener('change', () => {
-                    rdKeyInput.disabled = !useRdCheckbox.checked;
-                    if (!useRdCheckbox.checked) rdKeyInput.value = '';
-                    updateInstallLink();
+            // Enable/disable RD input based on checkbox
+            useRdCheckbox.addEventListener('change', () => {
+                rdKeyInput.disabled = !useRdCheckbox.checked;
+                if (!useRdCheckbox.checked) rdKeyInput.value = '';
+                updateInstallLink();
+            });
+
+            // Enable/disable Torbox input based on checkbox
+            useTorboxCheckbox.addEventListener('change', () => {
+                torboxKeyInput.disabled = !useTorboxCheckbox.checked;
+                if (!useTorboxCheckbox.checked) torboxKeyInput.value = '';
+                updateInstallLink();
+            });
+
+            // Enable/disable Max Resolution Limit select based on checkbox
+            useMaxResLimitCheckbox.addEventListener('change', () => {
+                maxResLimitSelect.disabled = !useMaxResLimitCheckbox.checked;
+                updateInstallLink();
+            });
+
+            // Disable/gray-out provider checkboxes when db_only is active
+            function updateProviderState() {
+                const isDbOnly = dbOnlyCheckbox.checked;
+                const providerCheckboxes = [
+                    useCorsaroNeroCheckbox,
+                    useUIndexCheckbox,
+                    useKnabenCheckbox,
+                    useTorrentGalaxyCheckbox,
+                    useTorrentioCheckbox,
+                    useMediaFusionCheckbox,
+                    useCometCheckbox,
+                    useRarbgCheckbox
+                ];
+
+                providerCheckboxes.forEach(checkbox => {
+                    if (checkbox) {
+                        checkbox.disabled = isDbOnly;
+                        checkbox.parentElement.style.opacity = isDbOnly ? '0.5' : '1';
+                        checkbox.parentElement.style.pointerEvents = isDbOnly ? 'none' : 'auto';
+                    }
                 });
+            }
 
-                // Enable/disable Torbox input based on checkbox
-                useTorboxCheckbox.addEventListener('change', () => {
-                    torboxKeyInput.disabled = !useTorboxCheckbox.checked;
-                    if (!useTorboxCheckbox.checked) torboxKeyInput.value = '';
-                    updateInstallLink();
-                });
+            dbOnlyCheckbox.addEventListener('change', () => {
+                updateProviderState();
+                updateInstallLink();
+            });
 
-                // Enable/disable Max Resolution Limit select based on checkbox
-                useMaxResLimitCheckbox.addEventListener('change', () => {
-                    maxResLimitSelect.disabled = !useMaxResLimitCheckbox.checked;
-                    updateInstallLink();
-                });
+            // Initialize provider state on page load
+            updateProviderState();
 
-                // Disable/gray-out provider checkboxes when db_only is active
-                function updateProviderState() {
-                    const isDbOnly = dbOnlyCheckbox.checked;
-                    const providerCheckboxes = [
-                        useCorsaroNeroCheckbox,
-                        useUIndexCheckbox,
-                        useKnabenCheckbox,
-                        useTorrentGalaxyCheckbox,
-                        useTorrentioCheckbox,
-                        useMediaFusionCheckbox,
-                        useCometCheckbox,
-                        useRarbgCheckbox
-                    ];
 
-                    providerCheckboxes.forEach(checkbox => {
-                        if (checkbox) {
-                            checkbox.disabled = isDbOnly;
-                            checkbox.parentElement.style.opacity = isDbOnly ? '0.5' : '1';
-                            checkbox.parentElement.style.pointerEvents = isDbOnly ? 'none' : 'auto';
-                        }
-                    });
+            function updateInstallLink() {
+                // TMDB is now hardcoded, no validation needed
+                const tmdbKey = '5462f78469f3d80bf5201645294c16e4';
+
+                // Build config object (TMDB always included)
+                const config = { tmdb_key: tmdbKey };
+
+                // Real-Debrid
+                if (useRdCheckbox.checked) {
+                    const rdKey = rdKeyInput.value.trim();
+                    if (rdKey) {
+                        config.use_rd = true;
+                        config.rd_key = rdKey;
+                    }
                 }
 
-                dbOnlyCheckbox.addEventListener('change', () => {
-                    updateProviderState();
-                    updateInstallLink();
-                });
+                // Torbox
+                if (useTorboxCheckbox.checked) {
+                    const torboxKey = torboxKeyInput.value.trim();
+                    if (torboxKey) {
+                        config.use_torbox = true;
+                        config.torbox_key = torboxKey;
+                    }
+                }
 
-                // Initialize provider state on page load
-                updateProviderState();
+                // MediaFlow Proxy / EasyProxy
+                const mediaflowUrl = mediaflowUrlInput.value.trim();
+                const mediaflowPassword = mediaflowPasswordInput.value.trim();
+                const proxyWarning = document.getElementById('proxy_no_password_warning');
+                if (mediaflowUrl) {
+                    config.mediaflow_url = mediaflowUrl;
+                    if (mediaflowPassword) {
+                        config.mediaflow_password = mediaflowPassword;
+                        proxyWarning.style.display = 'none';
+                    } else {
+                        // No password - show warning but still allow
+                        config.mediaflow_password = '';
+                        proxyWarning.style.display = 'block';
+                    }
+                } else {
+                    proxyWarning.style.display = 'none';
+                }
 
+                // Jackettio
+                const jackettUrl = jackettUrlInput.value.trim();
+                const jackettApiKey = jackettApiKeyInput.value.trim();
+                if (jackettUrl && jackettApiKey) {
+                    config.jackett_url = jackettUrl;
+                    config.jackett_api_key = jackettApiKey;
 
-                function updateInstallLink() {
-                    // TMDB is now hardcoded, no validation needed
-                    const tmdbKey = '5462f78469f3d80bf5201645294c16e4';
+                    const jackettPassword = jackettPasswordInput.value.trim();
+                    if (jackettPassword) {
+                        config.jackett_password = jackettPassword;
+                    }
+                }
 
-                    // Build config object (TMDB always included)
-                    const config = { tmdb_key: tmdbKey };
+                // Search sites selection
+                config.use_corsaronero = useCorsaroNeroCheckbox.checked;
+                config.use_uindex = useUIndexCheckbox.checked;
+                config.use_knaben = useKnabenCheckbox.checked;
+                config.use_torrentgalaxy = useTorrentGalaxyCheckbox.checked;
+                config.use_torrentio = useTorrentioCheckbox.checked;
+                config.use_mediafusion = useMediaFusionCheckbox.checked;
+                config.use_comet = useCometCheckbox.checked;
+                config.use_rarbg = useRarbgCheckbox.checked;
+                config.full_ita = fullItaCheckbox.checked;
+                config.db_only = dbOnlyCheckbox.checked;
+                config.use_global_cache = useGlobalCacheCheckbox.checked;
 
-                    // Real-Debrid
-                    if (useRdCheckbox.checked) {
-                        const rdKey = rdKeyInput.value.trim();
-                        if (rdKey) {
-                            config.use_rd = true;
-                            config.rd_key = rdKey;
+                // Max Resolution Limit (only if checkbox is checked)
+                if (useMaxResLimitCheckbox.checked) {
+                    const maxResLimit = maxResLimitSelect.value;
+                    if (maxResLimit) {
+                        config.max_res_limit = parseInt(maxResLimit);
+                    }
+                }
+
+                // Advanced Filters
+                if (document.getElementById('exclude_remux').checked) config.exclude_remux = true;
+                if (document.getElementById('exclude_4k').checked) config.exclude_4k = true;
+                if (document.getElementById('exclude_1080p').checked) config.exclude_1080p = true;
+                if (document.getElementById('exclude_720p').checked) config.exclude_720p = true;
+                if (document.getElementById('exclude_sd').checked) config.exclude_sd = true;
+                if (document.getElementById('exclude_unknown').checked) config.exclude_unknown = true;
+
+                const maxSizeVal = document.getElementById('max_size').value;
+                if (maxSizeVal && parseFloat(maxSizeVal) > 0) {
+                    config.max_size = parseFloat(maxSizeVal);
+                }
+
+                // Feature toggles
+                if (aioStreamsModeCheckbox.checked) {
+                    config.aiostreams_mode = true;
+                }
+                if (introSkipEnabledCheckbox.checked) {
+                    config.introskip_enabled = true;
+                }
+
+                // Custom Formatter
+                const formatterPreset = document.getElementById('formatter_preset').value;
+                if (formatterPreset && formatterPreset !== 'default') {
+                    config.formatter_preset = formatterPreset;
+                    if (formatterPreset === 'custom') {
+                        const customName = document.getElementById('formatter_custom_name').value;
+                        const customDesc = document.getElementById('formatter_custom_desc').value;
+                        console.log('🎨 [Formatter Save] name:', customName ? customName.substring(0, 30) + '...' : '(empty)');
+                        console.log('🎨 [Formatter Save] desc:', customDesc ? customDesc.substring(0, 30) + '...' : '(empty)');
+                        if (customName) config.formatter_custom_name = customName;
+                        if (customDesc) config.formatter_custom_desc = customDesc;
+                    }
+                }
+
+                // Check if at least one search site is selected
+                let searchSites = [];
+                if (config.use_corsaronero) searchSites.push("CorsaroNero");
+                if (config.use_uindex) searchSites.push("UIndex");
+                if (config.use_knaben) searchSites.push("Knaben");
+                if (config.use_torrentgalaxy) searchSites.push("TorrentGalaxy");
+                if (config.use_torrentio) searchSites.push("Torrentio");
+                if (config.use_mediafusion) searchSites.push("MediaFusion");
+                if (config.use_comet) searchSites.push("Comet");
+                if (config.use_rarbg) searchSites.push("RARBG");
+
+                if (searchSites.length === 0 && !config.db_only) {
+                    // No search sites selected and not in DB Only mode - show error
+                    statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o abilita 'Ricerca Solo DB')";
+                    statusEl.style.color = '#FF6B6B';
+                    linkContainer.classList.remove('show');
+                    installButton.disabled = true;
+                    copyButton.disabled = true;
+                    return;
+                }
+
+                // Generate install URL
+                // Fix for Unicode/Emoji in btoa: https://developer.mozilla.org/en-US/docs/Glossary/Base64#the_unicode_problem
+                const jsonConfig = JSON.stringify(config);
+                const encodedConfig = btoa(encodeURIComponent(jsonConfig).replace(/%([0-9A-F]{2})/g,
+                    function toSolidBytes(match, p1) {
+                        return String.fromCharCode('0x' + p1);
+                    }));
+                const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
+
+                installLinkDisplay.value = installUrl;
+                linkContainer.classList.add('show');
+                installButton.disabled = false;
+                copyButton.disabled = false;
+
+                // Status message with emoji indicators
+                // Debrid icons (with + separator)
+                let debridEmojis = [];
+                if (config.use_rd) debridEmojis.push('👑');
+                if (config.use_torbox) debridEmojis.push('📦');
+
+                // Feature icons (no separator)
+                let featureEmojis = '';
+                if (config.db_only) featureEmojis += '⚡';
+                if (config.full_ita) featureEmojis += '🇮🇹';
+                if (config.introskip_enabled) featureEmojis += '⏩';
+
+                // Build status emoji string
+                let statusEmojis = '';
+                if (debridEmojis.length > 0) {
+                    statusEmojis = debridEmojis.join('+') + featureEmojis;
+                } else {
+                    statusEmojis = '🔗' + featureEmojis; // P2P + features
+                }
+
+                let services = [];
+                if (config.use_rd) services.push("Real-Debrid");
+                if (config.use_torbox) services.push("Torbox");
+
+                if (config.mediaflow_url) services.push("MediaFlow");
+                if (config.jackett_url) services.push("Jackettio");
+
+                const dbOnlyText = config.db_only ? ' [DB Only]' : '';
+                const serviceText = services.length > 0 ? ` (${services.join(', ')})` : ' (Solo P2P)';
+                const searchText = searchSites.length > 0 ? ` | Siti: ${searchSites.join(', ')}` : '';
+                statusEl.textContent = `✓ ${statusEmojis} Configurazione pronta${dbOnlyText}${serviceText}${searchText}`;
+                statusEl.style.color = '#4EC9B0';
+            }
+
+            // ✅ Load existing configuration if present (from /configure endpoint)
+            // Wrap in setTimeout to ensure DOM is ready
+            setTimeout(() => {
+                if (window.EXISTING_CONFIG) {
+                    console.log('📝 Preloading existing configuration...', window.EXISTING_CONFIG);
+                    const cfg = window.EXISTING_CONFIG;
+
+                    // TMDb API Key (required) - Not visible in UI, hardcoded
+
+                    // Debrid services - Real-Debrid
+                    if (cfg.use_rd) {
+                        const useRdCheckbox = document.getElementById('use_rd');
+                        const rdKeyInput = document.getElementById('rd_key');
+                        if (useRdCheckbox && rdKeyInput) {
+                            useRdCheckbox.checked = true;
+                            rdKeyInput.disabled = false;
+                            if (cfg.rd_key) {
+                                rdKeyInput.value = cfg.rd_key;
+                                console.log('✅ Loaded rd_key');
+                            }
                         }
                     }
 
                     // Torbox
-                    if (useTorboxCheckbox.checked) {
-                        const torboxKey = torboxKeyInput.value.trim();
-                        if (torboxKey) {
-                            config.use_torbox = true;
-                            config.torbox_key = torboxKey;
+                    if (cfg.use_torbox) {
+                        const useTorboxCheckbox = document.getElementById('use_torbox');
+                        const torboxKeyInput = document.getElementById('torbox_key');
+                        if (useTorboxCheckbox && torboxKeyInput) {
+                            useTorboxCheckbox.checked = true;
+                            torboxKeyInput.disabled = false;
+                            if (cfg.torbox_key) {
+                                torboxKeyInput.value = cfg.torbox_key;
+                                console.log('✅ Loaded torbox_key');
+                            }
                         }
                     }
 
-                    // MediaFlow Proxy / EasyProxy
-                    const mediaflowUrl = mediaflowUrlInput.value.trim();
-                    const mediaflowPassword = mediaflowPasswordInput.value.trim();
-                    const proxyWarning = document.getElementById('proxy_no_password_warning');
-                    if (mediaflowUrl) {
-                        config.mediaflow_url = mediaflowUrl;
-                        if (mediaflowPassword) {
-                            config.mediaflow_password = mediaflowPassword;
-                            proxyWarning.style.display = 'none';
-                        } else {
-                            // No password - show warning but still allow
-                            config.mediaflow_password = '';
-                            proxyWarning.style.display = 'block';
+                    // MediaFlow Proxy
+                    if (cfg.mediaflow_url) {
+                        const mediaflowUrlInput = document.getElementById('mediaflow_url');
+                        if (mediaflowUrlInput) {
+                            mediaflowUrlInput.value = cfg.mediaflow_url;
+                            console.log('✅ Loaded mediaflow_url');
                         }
-                    } else {
-                        proxyWarning.style.display = 'none';
+                    }
+                    if (cfg.mediaflow_password) {
+                        const mediaflowPasswordInput = document.getElementById('mediaflow_password');
+                        if (mediaflowPasswordInput) {
+                            mediaflowPasswordInput.value = cfg.mediaflow_password;
+                            console.log('✅ Loaded mediaflow_password');
+                        }
                     }
 
                     // Jackettio
-                    const jackettUrl = jackettUrlInput.value.trim();
-                    const jackettApiKey = jackettApiKeyInput.value.trim();
-                    if (jackettUrl && jackettApiKey) {
-                        config.jackett_url = jackettUrl;
-                        config.jackett_api_key = jackettApiKey;
-
-                        const jackettPassword = jackettPasswordInput.value.trim();
-                        if (jackettPassword) {
-                            config.jackett_password = jackettPassword;
+                    if (cfg.jackett_url) {
+                        const jackettUrlInput = document.getElementById('jackett_url');
+                        if (jackettUrlInput) {
+                            jackettUrlInput.value = cfg.jackett_url;
+                            console.log('✅ Loaded jackett_url');
+                        }
+                    }
+                    if (cfg.jackett_api_key) {
+                        const jackettApiKeyInput = document.getElementById('jackett_api_key');
+                        if (jackettApiKeyInput) {
+                            jackettApiKeyInput.value = cfg.jackett_api_key;
+                            console.log('✅ Loaded jackett_api_key');
+                        }
+                    }
+                    if (cfg.jackett_password) {
+                        const jackettPasswordInput = document.getElementById('jackett_password');
+                        if (jackettPasswordInput) {
+                            jackettPasswordInput.value = cfg.jackett_password;
+                            console.log('✅ Loaded jackett_password');
                         }
                     }
 
-                    // Search sites selection
-                    config.use_corsaronero = useCorsaroNeroCheckbox.checked;
-                    config.use_uindex = useUIndexCheckbox.checked;
-                    config.use_knaben = useKnabenCheckbox.checked;
-                    config.use_torrentgalaxy = useTorrentGalaxyCheckbox.checked;
-                    config.use_torrentio = useTorrentioCheckbox.checked;
-                    config.use_mediafusion = useMediaFusionCheckbox.checked;
-                    config.use_comet = useCometCheckbox.checked;
-                    config.use_rarbg = useRarbgCheckbox.checked;
-                    config.full_ita = fullItaCheckbox.checked;
-                    config.db_only = dbOnlyCheckbox.checked;
-                    config.use_global_cache = useGlobalCacheCheckbox.checked;
-
-                    // Max Resolution Limit (only if checkbox is checked)
-                    if (useMaxResLimitCheckbox.checked) {
-                        const maxResLimit = maxResLimitSelect.value;
-                        if (maxResLimit) {
-                            config.max_res_limit = parseInt(maxResLimit);
+                    // Search sites checkboxes
+                    if (cfg.use_corsaronero !== undefined) {
+                        const useCorsaroNeroCheckbox = document.getElementById('use_corsaronero');
+                        if (useCorsaroNeroCheckbox) {
+                            useCorsaroNeroCheckbox.checked = cfg.use_corsaronero;
+                            console.log('✅ Loaded use_corsaronero:', cfg.use_corsaronero);
                         }
                     }
+                    if (cfg.use_uindex !== undefined) {
+                        const useUIndexCheckbox = document.getElementById('use_uindex');
+                        if (useUIndexCheckbox) {
+                            useUIndexCheckbox.checked = cfg.use_uindex;
+                            console.log('✅ Loaded use_uindex:', cfg.use_uindex);
+                        }
+                    }
+                    if (cfg.use_knaben !== undefined) {
+                        const useKnabenCheckbox = document.getElementById('use_knaben');
+                        if (useKnabenCheckbox) {
+                            useKnabenCheckbox.checked = cfg.use_knaben;
+                            console.log('✅ Loaded use_knaben:', cfg.use_knaben);
+                        }
+                    }
+                    if (cfg.use_torrentgalaxy !== undefined) {
+                        const useTorrentGalaxyCheckbox = document.getElementById('use_torrentgalaxy');
+                        if (useTorrentGalaxyCheckbox) {
+                            useTorrentGalaxyCheckbox.checked = cfg.use_torrentgalaxy;
+                            console.log('✅ Loaded use_torrentgalaxy:', cfg.use_torrentgalaxy);
+                        }
+                    }
+                    if (cfg.use_torrentio !== undefined) {
+                        const el = document.getElementById('use_torrentio');
+                        if (el) el.checked = cfg.use_torrentio;
+                    }
+                    if (cfg.use_mediafusion !== undefined) {
+                        const el = document.getElementById('use_mediafusion');
+                        if (el) el.checked = cfg.use_mediafusion;
+                    }
+                    if (cfg.use_comet !== undefined) {
+                        const el = document.getElementById('use_comet');
+                        if (el) el.checked = cfg.use_comet;
+                    }
+                    if (cfg.use_rarbg !== undefined) {
+                        const el = document.getElementById('use_rarbg');
+                        if (el) el.checked = cfg.use_rarbg;
+                    }
+                    if (cfg.full_ita !== undefined) {
+                        const el = document.getElementById('full_ita');
+                        if (el) el.checked = cfg.full_ita;
+                    }
+                    if (cfg.db_only !== undefined) {
+                        const el = document.getElementById('db_only');
+                        if (el) el.checked = cfg.db_only;
+                    }
+                    if (cfg.use_global_cache !== undefined) {
+                        const el = document.getElementById('use_global_cache');
+                        if (el) el.checked = cfg.use_global_cache;
+                    }
 
-                    // Advanced Filters
-                    if (document.getElementById('exclude_remux').checked) config.exclude_remux = true;
-                    if (document.getElementById('exclude_4k').checked) config.exclude_4k = true;
-                    if (document.getElementById('exclude_1080p').checked) config.exclude_1080p = true;
-                    if (document.getElementById('exclude_720p').checked) config.exclude_720p = true;
-                    if (document.getElementById('exclude_sd').checked) config.exclude_sd = true;
-                    if (document.getElementById('exclude_unknown').checked) config.exclude_unknown = true;
-
-                    const maxSizeVal = document.getElementById('max_size').value;
-                    if (maxSizeVal && parseFloat(maxSizeVal) > 0) {
-                        config.max_size = parseFloat(maxSizeVal);
+                    // Max Resolution Limit
+                    if (cfg.max_res_limit) {
+                        const useMaxResLimitCheckbox = document.getElementById('use_max_res_limit');
+                        const maxResLimitSelect = document.getElementById('max_res_limit');
+                        if (useMaxResLimitCheckbox && maxResLimitSelect) {
+                            useMaxResLimitCheckbox.checked = true;
+                            maxResLimitSelect.disabled = false;
+                            maxResLimitSelect.value = cfg.max_res_limit;
+                            console.log('✅ Loaded max_res_limit:', cfg.max_res_limit);
+                        }
                     }
 
                     // Feature toggles
-                    if (aioStreamsModeCheckbox.checked) {
-                        config.aiostreams_mode = true;
+                    if (cfg.aiostreams_mode) {
+                        const el = document.getElementById('aiostreams_mode');
+                        if (el) {
+                            el.checked = true;
+                            console.log('✅ Loaded aiostreams_mode');
+                            // ✅ Disable formatter UI when AIOStreams is loaded as active
+                            setTimeout(() => { if (typeof updateFormatterState === 'function') updateFormatterState(); }, 100);
+                        }
                     }
-                    if (introSkipEnabledCheckbox.checked) {
-                        config.introskip_enabled = true;
-                    }
-
-                    // Custom Formatter
-                    const formatterPreset = document.getElementById('formatter_preset').value;
-                    if (formatterPreset && formatterPreset !== 'default') {
-                        config.formatter_preset = formatterPreset;
-                        if (formatterPreset === 'custom') {
-                            const customName = document.getElementById('formatter_custom_name').value;
-                            const customDesc = document.getElementById('formatter_custom_desc').value;
-                            console.log('🎨 [Formatter Save] name:', customName ? customName.substring(0, 30) + '...' : '(empty)');
-                            console.log('🎨 [Formatter Save] desc:', customDesc ? customDesc.substring(0, 30) + '...' : '(empty)');
-                            if (customName) config.formatter_custom_name = customName;
-                            if (customDesc) config.formatter_custom_desc = customDesc;
+                    if (cfg.introskip_enabled) {
+                        const el = document.getElementById('introskip_enabled');
+                        if (el) {
+                            el.checked = true;
+                            console.log('✅ Loaded introskip_enabled');
                         }
                     }
 
-                    // Check if at least one search site is selected
-                    let searchSites = [];
-                    if (config.use_corsaronero) searchSites.push("CorsaroNero");
-                    if (config.use_uindex) searchSites.push("UIndex");
-                    if (config.use_knaben) searchSites.push("Knaben");
-                    if (config.use_torrentgalaxy) searchSites.push("TorrentGalaxy");
-                    if (config.use_torrentio) searchSites.push("Torrentio");
-                    if (config.use_mediafusion) searchSites.push("MediaFusion");
-                    if (config.use_comet) searchSites.push("Comet");
-                    if (config.use_rarbg) searchSites.push("RARBG");
+                    // Advanced Filters Loading
+                    if (cfg.exclude_remux) document.getElementById('exclude_remux').checked = true;
+                    if (cfg.exclude_4k) document.getElementById('exclude_4k').checked = true;
+                    if (cfg.exclude_1080p) document.getElementById('exclude_1080p').checked = true;
+                    if (cfg.exclude_720p) document.getElementById('exclude_720p').checked = true;
+                    if (cfg.exclude_sd) document.getElementById('exclude_sd').checked = true;
+                    if (cfg.exclude_unknown) document.getElementById('exclude_unknown').checked = true;
+                    if (cfg.max_size) document.getElementById('max_size').value = cfg.max_size;
 
-                    if (searchSites.length === 0 && !config.db_only) {
-                        // No search sites selected and not in DB Only mode - show error
-                        statusEl.textContent = "❌ Seleziona almeno un sito per la ricerca (o abilita 'Ricerca Solo DB')";
-                        statusEl.style.color = '#FF6B6B';
-                        linkContainer.classList.remove('show');
-                        installButton.disabled = true;
-                        copyButton.disabled = true;
-                        return;
+                    // Custom Formatter settings
+                    if (cfg.formatter_preset) {
+                        const formatterPresetEl = document.getElementById('formatter_preset');
+                        const formatterStatusEl = document.getElementById('formatter_status');
+                        if (formatterPresetEl) {
+                            formatterPresetEl.value = cfg.formatter_preset;
+                            console.log('✅ Loaded formatter_preset:', cfg.formatter_preset);
+
+                            // Update status display
+                            const presetNames = {
+                                default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                                verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                                dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+                            };
+                            if (formatterStatusEl) {
+                                formatterStatusEl.textContent = 'Preset: ' + (presetNames[cfg.formatter_preset] || cfg.formatter_preset);
+                            }
+                            // Show custom container if preset is custom
+                            const customContainer = document.getElementById('custom_formatter_container');
+                            if (customContainer && cfg.formatter_preset === 'custom') {
+                                customContainer.style.display = 'block';
+                            }
+                        }
+                    }
+                    if (cfg.formatter_custom_name) {
+                        const el = document.getElementById('formatter_custom_name');
+                        if (el) {
+                            el.value = cfg.formatter_custom_name;
+                            console.log('✅ Loaded formatter_custom_name');
+                        }
+                    }
+                    if (cfg.formatter_custom_desc) {
+                        const el = document.getElementById('formatter_custom_desc');
+                        if (el) {
+                            el.value = cfg.formatter_custom_desc;
+                            console.log('✅ Loaded formatter_custom_desc');
+                        }
                     }
 
-                    // Generate install URL
-                    // Fix for Unicode/Emoji in btoa: https://developer.mozilla.org/en-US/docs/Glossary/Base64#the_unicode_problem
-                    const jsonConfig = JSON.stringify(config);
-                    const encodedConfig = btoa(encodeURIComponent(jsonConfig).replace(/%([0-9A-F]{2})/g,
-                        function toSolidBytes(match, p1) {
-                            return String.fromCharCode('0x' + p1);
-                        }));
-                    const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
+                    console.log('✅ Configuration preloaded successfully');
 
-                    installLinkDisplay.value = installUrl;
-                    linkContainer.classList.add('show');
-                    installButton.disabled = false;
-                    copyButton.disabled = false;
 
-                    // Status message with emoji indicators
-                    // Debrid icons (with + separator)
-                    let debridEmojis = [];
-                    if (config.use_rd) debridEmojis.push('👑');
-                    if (config.use_torbox) debridEmojis.push('📦');
-
-                    // Feature icons (no separator)
-                    let featureEmojis = '';
-                    if (config.db_only) featureEmojis += '⚡';
-                    if (config.full_ita) featureEmojis += '🇮🇹';
-                    if (config.introskip_enabled) featureEmojis += '⏩';
-
-                    // Build status emoji string
-                    let statusEmojis = '';
-                    if (debridEmojis.length > 0) {
-                        statusEmojis = debridEmojis.join('+') + featureEmojis;
-                    } else {
-                        statusEmojis = '🔗' + featureEmojis; // P2P + features
-                    }
-
-                    let services = [];
-                    if (config.use_rd) services.push("Real-Debrid");
-                    if (config.use_torbox) services.push("Torbox");
-
-                    if (config.mediaflow_url) services.push("MediaFlow");
-                    if (config.jackett_url) services.push("Jackettio");
-
-                    const dbOnlyText = config.db_only ? ' [DB Only]' : '';
-                    const serviceText = services.length > 0 ? ` (${services.join(', ')})` : ' (Solo P2P)';
-                    const searchText = searchSites.length > 0 ? ` | Siti: ${searchSites.join(', ')}` : '';
-                    statusEl.textContent = `✓ ${statusEmojis} Configurazione pronta${dbOnlyText}${serviceText}${searchText}`;
-                    statusEl.style.color = '#4EC9B0';
+                    // Trigger updateInstallLink to refresh the UI
+                    updateInstallLink();
+                } else {
+                    console.log('ℹ️ No EXISTING_CONFIG found in window');
                 }
+            }, 100);
 
-                // ✅ Load existing configuration if present (from /configure endpoint)
-                // Wrap in setTimeout to ensure DOM is ready
-                setTimeout(() => {
-                    if (window.EXISTING_CONFIG) {
-                        console.log('📝 Preloading existing configuration...', window.EXISTING_CONFIG);
-                        const cfg = window.EXISTING_CONFIG;
+            // Event listeners for all inputs
+            rdKeyInput.addEventListener('input', updateInstallLink);
+            torboxKeyInput.addEventListener('input', updateInstallLink);
 
-                        // TMDb API Key (required) - Not visible in UI, hardcoded
+            mediaflowUrlInput.addEventListener('input', updateInstallLink);
+            mediaflowPasswordInput.addEventListener('input', updateInstallLink);
+            jackettUrlInput.addEventListener('input', updateInstallLink);
+            jackettApiKeyInput.addEventListener('input', updateInstallLink);
+            jackettPasswordInput.addEventListener('input', updateInstallLink);
 
-                        // Debrid services - Real-Debrid
-                        if (cfg.use_rd) {
-                            const useRdCheckbox = document.getElementById('use_rd');
-                            const rdKeyInput = document.getElementById('rd_key');
-                            if (useRdCheckbox && rdKeyInput) {
-                                useRdCheckbox.checked = true;
-                                rdKeyInput.disabled = false;
-                                if (cfg.rd_key) {
-                                    rdKeyInput.value = cfg.rd_key;
-                                    console.log('✅ Loaded rd_key');
-                                }
-                            }
-                        }
+            // Event listeners for search site checkboxes
+            useCorsaroNeroCheckbox.addEventListener('change', updateInstallLink);
+            useUIndexCheckbox.addEventListener('change', updateInstallLink);
+            useKnabenCheckbox.addEventListener('change', updateInstallLink);
+            useTorrentGalaxyCheckbox.addEventListener('change', updateInstallLink);
+            useTorrentioCheckbox.addEventListener('change', updateInstallLink);
+            useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
+            useCometCheckbox.addEventListener('change', updateInstallLink);
+            useRarbgCheckbox.addEventListener('change', updateInstallLink);
+            fullItaCheckbox.addEventListener('change', updateInstallLink);
+            dbOnlyCheckbox.addEventListener('change', updateInstallLink);
+            useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
 
-                        // Torbox
-                        if (cfg.use_torbox) {
-                            const useTorboxCheckbox = document.getElementById('use_torbox');
-                            const torboxKeyInput = document.getElementById('torbox_key');
-                            if (useTorboxCheckbox && torboxKeyInput) {
-                                useTorboxCheckbox.checked = true;
-                                torboxKeyInput.disabled = false;
-                                if (cfg.torbox_key) {
-                                    torboxKeyInput.value = cfg.torbox_key;
-                                    console.log('✅ Loaded torbox_key');
-                                }
-                            }
-                        }
+            // Advanced Filters Listeners
+            document.getElementById('exclude_remux').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_4k').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_1080p').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_720p').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_sd').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_unknown').addEventListener('change', updateInstallLink);
+            document.getElementById('max_size').addEventListener('input', updateInstallLink);
 
-                        // MediaFlow Proxy
-                        if (cfg.mediaflow_url) {
-                            const mediaflowUrlInput = document.getElementById('mediaflow_url');
-                            if (mediaflowUrlInput) {
-                                mediaflowUrlInput.value = cfg.mediaflow_url;
-                                console.log('✅ Loaded mediaflow_url');
-                            }
-                        }
-                        if (cfg.mediaflow_password) {
-                            const mediaflowPasswordInput = document.getElementById('mediaflow_password');
-                            if (mediaflowPasswordInput) {
-                                mediaflowPasswordInput.value = cfg.mediaflow_password;
-                                console.log('✅ Loaded mediaflow_password');
-                            }
-                        }
+            // Advanced Filters Loading
+            // Logic moved to setTimeout block above
+            useTorrentGalaxyCheckbox.addEventListener('change', updateInstallLink);
+            useTorrentioCheckbox.addEventListener('change', updateInstallLink);
+            useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
+            useCometCheckbox.addEventListener('change', updateInstallLink);
+            useRarbgCheckbox.addEventListener('change', updateInstallLink);
+            fullItaCheckbox.addEventListener('change', updateInstallLink);
+            useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
+            useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
+            maxResLimitSelect.addEventListener('change', updateInstallLink);
 
-                        // Jackettio
-                        if (cfg.jackett_url) {
-                            const jackettUrlInput = document.getElementById('jackett_url');
-                            if (jackettUrlInput) {
-                                jackettUrlInput.value = cfg.jackett_url;
-                                console.log('✅ Loaded jackett_url');
-                            }
-                        }
-                        if (cfg.jackett_api_key) {
-                            const jackettApiKeyInput = document.getElementById('jackett_api_key');
-                            if (jackettApiKeyInput) {
-                                jackettApiKeyInput.value = cfg.jackett_api_key;
-                                console.log('✅ Loaded jackett_api_key');
-                            }
-                        }
-                        if (cfg.jackett_password) {
-                            const jackettPasswordInput = document.getElementById('jackett_password');
-                            if (jackettPasswordInput) {
-                                jackettPasswordInput.value = cfg.jackett_password;
-                                console.log('✅ Loaded jackett_password');
-                            }
-                        }
+            // Event listeners for feature toggles
+            aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
+            introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
 
-                        // Search sites checkboxes
-                        if (cfg.use_corsaronero !== undefined) {
-                            const useCorsaroNeroCheckbox = document.getElementById('use_corsaronero');
-                            if (useCorsaroNeroCheckbox) {
-                                useCorsaroNeroCheckbox.checked = cfg.use_corsaronero;
-                                console.log('✅ Loaded use_corsaronero:', cfg.use_corsaronero);
-                            }
-                        }
-                        if (cfg.use_uindex !== undefined) {
-                            const useUIndexCheckbox = document.getElementById('use_uindex');
-                            if (useUIndexCheckbox) {
-                                useUIndexCheckbox.checked = cfg.use_uindex;
-                                console.log('✅ Loaded use_uindex:', cfg.use_uindex);
-                            }
-                        }
-                        if (cfg.use_knaben !== undefined) {
-                            const useKnabenCheckbox = document.getElementById('use_knaben');
-                            if (useKnabenCheckbox) {
-                                useKnabenCheckbox.checked = cfg.use_knaben;
-                                console.log('✅ Loaded use_knaben:', cfg.use_knaben);
-                            }
-                        }
-                        if (cfg.use_torrentgalaxy !== undefined) {
-                            const useTorrentGalaxyCheckbox = document.getElementById('use_torrentgalaxy');
-                            if (useTorrentGalaxyCheckbox) {
-                                useTorrentGalaxyCheckbox.checked = cfg.use_torrentgalaxy;
-                                console.log('✅ Loaded use_torrentgalaxy:', cfg.use_torrentgalaxy);
-                            }
-                        }
-                        if (cfg.use_torrentio !== undefined) {
-                            const el = document.getElementById('use_torrentio');
-                            if (el) el.checked = cfg.use_torrentio;
-                        }
-                        if (cfg.use_mediafusion !== undefined) {
-                            const el = document.getElementById('use_mediafusion');
-                            if (el) el.checked = cfg.use_mediafusion;
-                        }
-                        if (cfg.use_comet !== undefined) {
-                            const el = document.getElementById('use_comet');
-                            if (el) el.checked = cfg.use_comet;
-                        }
-                        if (cfg.use_rarbg !== undefined) {
-                            const el = document.getElementById('use_rarbg');
-                            if (el) el.checked = cfg.use_rarbg;
-                        }
-                        if (cfg.full_ita !== undefined) {
-                            const el = document.getElementById('full_ita');
-                            if (el) el.checked = cfg.full_ita;
-                        }
-                        if (cfg.db_only !== undefined) {
-                            const el = document.getElementById('db_only');
-                            if (el) el.checked = cfg.db_only;
-                        }
-                        if (cfg.use_global_cache !== undefined) {
-                            const el = document.getElementById('use_global_cache');
-                            if (el) el.checked = cfg.use_global_cache;
-                        }
+            // Formatter dropdown handler (inline - no popup needed)
+            const formatterPresetSelect = document.getElementById('formatter_preset');
+            const customFormatterContainer = document.getElementById('custom_formatter_container');
+            const formatterCustomName = document.getElementById('formatter_custom_name');
+            const formatterCustomDesc = document.getElementById('formatter_custom_desc');
+            const formatterPreviewLink = document.getElementById('formatter_preview_link');
+            const formatterStatus = document.getElementById('formatter_status');
 
-                        // Max Resolution Limit
-                        if (cfg.max_res_limit) {
-                            const useMaxResLimitCheckbox = document.getElementById('use_max_res_limit');
-                            const maxResLimitSelect = document.getElementById('max_res_limit');
-                            if (useMaxResLimitCheckbox && maxResLimitSelect) {
-                                useMaxResLimitCheckbox.checked = true;
-                                maxResLimitSelect.disabled = false;
-                                maxResLimitSelect.value = cfg.max_res_limit;
-                                console.log('✅ Loaded max_res_limit:', cfg.max_res_limit);
-                            }
-                        }
+            // ✅ Helper: Toggle formatter based on AIOStreams mode
+            // ✅ Helper: Toggle formatter based on AIOStreams mode & Update Status
+            function updateFormatterState() {
+                const aioActive = aioStreamsModeCheckbox.checked;
+                formatterPresetSelect.disabled = aioActive;
+                formatterPresetSelect.style.opacity = aioActive ? '0.5' : '1';
+                formatterPresetSelect.style.cursor = aioActive ? 'not-allowed' : 'pointer';
+                formatterPreviewLink.style.opacity = aioActive ? '0.5' : '1';
+                formatterPreviewLink.style.pointerEvents = aioActive ? 'none' : 'auto';
 
-                        // Feature toggles
-                        if (cfg.aiostreams_mode) {
-                            const el = document.getElementById('aiostreams_mode');
-                            if (el) {
-                                el.checked = true;
-                                console.log('✅ Loaded aiostreams_mode');
-                                // ✅ Disable formatter UI when AIOStreams is loaded as active
-                                setTimeout(() => { if (typeof updateFormatterState === 'function') updateFormatterState(); }, 100);
-                            }
-                        }
-                        if (cfg.introskip_enabled) {
-                            const el = document.getElementById('introskip_enabled');
-                            if (el) {
-                                el.checked = true;
-                                console.log('✅ Loaded introskip_enabled');
-                            }
-                        }
+                if (aioActive) {
+                    formatterStatus.textContent = '⚠️ Disabilitato in modalità AIOStreams';
+                    formatterStatus.style.color = '#f59e0b';
+                    customFormatterContainer.style.display = 'none';
+                } else {
+                    // Show current preset name
+                    const presetNames = {
+                        default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
+                        verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
+                        dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
+                    };
+                    const val = formatterPresetSelect.value;
+                    formatterStatus.textContent = 'Preset: ' + (presetNames[val] || val);
+                    formatterStatus.style.color = '#9ca3af';
 
-                        // Advanced Filters Loading
-                        if (cfg.exclude_remux) document.getElementById('exclude_remux').checked = true;
-                        if (cfg.exclude_4k) document.getElementById('exclude_4k').checked = true;
-                        if (cfg.exclude_1080p) document.getElementById('exclude_1080p').checked = true;
-                        if (cfg.exclude_720p) document.getElementById('exclude_720p').checked = true;
-                        if (cfg.exclude_sd) document.getElementById('exclude_sd').checked = true;
-                        if (cfg.exclude_unknown) document.getElementById('exclude_unknown').checked = true;
-                        if (cfg.max_size) document.getElementById('max_size').value = cfg.max_size;
-
-                        // Custom Formatter settings
-                        if (cfg.formatter_preset) {
-                            const formatterPresetEl = document.getElementById('formatter_preset');
-                            const formatterStatusEl = document.getElementById('formatter_status');
-                            if (formatterPresetEl) {
-                                formatterPresetEl.value = cfg.formatter_preset;
-                                console.log('✅ Loaded formatter_preset:', cfg.formatter_preset);
-
-                                // Update status display
-                                const presetNames = {
-                                    default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
-                                    verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
-                                    dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
-                                };
-                                if (formatterStatusEl) {
-                                    formatterStatusEl.textContent = 'Preset: ' + (presetNames[cfg.formatter_preset] || cfg.formatter_preset);
-                                }
-                                // Show custom container if preset is custom
-                                const customContainer = document.getElementById('custom_formatter_container');
-                                if (customContainer && cfg.formatter_preset === 'custom') {
-                                    customContainer.style.display = 'block';
-                                }
-                            }
-                        }
-                        if (cfg.formatter_custom_name) {
-                            const el = document.getElementById('formatter_custom_name');
-                            if (el) {
-                                el.value = cfg.formatter_custom_name;
-                                console.log('✅ Loaded formatter_custom_name');
-                            }
-                        }
-                        if (cfg.formatter_custom_desc) {
-                            const el = document.getElementById('formatter_custom_desc');
-                            if (el) {
-                                el.value = cfg.formatter_custom_desc;
-                                console.log('✅ Loaded formatter_custom_desc');
-                            }
-                        }
-
-                        console.log('✅ Configuration preloaded successfully');
-
-
-                        // Trigger updateInstallLink to refresh the UI
-                        updateInstallLink();
+                    // Show/hide custom fields based on selection
+                    if (val === 'custom') {
+                        customFormatterContainer.style.display = 'block';
                     } else {
-                        console.log('ℹ️ No EXISTING_CONFIG found in window');
-                    }
-                }, 100);
-
-                // Event listeners for all inputs
-                rdKeyInput.addEventListener('input', updateInstallLink);
-                torboxKeyInput.addEventListener('input', updateInstallLink);
-
-                mediaflowUrlInput.addEventListener('input', updateInstallLink);
-                mediaflowPasswordInput.addEventListener('input', updateInstallLink);
-                jackettUrlInput.addEventListener('input', updateInstallLink);
-                jackettApiKeyInput.addEventListener('input', updateInstallLink);
-                jackettPasswordInput.addEventListener('input', updateInstallLink);
-
-                // Event listeners for search site checkboxes
-                useCorsaroNeroCheckbox.addEventListener('change', updateInstallLink);
-                useUIndexCheckbox.addEventListener('change', updateInstallLink);
-                useKnabenCheckbox.addEventListener('change', updateInstallLink);
-                useTorrentGalaxyCheckbox.addEventListener('change', updateInstallLink);
-                useTorrentioCheckbox.addEventListener('change', updateInstallLink);
-                useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
-                useCometCheckbox.addEventListener('change', updateInstallLink);
-                useRarbgCheckbox.addEventListener('change', updateInstallLink);
-                fullItaCheckbox.addEventListener('change', updateInstallLink);
-                dbOnlyCheckbox.addEventListener('change', updateInstallLink);
-                useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
-
-                // Advanced Filters Listeners
-                document.getElementById('exclude_remux').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_4k').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_1080p').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_720p').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_sd').addEventListener('change', updateInstallLink);
-                document.getElementById('exclude_unknown').addEventListener('change', updateInstallLink);
-                document.getElementById('max_size').addEventListener('input', updateInstallLink);
-
-                // Advanced Filters Loading
-                // Logic moved to setTimeout block above
-                useTorrentGalaxyCheckbox.addEventListener('change', updateInstallLink);
-                useTorrentioCheckbox.addEventListener('change', updateInstallLink);
-                useMediaFusionCheckbox.addEventListener('change', updateInstallLink);
-                useCometCheckbox.addEventListener('change', updateInstallLink);
-                useRarbgCheckbox.addEventListener('change', updateInstallLink);
-                fullItaCheckbox.addEventListener('change', updateInstallLink);
-                useGlobalCacheCheckbox.addEventListener('change', updateInstallLink);
-                useMaxResLimitCheckbox.addEventListener('change', updateInstallLink);
-                maxResLimitSelect.addEventListener('change', updateInstallLink);
-
-                // Event listeners for feature toggles
-                aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
-                introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
-
-                // Formatter dropdown handler (inline - no popup needed)
-                const formatterPresetSelect = document.getElementById('formatter_preset');
-                const customFormatterContainer = document.getElementById('custom_formatter_container');
-                const formatterCustomName = document.getElementById('formatter_custom_name');
-                const formatterCustomDesc = document.getElementById('formatter_custom_desc');
-                const formatterPreviewLink = document.getElementById('formatter_preview_link');
-                const formatterStatus = document.getElementById('formatter_status');
-
-                // ✅ Helper: Toggle formatter based on AIOStreams mode
-                // ✅ Helper: Toggle formatter based on AIOStreams mode & Update Status
-                function updateFormatterState() {
-                    const aioActive = aioStreamsModeCheckbox.checked;
-                    formatterPresetSelect.disabled = aioActive;
-                    formatterPresetSelect.style.opacity = aioActive ? '0.5' : '1';
-                    formatterPresetSelect.style.cursor = aioActive ? 'not-allowed' : 'pointer';
-                    formatterPreviewLink.style.opacity = aioActive ? '0.5' : '1';
-                    formatterPreviewLink.style.pointerEvents = aioActive ? 'none' : 'auto';
-
-                    if (aioActive) {
-                        formatterStatus.textContent = '⚠️ Disabilitato in modalità AIOStreams';
-                        formatterStatus.style.color = '#f59e0b';
                         customFormatterContainer.style.display = 'none';
-                    } else {
-                        // Show current preset name
-                        const presetNames = {
-                            default: 'Default', torrentio: 'Torrentio', minimal: 'Minimal',
-                            verbose: 'Verbose', italiano: 'Italiano', fra: 'Fra',
-                            dav: 'Dav', and: 'And', lad: 'Lad', pri: 'Pri', custom: 'Custom'
-                        };
-                        const val = formatterPresetSelect.value;
-                        formatterStatus.textContent = 'Preset: ' + (presetNames[val] || val);
-                        formatterStatus.style.color = '#9ca3af';
-
-                        // Show/hide custom fields based on selection
-                        if (val === 'custom') {
-                            customFormatterContainer.style.display = 'block';
-                        } else {
-                            customFormatterContainer.style.display = 'none';
-                        }
                     }
-                    updateInstallLink();
                 }
+                updateInstallLink();
+            }
 
-                // AIOStreams mode toggle
-                aioStreamsModeCheckbox.addEventListener('change', updateFormatterState);
+            // AIOStreams mode toggle
+            aioStreamsModeCheckbox.addEventListener('change', updateFormatterState);
 
-                // Preset change now triggers full state update (text & visibility)
-                formatterPresetSelect.addEventListener('change', updateFormatterState);
+            // Preset change now triggers full state update (text & visibility)
+            formatterPresetSelect.addEventListener('change', updateFormatterState);
 
-                // Update link when custom templates change
-                formatterCustomName.addEventListener('input', updateInstallLink);
-                formatterCustomDesc.addEventListener('input', updateInstallLink);
+            // Update link when custom templates change
+            formatterCustomName.addEventListener('input', updateInstallLink);
+            formatterCustomDesc.addEventListener('input', updateInstallLink);
 
-                // Preview link opens popup with current templates
-                formatterPreviewLink.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    const currentPreset = formatterPresetSelect.value;
-                    const customName = encodeURIComponent(formatterCustomName.value || '');
-                    const customDesc = encodeURIComponent(formatterCustomDesc.value || '');
-                    window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1100,height=750');
-                });
+            // Preview link opens popup with current templates
+            formatterPreviewLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                const currentPreset = formatterPresetSelect.value;
+                const customName = encodeURIComponent(formatterCustomName.value || '');
+                const customDesc = encodeURIComponent(formatterCustomDesc.value || '');
+                window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1100,height=750');
+            });
 
-                // Save button explicitly updates install link with current formatter values
-                const formatterSaveBtn = document.getElementById('formatter_save_btn');
-                const formatterSaveStatus = document.getElementById('formatter_save_status');
+            // Save button explicitly updates install link with current formatter values
+            const formatterSaveBtn = document.getElementById('formatter_save_btn');
+            const formatterSaveStatus = document.getElementById('formatter_save_status');
 
-                formatterSaveBtn.addEventListener('click', () => {
-                    // Force read the values from textareas
-                    const nameVal = formatterCustomName.value;
-                    const descVal = formatterCustomDesc.value;
+            formatterSaveBtn.addEventListener('click', () => {
+                // Force read the values from textareas
+                const nameVal = formatterCustomName.value;
+                const descVal = formatterCustomDesc.value;
 
-                    console.log('💾 [SAVE] Name template:', nameVal);
-                    console.log('💾 [SAVE] Desc template:', descVal);
+                console.log('💾 [SAVE] Name template:', nameVal);
+                console.log('💾 [SAVE] Desc template:', descVal);
 
-                    // Trigger updateInstallLink to regenerate the URL
-                    updateInstallLink();
-
-                    // Show confirmation
-                    formatterSaveStatus.textContent = '✅ Template salvato!';
-                    setTimeout(() => {
-                        formatterSaveStatus.textContent = '';
-                    }, 3000);
-                });
-
-                // Recommended Configurations Presets
-                document.getElementById('preset_install_1').addEventListener('click', () => {
-                    // Installazione 1: All providers ON, DB Only OFF, Full ITA OFF
-                    useCorsaroNeroCheckbox.checked = true;
-                    useUIndexCheckbox.checked = false;
-                    useKnabenCheckbox.checked = true;
-                    useTorrentGalaxyCheckbox.checked = true;
-                    useTorrentioCheckbox.checked = true;
-                    useMediaFusionCheckbox.checked = true;
-                    useCometCheckbox.checked = true;
-                    useRarbgCheckbox.checked = true;
-
-                    dbOnlyCheckbox.checked = false;
-                    fullItaCheckbox.checked = false;
-
-                    updateProviderState(); // Enable checkboxes
-                    updateInstallLink();
-
-                    // Visual feedback
-                    const btn = document.getElementById('preset_install_1');
-                    const originalText = btn.textContent;
-                    btn.textContent = "✅ Applicato!";
-                    setTimeout(() => btn.textContent = originalText, 1500);
-                });
-
-                document.getElementById('preset_install_2').addEventListener('click', () => {
-                    // Installazione 2: DB Only ON, Full ITA ON, Global Cache ON
-                    dbOnlyCheckbox.checked = true;
-                    fullItaCheckbox.checked = true;
-                    useGlobalCacheCheckbox.checked = true;
-
-                    updateProviderState(); // Disable provider checkboxes (grey out)
-                    updateInstallLink();
-
-                    // Visual feedback
-                    const btn = document.getElementById('preset_install_2');
-                    const originalText = btn.textContent;
-                    btn.textContent = "✅ Applicato!";
-                    setTimeout(() => btn.textContent = originalText, 1500);
-                });
-
-                // Initial call to enable buttons
+                // Trigger updateInstallLink to regenerate the URL
                 updateInstallLink();
 
-                installButton.addEventListener('click', () => {
-                    if (installLinkDisplay.value) window.location.href = installLinkDisplay.value;
+                // Show confirmation
+                formatterSaveStatus.textContent = '✅ Template salvato!';
+                setTimeout(() => {
+                    formatterSaveStatus.textContent = '';
+                }, 3000);
+            });
+
+            // Recommended Configurations Presets
+            const sitesDetails = document.getElementById('sites_details');
+
+            document.getElementById('preset_install_1').addEventListener('click', (e) => {
+                // Installazione 1: All providers ON, DB Only OFF, Full ITA OFF
+                useCorsaroNeroCheckbox.checked = true;
+                useUIndexCheckbox.checked = false;
+                useKnabenCheckbox.checked = true;
+                useTorrentGalaxyCheckbox.checked = true;
+                useTorrentioCheckbox.checked = true;
+                useMediaFusionCheckbox.checked = true;
+                useCometCheckbox.checked = true;
+                useRarbgCheckbox.checked = true;
+
+                dbOnlyCheckbox.checked = false;
+                fullItaCheckbox.checked = false;
+
+                updateProviderState(); // Enable checkboxes
+                updateInstallLink();
+
+                // Visual feedback
+                const btn = document.getElementById('preset_install_1');
+                const originalText = btn.textContent;
+                btn.textContent = "✅ Applicato!";
+                setTimeout(() => btn.textContent = originalText, 1500);
+
+                // Open dropdown
+                if (sitesDetails) sitesDetails.open = true;
+                e.stopPropagation(); // Prevent immediate closing
+            });
+
+            document.getElementById('preset_install_2').addEventListener('click', (e) => {
+                // Installazione 2: DB Only ON, Full ITA ON, Global Cache ON
+                dbOnlyCheckbox.checked = true;
+                fullItaCheckbox.checked = true;
+                useGlobalCacheCheckbox.checked = true;
+
+                updateProviderState(); // Disable provider checkboxes (grey out)
+                updateInstallLink();
+
+                // Visual feedback
+                const btn = document.getElementById('preset_install_2');
+                const originalText = btn.textContent;
+                btn.textContent = "✅ Applicato!";
+                setTimeout(() => btn.textContent = originalText, 1500);
+
+                // Open dropdown
+                if (sitesDetails) sitesDetails.open = true;
+                e.stopPropagation(); // Prevent immediate closing
+            });
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (event) => {
+                if (sitesDetails && sitesDetails.open) {
+                    const isClickInside = sitesDetails.contains(event.target);
+                    const isPresetBtn1 = document.getElementById('preset_install_1').contains(event.target);
+                    const isPresetBtn2 = document.getElementById('preset_install_2').contains(event.target);
+
+                    if (!isClickInside && !isPresetBtn1 && !isPresetBtn2) {
+                        sitesDetails.open = false;
+                    }
+                }
+            });
+
+            // Initial call to enable buttons
+            updateInstallLink();
+
+            installButton.addEventListener('click', () => {
+                if (installLinkDisplay.value) window.location.href = installLinkDisplay.value;
+            });
+
+            copyButton.addEventListener('click', () => {
+                if (installLinkDisplay.value) {
+                    navigator.clipboard.writeText(installLinkDisplay.value).then(() => {
+                        const originalText = statusEl.textContent;
+                        statusEl.textContent = "✓ Link copiato negli appunti!";
+                        statusEl.style.color = '#4EC9B0';
+                        const btnText = copyButton.textContent;
+                        copyButton.textContent = "Copiato!";
+                        setTimeout(() => {
+                            copyButton.textContent = btnText;
+                            statusEl.textContent = originalText;
+                        }, 2000);
+                    });
+                }
+            });
+        </script>
+        <script>
+            // Ashfall Three.js effect
+            let container;
+            let camera, scene, renderer;
+            let uniforms;
+            let loader = new THREE.TextureLoader();
+            let texture;
+
+            loader.setCrossOrigin("anonymous");
+            loader.load(
+                'https://s3-us-west-2.amazonaws.com/s.cdpn.io/982762/noise.png',
+                function (tex) {
+                    texture = tex;
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.minFilter = THREE.LinearFilter;
+                    init();
+                    animate();
+                }
+            );
+
+            function init() {
+                container = document.getElementById('container');
+
+                camera = new THREE.Camera();
+                camera.position.z = 1;
+
+                scene = new THREE.Scene();
+
+                var geometry = new THREE.PlaneBufferGeometry(2, 2);
+
+                uniforms = {
+                    u_time: { type: "f", value: 1.0 },
+                    u_resolution: { type: "v2", value: new THREE.Vector2() },
+                    u_noise: { type: "t", value: texture },
+                    u_mouse: { type: "v2", value: new THREE.Vector2() }
+                };
+
+                var material = new THREE.ShaderMaterial({
+                    uniforms: uniforms,
+                    vertexShader: document.getElementById('vertexShader').textContent,
+                    fragmentShader: document.getElementById('fragmentShader').textContent
                 });
 
-                copyButton.addEventListener('click', () => {
-                    if (installLinkDisplay.value) {
-                        navigator.clipboard.writeText(installLinkDisplay.value).then(() => {
-                            const originalText = statusEl.textContent;
-                            statusEl.textContent = "✓ Link copiato negli appunti!";
-                            statusEl.style.color = '#4EC9B0';
-                            const btnText = copyButton.textContent;
-                            copyButton.textContent = "Copiato!";
-                            setTimeout(() => {
-                                copyButton.textContent = btnText;
-                                statusEl.textContent = originalText;
-                            }, 2000);
-                        });
-                    }
+                var mesh = new THREE.Mesh(geometry, material);
+                scene.add(mesh);
+
+                renderer = new THREE.WebGLRenderer();
+                renderer.setPixelRatio(window.devicePixelRatio);
+
+                container.appendChild(renderer.domElement);
+
+                onWindowResize();
+                window.addEventListener('resize', onWindowResize, false);
+
+                document.addEventListener('mousemove', function (e) {
+                    uniforms.u_mouse.value.x = e.clientX / window.innerWidth;
+                    uniforms.u_mouse.value.y = 1.0 - (e.clientY / window.innerHeight);
                 });
-            </script>
-            <script>
-                // Ashfall Three.js effect
-                let container;
-                let camera, scene, renderer;
-                let uniforms;
-                let loader = new THREE.TextureLoader();
-                let texture;
+            }
 
-                loader.setCrossOrigin("anonymous");
-                loader.load(
-                    'https://s3-us-west-2.amazonaws.com/s.cdpn.io/982762/noise.png',
-                    function (tex) {
-                        texture = tex;
-                        texture.wrapS = THREE.RepeatWrapping;
-                        texture.wrapT = THREE.RepeatWrapping;
-                        texture.minFilter = THREE.LinearFilter;
-                        init();
-                        animate();
+            function onWindowResize() {
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                uniforms.u_resolution.value.x = renderer.domElement.width;
+                uniforms.u_resolution.value.y = renderer.domElement.height;
+            }
+
+            function animate(time) {
+                requestAnimationFrame(animate);
+                uniforms.u_time.value = time * 0.001;
+                renderer.render(scene, camera);
+            }
+        </script>
+        <!-- Info Modal -->
+        <div id="info_modal"
+            style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); backdrop-filter: blur(5px);">
+            <div
+                style="background-color: #1a1a2e; margin: 10% auto; padding: 25px; border: 1px solid #7c3aed; width: 80%; max-width: 600px; border-radius: 12px; color: #e0e0e0; box-shadow: 0 0 20px rgba(124, 58, 237, 0.5);">
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;">
+                    <h3 style="margin: 0; color: #a78bfa;">📖 Guida alla Doppia Installazione</h3>
+                    <span id="info_close_btn"
+                        style="color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; line-height: 1;">&times;</span>
+                </div>
+
+                <p style="font-size: 0.95em; line-height: 1.5;">
+                    Per ottenere il massimo, ti consigliamo di installare l'addon <strong>due volte</strong> con
+                    queste configurazioni:
+                </p>
+
+                <div
+                    style="margin-bottom: 15px; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 8px;">
+                    <strong style="color: #4f46e5; display: block; margin-bottom: 5px;">🔹 Installazione 1: "Crawler
+                        & Aggiornamento"</strong>
+                    <em style="display: block; font-size: 0.9em; margin-bottom: 5px; color: #ccc;">Obiettivo: Non
+                        perdere nessun risultato.</em>
+                    Esegue una ricerca <strong>Live</strong> su tutti i siti. È essenziale per trovare <strong>nuove
+                        uscite</strong> (ancora non nel DB) e per popolare il database stesso.<br>
+                    <span style="font-size: 0.85em; color: #fbbf24;">⚠️ Essendo più lenta, usala come "Seconda
+                        Scelta" o tienila fuori da AIOStreams.</span>
+                </div>
+
+                <div
+                    style="margin-bottom: 15px; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 8px;">
+                    <strong style="color: #059669; display: block; margin-bottom: 5px;">🔹 Installazione 2: "Solo DB
+                        & Accuratezza"</strong>
+                    <em style="display: block; font-size: 0.9em; margin-bottom: 5px; color: #ccc;">Obiettivo:
+                        Risposta veloce ma PRECISA.</em>
+                    Utilizza i dati raccolti dall'Installazione 1. Impiega qualche millisecondo in più per
+                    <strong>verificare accuratamente Pack e Cache</strong>, garantendoti risultati validi e pronti
+                    allo streaming.<br>
+                    <span style="font-size: 0.85em; color: #34d399;">✅ Questa dovrebbe essere la tua "Prima Scelta"
+                        e quella da usare in AIOStreams.</span>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Modal Logic
+            const modal = document.getElementById("info_modal");
+            const btn = document.getElementById("info_btn");
+            const span = document.getElementById("info_close_btn");
+
+            if (btn && modal && span) {
+                btn.onclick = function () {
+                    modal.style.display = "flex"; // Use flex to center with existing CSS margin
+                }
+                span.onclick = function () {
+                    modal.style.display = "none";
+                }
+                window.onclick = function (event) {
+                    if (event.target == modal) {
+                        modal.style.display = "none";
                     }
-                );
-
-                function init() {
-                    container = document.getElementById('container');
-
-                    camera = new THREE.Camera();
-                    camera.position.z = 1;
-
-                    scene = new THREE.Scene();
-
-                    var geometry = new THREE.PlaneBufferGeometry(2, 2);
-
-                    uniforms = {
-                        u_time: { type: "f", value: 1.0 },
-                        u_resolution: { type: "v2", value: new THREE.Vector2() },
-                        u_noise: { type: "t", value: texture },
-                        u_mouse: { type: "v2", value: new THREE.Vector2() }
-                    };
-
-                    var material = new THREE.ShaderMaterial({
-                        uniforms: uniforms,
-                        vertexShader: document.getElementById('vertexShader').textContent,
-                        fragmentShader: document.getElementById('fragmentShader').textContent
-                    });
-
-                    var mesh = new THREE.Mesh(geometry, material);
-                    scene.add(mesh);
-
-                    renderer = new THREE.WebGLRenderer();
-                    renderer.setPixelRatio(window.devicePixelRatio);
-
-                    container.appendChild(renderer.domElement);
-
-                    onWindowResize();
-                    window.addEventListener('resize', onWindowResize, false);
-
-                    document.addEventListener('mousemove', function (e) {
-                        uniforms.u_mouse.value.x = e.clientX / window.innerWidth;
-                        uniforms.u_mouse.value.y = 1.0 - (e.clientY / window.innerHeight);
-                    });
                 }
-
-                function onWindowResize() {
-                    renderer.setSize(window.innerWidth, window.innerHeight);
-                    uniforms.u_resolution.value.x = renderer.domElement.width;
-                    uniforms.u_resolution.value.y = renderer.domElement.height;
-                }
-
-                function animate(time) {
-                    requestAnimationFrame(animate);
-                    uniforms.u_time.value = time * 0.001;
-                    renderer.render(scene, camera);
-                }
-            </script>
+            }
+        </script>
 </body>
 
 </html>

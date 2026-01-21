@@ -23,7 +23,7 @@ const EXTERNAL_ADDONS = {
         timeout: 1500
     },
     mediafusion: {
-        baseUrl: 'https://mediafusionfortheweebs.midnightignite.me/D-JsGOdGy5ORD4ALwdnjM8ulgRM6r34Tns_EE8B_VMbNfIk-ZvEuNjmH3hWZWZVhtWYhI2qA5KbFKYEkhjalpr4xLCicz01i9zKOQL3Fhcqv2LkJdyYGjeTUNodJPCEGd_FwpjiJ3IjMqmD6BAVbvtJUOQPS_of8hQP_DbUo9-CCJun7_xJMfNqgaEmbWLXWpc_BLtX-V9d5eDJ-GAJv-i0eg2PyGUPIRaqKhsOlxRA1g',
+        baseUrl: 'https://mediafusionfortheweebs.midnightignite.me/D-FCO8JXfrGOKFpP-Rim96nHZU9epOb5RPbSpgkgVbYoR1NRJNR1C-9X4VDrUSJJNEvp5pk7CGvSLN7cUHUrth3QG8e3mSPa8Ind2k4VzVGFEa-310EjXdsXT_uUXGri86EVnnQ6f_9b0yoVTuVu7Aqk4uY8IXZp47-0FmuxgXX6wleis_0Evllc0v2wcrWIj-D5m3IZhI18CKHr-pUL5h61ZWcaRuxGjgwYK88Xy3PIN2U3YzTi4J9pazQBpCNDH-NpZPwk2RVnjs0WF7dRU5XD_D0robmhH9q0edoqaR_71u1j2y-XnxkwPNjg-o5Yb_',
         name: 'MediaFusion',
         emoji: '🅜',
         timeout: 1500

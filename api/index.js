@@ -10015,6 +10015,10 @@ export default async function handler(req, res) {
                     p2p: true, // Indica che può restituire link magnet
                     configurable: true, // ✅ Abilita pulsante "Configure" in Stremio
                     configurationRequired: false // ✅ Non obbligatorio, ma disponibile
+                },
+                stremioAddonsConfig: {
+                    issuer: "https://stremio-addons.net",
+                    signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..KhILYPKV1QTOVC2A2NsJbg.rLfKkmuaDclqyqCaepruXSYSuojS7vZEXOK52OAgmCoTfB4boj4_5uFLk3O6ogmloqArUaM6VSdVzKKTVYM-0q3fqy-T2KHzeqHPs-HdWuOoQV6Nk_hqdYRPP5kOozte.udtkBwzFuQmvIRf0yzYByw"
                 }
             };
 

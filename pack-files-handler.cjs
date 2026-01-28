@@ -150,8 +150,24 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         });
 
         if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from RD`);
-        // ✅ RETURN FILENAME from RD
-        return { torrentId, files, filename: infoResponse.data.filename || infoResponse.data.original_filename };
+
+        // ✅ SMART FILENAME SELECTION (Simplified via User Request)
+        // Always prefer original_filename. Only fallback to filename if original is missing.
+        // If original is missing (empty), filename is likely "Magnet" (waiting selection), 
+        // which will be filtered by api/index.js validation anyway.
+        const finalFilename = infoResponse.data.original_filename || infoResponse.data.filename;
+
+        if (DEBUG_MODE) {
+            if (finalFilename !== infoResponse.data.filename) {
+                console.log(`✨ [PACK-HANDLER] Using original_filename: "${finalFilename}" (was "${infoResponse.data.filename}")`);
+            }
+        }
+
+        return {
+            torrentId,
+            files,
+            filename: finalFilename
+        };
 
     } catch (error) {
         if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);

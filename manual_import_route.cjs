@@ -1080,6 +1080,11 @@ router.get('/', (req, res) => {
             if (isValidated) {
                  submitBtn.disabled = false;
                  submitBtn.title = "";
+                 
+                 // ✅ FORCE VISUAL ENABLE
+                 submitBtn.style.opacity = '1';
+                 submitBtn.style.cursor = 'pointer';
+                 submitBtn.classList.add('pulse-active');
             }
             return true;
         }
@@ -1138,11 +1143,16 @@ router.get('/', (req, res) => {
                         currentTmdbId = data.tmdb_id;
                     }
 
-                    // ENABLE IMPORT
+                    // ENABLE IMPORT - Check Debrid Keys First!
                     isValidated = true;
-                    submitBtn.disabled = false;
-                    submitBtn.style.opacity = '1';
-                    submitBtn.style.cursor = 'pointer';
+                    
+                    if (validateDebridKeys()) {
+                        submitBtn.disabled = false;
+                        submitBtn.style.opacity = '1';
+                        submitBtn.style.cursor = 'pointer';
+                    } else {
+                         // validateDebridKeys will disable it and set title
+                    }
 
                 } else {
                     previewDiv.innerHTML = '<div style="color:#f87171;">⚠️ Nessun risultato trovato. Verifica ID.</div>';

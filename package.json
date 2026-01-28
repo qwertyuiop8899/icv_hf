@@ -1,6 +1,6 @@
 {
   "name": "ilcorsaroviola",
-  "version": "6.5.0",
+  "version": "7.0.0",
   "private": true,
   "description": "Addon Stremio CorsaroNero con DB interno e altri provider con supporto Real-Debrid con MFP per la condivisione, Torbox e Jackett.",
   "type": "module",
@@ -14,8 +14,6 @@
     "start:docker": "PORT=7860 node server.js"
   },
   "dependencies": {
-    "all-debrid-api": "^1.2.0",
-    "node-fetch": "^2.7.0",
     "axios": "^1.6.2",
     "bittorrent-dht": "^11.0.11",
     "bittorrent-tracker": "^11.2.2",
@@ -23,12 +21,12 @@
     "dotenv": "^17.2.3",
     "express": "^4.22.1",
     "fuzzball": "^2.2.3",
-    "pg": "^8.16.3",
+    "multer": "^2.0.2",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.17.2",
     "webtorrent": "^2.8.5"
   },
   "devDependencies": {
     "vercel": "^34.2.0"
   }
 }
-
-

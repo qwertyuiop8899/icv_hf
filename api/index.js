@@ -129,10 +129,25 @@ const resolvePackNamesInBackground = async (torrents, config, mediaDetails, seas
 
                 const realPackName = packData.filename;
 
-                // 1. Update title if different
-                if (realPackName && realPackName !== torrent.title) {
+                // 1. Update title if different - BUT FILTER INVALID NAMES
+                const invalidNames = ['invalid magnet', 'magnet', 'torrent', 'download', 'error', 'unavailable', '404 not found'];
+                const isInvalidName = invalidNames.some(n => realPackName.toLowerCase().includes(n));
+                const isTooShort = realPackName.length < 5; // "Magnet" is 6, but let's be safe for abbreviations like "S01" (3) but packs usually longer
+
+                // Regex to catch "magnet:?xt=..." or similar raw garbage
+                const isRawMagnet = /magnet:\?xt=/i.test(realPackName);
+
+                if (realPackName &&
+                    realPackName !== torrent.title &&
+                    !isInvalidName &&
+                    !isTooShort &&
+                    !isRawMagnet) {
+
                     console.log(`📦 [BG-FIX] Fixing title: "${torrent.title.substring(0, 40)}..." -> "${realPackName.substring(0, 40)}..."`);
                     await dbHelperRef.updateTorrentTitle(infoHash, realPackName);
+
+                } else if (isInvalidName || isTooShort || isRawMagnet) {
+                    console.log(`⚠️ [BG-FIX] Skipped title update: "${realPackName}" is invalid/generic/short`);
                 }
 
                 // 2. Populate files table

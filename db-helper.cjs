@@ -151,7 +151,8 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      query += ` AND (${patterns})`;
+      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'manual_add' OR provider = 'vip')`;
       // Add % wildcards for partial matching (e.g., 'knaben' matches 'Knaben (1337x)')
       params.push(...providers.map(p => `%${p}%`));
     }
@@ -215,7 +216,8 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      query += ` AND (${patterns})`;
+      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'manual_add' OR provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 
@@ -275,7 +277,8 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `t.provider ILIKE $${4 + i}`).join(' OR ');
-      query += ` AND (${patterns})`;
+      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR t.provider = 'manual_add' OR t.provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 
@@ -1003,6 +1006,32 @@ async function getImdbIdByHash(infoHash) {
   }
 }
 
+// ✅ ADDED: getTorrent by hash
+/**
+ * Get full torrent data by its info hash
+ * @param {string} infoHash - Torrent info hash
+ * @returns {Promise<Object|null>} Torrent object or null if not found
+ */
+async function getTorrent(infoHash) {
+  if (!pool) throw new Error('Database not initialized');
+
+  try {
+    const query = 'SELECT * FROM torrents WHERE info_hash = $1 LIMIT 1';
+    const result = await pool.query(query, [infoHash.toLowerCase()]);
+
+    if (result.rows.length > 0) {
+      if (DEBUG_MODE) console.log(`✅ [DB] Found torrent data for hash ${infoHash}`);
+      return result.rows[0];
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`❌ [DB] Error fetching torrent by hash:`, error.message);
+    return null;
+  }
+}
+
+
 /**
  * Search torrents by title using PostgreSQL Full-Text Search (FTS)
  * This is a fallback when ID-based search returns no results
@@ -1556,6 +1585,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     }
 
     // 🎬 FILTER 2: Only include files with matching IMDb or NULL
+    // For multi-movie packs, files start with imdb_id=NULL and get auto-indexed when searched
     if (movieImdbId) {
       query += ` AND (f.imdb_id IS NULL OR f.imdb_id = $${paramIndex})`;
       params.push(movieImdbId);
@@ -1799,8 +1829,36 @@ async function cleanupTorrentSearchCache(ttlHours = 6) {
   }
 }
 
+// ✅ ADDED: Update torrent title (for fixing pack names)
+/**
+ * Update the title of a torrent in the database
+ * Used to fix pack names after resolving from RD/TB
+ * @param {string} infoHash - Torrent info hash
+ * @param {string} newTitle - New title to set
+ * @returns {Promise<boolean>} True if updated, false otherwise
+ */
+async function updateTorrentTitle(infoHash, newTitle) {
+  if (!pool) throw new Error('Database not initialized');
+
+  try {
+    const query = 'UPDATE torrents SET title = $1 WHERE info_hash = $2';
+    const result = await pool.query(query, [newTitle, infoHash.toLowerCase()]);
+
+    if (result.rowCount > 0) {
+      console.log(`✅ [DB] Updated title for ${infoHash.substring(0, 8)}... -> "${newTitle.substring(0, 50)}..."`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error(`❌ [DB] Error updating torrent title:`, error.message);
+    return false;
+  }
+}
+
 module.exports = {
   initDatabase,
+  getTorrent,
+  updateTorrentTitle,
   searchByImdbId,
   searchByTmdbId,
   searchEpisodeFiles,

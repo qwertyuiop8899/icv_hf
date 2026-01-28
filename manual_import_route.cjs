@@ -96,10 +96,37 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         // 3. Delete
         await axios.delete(`${baseUrl}/torrents/delete/${torrentId}`, { headers }).catch(() => { });
 
+        // ✅ SMART FILENAME SELECTION (Robust Check)
+        const rdFilename = infoResponse.data.filename;
+        const rdOriginalFilename = infoResponse.data.original_filename;
+
+        const invalidTerms = ['invalid magnet', 'magnet', 'torrent', 'download', 'error', 'unavailable', '404 not found'];
+        const isInvalid = (name) => {
+            if (!name) return true;
+            const lower = name.toLowerCase();
+            return invalidTerms.some(term => lower.includes(term)) || name.length < 5;
+        };
+
+        // Algorithm:
+        // 1. Try Original Filename (Priority) -> If valid, use it.
+        // 2. If invalid, Try Filename -> If valid, use it.
+        // 3. If both invalid, fallback to Original (usually contains the real title even if "invalid" somehow) or Filename
+
+        let finalFilename = rdOriginalFilename;
+
+        if (!isInvalid(rdOriginalFilename)) {
+            finalFilename = rdOriginalFilename;
+        } else if (!isInvalid(rdFilename)) {
+            finalFilename = rdFilename;
+        } else {
+            // Both are "bad" or Original is missing. Fallback.
+            finalFilename = rdOriginalFilename || rdFilename;
+        }
+
         return {
             torrentId,
             files,
-            filename: infoResponse.data.filename || infoResponse.data.original_filename
+            filename: finalFilename
         };
 
     } catch (error) {

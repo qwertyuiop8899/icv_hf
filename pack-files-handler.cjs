@@ -19,7 +19,11 @@ const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$
 
 // Season/Episode parsing patterns (inspired by MediaFusion)
 const SEASON_EPISODE_PATTERNS = [
-    // S01 - 09, S1 - 9 (User Request) - Must be first to avoid matching generic "- 09 -" later
+    // S01 - E01, S01-E01 (Explicit E with dash)
+    { pattern: /[sS](\d{1,2})\s*[-–—]\s*[eE][pP]?(\d{1,3})(?![0-9])/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
+    // S01 - 01, S1 - 1, S01-1 (Common Italian format)
+    { pattern: /[sS](\d{1,2})\s*[-–—]\s*(\d{1,3})(?![0-9])/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
+    // S01 - 09, S1 - 9 (User Request) - Fallback for variants without word boundary
     { pattern: /[sS](\d{1,2})\s*[-–—]\s*(\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
     // S01E04, s01e04, S1E04
     { pattern: /[sS](\d{1,2})[eE](\d{1,3})/, extract: (m) => ({ season: parseInt(m[1]), episode: parseInt(m[2]) }) },
@@ -597,23 +601,10 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
                 }
             }
 
-            // Fallback to old method if new method didn't find files
-            if (videoFiles.length === 0 && !dbCacheCorrupted && typeof dbHelper.getSeriesPackFiles === 'function') {
-                const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
-                if (cachedFiles && cachedFiles.length > 0) {
-                    console.log(`💾 [PACK-HANDLER] Found ${cachedFiles.length} files in DB CACHE (fallback) for ${infoHash.substring(0, 8)}`);
-
-                    // 🔧 FIX: Check if cache is corrupted (0 files)
-                    const cachedVideoFiles = cachedFiles.filter(f => isVideoFile(f.path) && f.bytes > 25 * 1024 * 1024);
-                    if (cachedVideoFiles.length >= 1) {
-                        videoFiles = cachedVideoFiles;
-                        totalPackSize = cachedFiles.reduce((acc, f) => acc + f.bytes, 0);
-                    } else {
-                        console.log(`⚠️ [PACK-HANDLER] DB cache empty (0 video files). Fetching from debrid...`);
-                        dbCacheCorrupted = true;
-                    }
-                }
-            }
+            // 🚫 REMOVED: Fallback to getSeriesPackFiles is BAD for movie packs!
+            // The `files` table doesn't have correct RD file IDs for movie packs.
+            // Movie packs MUST use pack_files table which stores correct RD file.id values.
+            // Series packs use the `files` table (handled by resolveSeriesPackFile, not here).
         } catch (err) {
             console.warn(`⚠️ [PACK-HANDLER] DB Cache check failed: ${err.message}`);
         }
@@ -821,5 +812,6 @@ module.exports = {
     isSeasonPack,
     isVideoFile,
     parseSeasonEpisode,
-    resolveMoviePackFile
+    resolveMoviePackFile,
+    fetchFilesFromRealDebrid
 };

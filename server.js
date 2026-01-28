@@ -23,6 +23,10 @@ if (process.env.DATABASE_URL) {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// 🚀 Mount Manual Import Route
+const manualImportRoute = require('./manual_import_route.cjs');
+app.use('/scrape', manualImportRoute);
+
 // Serve static files dalla cartella public
 app.use(express.static('public'));
 

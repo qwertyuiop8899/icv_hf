@@ -1029,8 +1029,16 @@
             </div>
 
             <!-- Action Buttons -->
-            <div class="button-group"
-                style="margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(147, 51, 234, 0.3); padding-top: 20px;">
+            <div
+                style="margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(147, 51, 234, 0.3); text-align: center;">
+                <!-- Manual Import (Smaller, Above) -->
+                <button id="manual_import_button" onclick="window.open('/scrape', '_blank')"
+                    style="background: linear-gradient(135deg, #ec4899 0%, #db2777 100%); box-shadow: 0 4px 16px rgba(236, 72, 153, 0.3); padding: 10px 20px; font-size: 0.9em; min-width: auto; width: 50%; margin-bottom: 20px;">
+                    Aggiungi Torrent
+                </button>
+            </div>
+
+            <div class="button-group">
                 <button id="install_button" disabled>Installa Addon</button>
                 <button id="copy_button" disabled>Copia Link</button>
             </div>

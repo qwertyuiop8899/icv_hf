@@ -71,6 +71,118 @@ const triggerSeederUpdate = async (results) => {
     }
 };
 
+// 🔧 BACKGROUND PACK NAME RESOLUTION
+// Fixes the issue where packs are saved with episode filename instead of pack name
+// Runs AFTER torrents are saved to DB, queries RD/TB for real name, updates DB
+const resolvePackNamesInBackground = async (torrents, config, mediaDetails, season, episode, dbHelperRef) => {
+    try {
+        const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+        const rdKey = config.rd_key;
+        const tbKey = config.torbox_key;
+
+        if (!rdKey && !tbKey) return;
+
+        // Filter only packs (season packs have S01 but no E01, or explicit "Stagione" / "Season")
+        const packCandidates = torrents.filter(t => {
+            const title = t.title || '';
+            return packFilesHandler.isSeasonPack(title);
+        });
+
+        if (packCandidates.length === 0) {
+            if (DEBUG_MODE) console.log(`📦 [BG-FIX] No pack candidates to resolve`);
+            return;
+        }
+
+        console.log(`📦 [BG-FIX] Resolving ${packCandidates.length} pack(s) in background...`);
+
+        for (const torrent of packCandidates) {
+            const infoHash = torrent.info_hash;
+            if (!infoHash) continue;
+
+            try {
+                let packData = null;
+
+                // Try RD first
+                if (rdKey && typeof packFilesHandler.fetchFilesFromRealDebrid === 'function') {
+                    try {
+                        packData = await packFilesHandler.fetchFilesFromRealDebrid(infoHash, rdKey);
+                    } catch (e) {
+                        if (DEBUG_MODE) console.log(`⚠️ [BG-FIX] RD failed for ${infoHash.substring(0, 8)}: ${e.message}`);
+                    }
+                }
+
+                // Fallback to TB (if function exists)
+                if (!packData && tbKey && typeof packFilesHandler.fetchFilesFromTorbox === 'function') {
+                    try {
+                        packData = await packFilesHandler.fetchFilesFromTorbox(infoHash, tbKey);
+                    } catch (e) {
+                        if (DEBUG_MODE) console.log(`⚠️ [BG-FIX] TB failed for ${infoHash.substring(0, 8)}: ${e.message}`);
+                    }
+                }
+
+                if (!packData || !packData.filename) {
+                    if (DEBUG_MODE) console.log(`⚠️ [BG-FIX] No pack data for ${infoHash.substring(0, 8)}`);
+                    // Add delay even on failure to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    continue;
+                }
+
+                const realPackName = packData.filename;
+
+                // 1. Update title if different
+                if (realPackName && realPackName !== torrent.title) {
+                    console.log(`📦 [BG-FIX] Fixing title: "${torrent.title.substring(0, 40)}..." -> "${realPackName.substring(0, 40)}..."`);
+                    await dbHelperRef.updateTorrentTitle(infoHash, realPackName);
+                }
+
+                // 2. Populate files table
+                if (packData.files && packData.files.length > 0) {
+                    const seasonNum = parseInt(season) || packFilesHandler.extractSeasonFromPackTitle(realPackName) || 1;
+                    const filesToInsert = [];
+
+                    for (const file of packData.files) {
+                        if (!packFilesHandler.isVideoFile(file.path)) continue;
+                        if (file.bytes < 50 * 1024 * 1024) continue; // Skip small files
+
+                        const filename = file.path.split('/').pop();
+                        const parsed = packFilesHandler.parseSeasonEpisode(filename, seasonNum);
+
+                        if (parsed) {
+                            filesToInsert.push({
+                                info_hash: infoHash,
+                                file_index: file.id,
+                                title: filename,
+                                size: file.bytes,
+                                imdb_id: mediaDetails.imdbId || null,
+                                imdb_season: parsed.season,
+                                imdb_episode: parsed.episode
+                            });
+                        }
+                    }
+
+                    if (filesToInsert.length > 0) {
+                        console.log(`📦 [BG-FIX] Inserting ${filesToInsert.length} episode files for ${infoHash.substring(0, 8)}...`);
+                        await dbHelperRef.insertEpisodeFiles(filesToInsert);
+                    }
+                }
+
+                // Rate limit protection: wait 2 seconds between pack resolutions
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+            } catch (packErr) {
+                console.warn(`⚠️ [BG-FIX] Error processing pack ${infoHash.substring(0, 8)}: ${packErr.message}`);
+                // Add delay even on error to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+
+        console.log(`📦 [BG-FIX] Background pack resolution completed`);
+
+    } catch (err) {
+        console.warn(`⚠️ [BG-FIX] Background resolution failed: ${err.message}`);
+    }
+};
+
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 // ✅ Torrentio placeholder videos (hosted by Torrentio)
@@ -5622,7 +5734,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
             // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
             if (config.db_only) {
-                selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'torrentio', 'mediafusion', 'comet'];
+                selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'manual_add', 'torrentio', 'mediafusion', 'comet'];
                 if (DEBUG_MODE) console.log(`💾 [DB Only] Querying ALL providers in database`);
             } else {
                 if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
@@ -5630,8 +5742,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
                 if (config.use_uindex !== false) selectedProviders.push('uindex');
                 if (config.use_rarbg === true) selectedProviders.push('rarbg');
-                // Always include rd_cache (personal torrents) and pack-handler
-                selectedProviders.push('rd_cache', 'pack-handler');
+                // Always include rd_cache (personal torrents), pack-handler, and manual_add (manually imported)
+                selectedProviders.push('rd_cache', 'pack-handler', 'manual_add');
                 // External addons: Check individual toggles
                 if (config.use_external_addons !== false) {
                     if (config.use_torrentio !== false) selectedProviders.push('torrentio');
@@ -5698,6 +5810,19 @@ async function handleStream(type, id, config, workerOrigin) {
                         }
                     }
 
+                    // 🇮🇹 PRIORITY 1.4: Search pack_files by ITALIAN TITLE
+                    if (italianTitle && italianTitle !== mediaDetails.title) {
+                        const italianPackMatches = await dbHelper.searchPacksByTitle(
+                            italianTitle,
+                            mediaDetails.year ? String(mediaDetails.year) : null,
+                            mediaDetails.imdbId  // Auto-index if found
+                        );
+                        if (italianPackMatches && italianPackMatches.length > 0) {
+                            console.log(`💾 [DB] Found ${italianPackMatches.length} pack file(s) via Title Search (IT): "${italianTitle}"`);
+                            packResults.push(...italianPackMatches);
+                        }
+                    }
+
                     // 📦 PRIORITY 1.5: Reverse Search (Find packs by File Name inside them - P2P/Index Support)
                     // This finds packs where we indexed the files (e.g. "Disney Collection") even if the pack itself isn't tagged with this IMDb ID.
                     // 🎬 FILTRO DOPPIO: excludeSeries=true + movieImdbId per evitare risultati di serie TV con parole simili nel titolo episodio
@@ -5720,6 +5845,15 @@ async function handleStream(type, id, config, workerOrigin) {
                         if (origMatches && origMatches.length > 0) {
                             if (DEBUG_MODE) console.log(`💾 [DB] Found ${origMatches.length} pack files via Reverse Title Search: "${mediaDetails.originalName}" (${mediaDetails.year})`);
                             packResults.push(...origMatches);
+                        }
+                    }
+
+                    // 🇮🇹 RICERCA CON TITOLO ITALIANO - per pack Disney e file con nomi italiani
+                    if (italianTitle && italianTitle !== mediaDetails.title && italianTitle !== mediaDetails.originalName) {
+                        const italianMatches = await dbHelper.searchFilesByTitle(italianTitle, selectedProviders, fileSearchOptions);
+                        if (italianMatches && italianMatches.length > 0) {
+                            console.log(`💾 [DB] Found ${italianMatches.length} pack files via Reverse Title Search (IT): "${italianTitle}" (${mediaDetails.year})`);
+                            packResults.push(...italianMatches);
                         }
                     }
 
@@ -7319,19 +7453,28 @@ async function handleStream(type, id, config, workerOrigin) {
                             if (!r.infoHash) return false;
 
                             // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
-                            const title = r.title || r.websiteTitle || '';
-                            const langInfo = getLanguageInfo(title);
+                            // 📦 For pack files with fileIndex, use file_title for language detection
+                            const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
+                                ? r.file_title
+                                : (r.title || r.websiteTitle || '');
+                            const langInfo = getLanguageInfo(titleForLang, italianTitle, r.source); // ✅ FIX: Pass italianTitle
                             const isItalian = langInfo.isItalian;
 
                             // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
                             // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
                             // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
                             const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
+                            const isManual = (r.source && /manual_add/i.test(r.source)) || (r.provider && /manual_add/i.test(r.provider));
                             const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
-                                (mainAddon && /^torrentio$/i.test(mainAddon));
+                                (mainAddon && /^torrentio$/i.test(mainAddon)) ||
+                                isManual; // ✅ Exempt Manual
 
-                            if (!isItalian && !isTrustedProvider) {
-                                if (DEBUG_MODE) console.log(`🚫 [DB Filter] Skipping non-ITA: "${title.substring(0, 50)}..."`);
+                            // 📦 Pack Files logic:
+                            // If it's a Movie Pack File (has fileIndex and type is movie), we trust the search logic found it correctly
+                            const isMoviePackFile = (type === 'movie' && r.fileIndex !== undefined && r.fileIndex !== null);
+
+                            if (!isItalian && !isTrustedProvider && !isMoviePackFile) { // ✅ Exempt Movie Packs
+                                if (DEBUG_MODE) console.log(`🚫 [DB Filter] Skipping non-ITA: "${titleForLang.substring(0, 50)}..."`);
                                 return false;
                             }
                             return true;
@@ -7352,7 +7495,15 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (torrentsToSave.length > 0) {
                         // 🚀 Fire-and-forget: Save to DB in background without blocking response
                         dbHelper.batchInsertTorrents(torrentsToSave)
-                            .then(inserted => console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`))
+                            .then(inserted => {
+                                console.log(`💾 [DB] Saved ${inserted}/${torrentsToSave.length} ITA torrents to DB (background)`);
+
+                                // 🔧 BACKGROUND FIX: Resolve real pack names from RD/TB and update DB
+                                // This fixes the issue where packs are saved with episode filename instead of pack name
+                                if (type === 'series' && (config.rd_key || config.torbox_key)) {
+                                    resolvePackNamesInBackground(torrentsToSave, config, mediaDetails, season, episode, dbHelper);
+                                }
+                            })
                             .catch(err => console.warn(`⚠️ [DB] Background save failed: ${err.message}`));
                     } else {
                         if (DEBUG_MODE) console.log(`🚫 [DB] No Italian torrents to save from ${results.length} results`);
@@ -7594,7 +7745,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     movieDetails = await getTMDBDetails(mediaDetails.tmdbId, 'movie', tmdbKey);
                 }
                 filteredResults = filteredResults.filter(result => {
-                    const torrentTitle = result.title || result.websiteTitle;
+                    // 📦 For pack files with fileIndex, use file_title for matching
+                    const hasPackFile = result.fileIndex !== null && result.fileIndex !== undefined && result.file_title;
+                    const torrentTitle = hasPackFile ? result.file_title : (result.title || result.websiteTitle);
 
                     // 🎯 SKIP YEAR FILTERING FOR PACKS (they contain multiple movies with different years)
                     // 🎯 SMART FILTERING: Check for Pack/FileIndex
@@ -7658,7 +7811,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 // Trigger: Only if Debrid key is present
                 if (filteredResults.length > 0 && (config.rd_key || config.torbox_key)) {
                     const MAX_MOVIE_VERIFY = 5;
-                    const DELAY_MS = 200;
+                    // 🔧 Delay: RD needs 2000ms to avoid rate limit, Torbox no limit
+                    const DELAY_MS = config.rd_key ? 2000 : 200;
 
                     // Separate known/verified from unverified
                     const verifiedMovies = [];
@@ -7732,11 +7886,36 @@ async function handleStream(type, id, config, workerOrigin) {
                     const excluded = [];
                     const needsExternalVerification = [];
 
-                    // ✅ FIRST: Filter to only actual packs (title-based)
+                    // ✅ FIRST: Filter to only actual packs (title-based or structure-based)
                     // Non-pack torrents are assumed valid (single movie = no need to verify)
                     const actualPacks = [];
+                    const packKeywords = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i;
+
                     for (const result of unverifiedMovies) {
-                        const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                        let isPack = packKeywords.test(result.title);
+
+                        // 🔧 FIX: Also check if this looks like a file INSIDE a pack:
+                        // 1. Has potentialPack flag from external addon (description != filename)
+                        // 2. Has packSize that's much larger than file size (5x difference = pack)
+                        // 3. Has fileIndex from DB (means it came from pack_files table)
+                        // 4. Title looks like a filename (starts with year or has .mkv extension)
+                        if (!isPack) {
+                            const packSize = result.packSize || 0;
+                            const fileSize = result.sizeInBytes || result.file_size || 0;
+                            const hasFileIndex = result.fileIndex !== undefined && result.fileIndex !== null;
+                            const looksLikeFilename = /^\(\d{4}\)|\.mkv$/i.test(result.title);
+                            const hugeSizeDifference = packSize > 0 && fileSize > 0 && packSize > fileSize * 5;
+                            const hasPotentialPackFlag = result.potentialPack === true;
+
+                            // Check rawDescription for pack keywords if available
+                            const descriptionHasPackKeywords = result.rawDescription && packKeywords.test(result.rawDescription);
+
+                            if (hasPotentialPackFlag || descriptionHasPackKeywords || hasFileIndex || hugeSizeDifference || (looksLikeFilename && packSize > 50 * 1024 * 1024 * 1024)) {
+                                isPack = true;
+                                if (DEBUG_MODE) console.log(`📦 [MOVIE VERIFY] Detected hidden pack: "${result.title?.substring(0, 50)}..." (potentialPack=${hasPotentialPackFlag}, descKeywords=${descriptionHasPackKeywords}, hasIdx=${hasFileIndex})`);
+                            }
+                        }
+
                         if (isPack) {
                             actualPacks.push(result);
                         } else {
@@ -7776,11 +7955,9 @@ async function handleStream(type, id, config, workerOrigin) {
                                 }
                             }
 
-                            // Fallback to old method for files table
-                            if (!hasFreshCache && !needsForceRefresh) {
-                                const cachedFiles = await dbHelper.getSeriesPackFiles(infoHash);
-                                hasFreshCache = cachedFiles && cachedFiles.length > 0;
-                            }
+                            // 🚫 REMOVED: Fallback to getSeriesPackFiles is BAD for movie packs!
+                            // The `files` table doesn't have correct RD file IDs for movie packs.
+                            // If pack_files is empty, resolveMoviePackFile will call RD/TB to get correct indices.
 
                             if (hasFreshCache) {
                                 // CACHE HIT with valid TTL: Safe to call resolveMoviePackFile (won't make API calls)
@@ -7832,9 +8009,12 @@ async function handleStream(type, id, config, workerOrigin) {
                         const result = toVerifyExternal[i];
                         const infoHash = result.infoHash?.toLowerCase();
 
-                        // ✅ FIXED: Only check if TITLE indicates pack (trilogia, collection, etc.)
-                        // NOT size-based - a single 4K movie can be >4GB!
-                        const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
+                        // ✅ FIXED: Check TITLE, rawDescription, AND potentialPack flag
+                        // For external addons, title is the filename (e.g. "Dumbo.mkv"), not the pack name
+                        const packKeywordsRegex = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i;
+                        const titleHasKeyword = packKeywordsRegex.test(result.title);
+                        const descHasKeyword = result.rawDescription && packKeywordsRegex.test(result.rawDescription);
+                        const isLikelyPack = titleHasKeyword || descHasKeyword || result.potentialPack === true;
 
                         if (!isLikelyPack) {
                             newlyVerified.push(result); // Assume valid single movie
@@ -7955,14 +8135,28 @@ async function handleStream(type, id, config, workerOrigin) {
             // This ensures we don't discard English S02 just because we found Italian S01.
             if (filteredResults.length > 0) {
                 const hasItalianResults = filteredResults.some(r => {
-                    const lang = getLanguageInfo(r.title, italianTitle, r.source);
+                    // 📦 For pack files with fileIndex, use file_title for language detection
+                    const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
+                        ? r.file_title
+                        : r.title;
+                    const lang = getLanguageInfo(titleForLang, italianTitle, r.source);
                     return lang.isItalian || lang.isMulti;
                 });
 
                 if (hasItalianResults) {
                     const originalCount = filteredResults.length;
                     const italianOnly = filteredResults.filter(r => {
-                        const lang = getLanguageInfo(r.title, italianTitle, r.source);
+                        const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
+                            ? r.file_title
+                            : r.title;
+
+                        // ✅ EXEMPTIONS: Manual add & Movie Packs
+                        const isManual = (r.source && /manual_add/i.test(r.source)) || (r.provider && /manual_add/i.test(r.provider));
+                        const isMoviePackFile = (type === 'movie' && r.fileIndex !== undefined && r.fileIndex !== null);
+
+                        if (isManual || isMoviePackFile) return true;
+
+                        const lang = getLanguageInfo(titleForLang, italianTitle, r.source);
                         return lang.isItalian || lang.isMulti;
                     });
 
@@ -8179,6 +8373,11 @@ async function handleStream(type, id, config, workerOrigin) {
 
             filteredResults = filteredResults.filter(result => {
                 const provider = (result.source || result.externalAddon || '').toLowerCase();
+
+                // ✅ EXEMPT MANUAL & PACKS from Full ITA Strict Mode
+                const isManual = provider.includes('manual_add');
+                const isMoviePackLink = (type === 'movie' && result.fileIndex !== undefined && result.fileIndex !== null);
+                if (isManual || isMoviePackLink) return true;
 
                 // Extract MAIN provider only (before parentheses) to avoid false positives
                 // e.g., "comet (torrentio)" → "comet" (NOT exempt)
@@ -10570,6 +10769,9 @@ export default async function handler(req, res) {
                                 new RegExp(`season\\s*${season}\\s*episode\\s*${episode}(?![0-9])`, 'i'),
                                 // Italian: Stagione 8 Episodio 2
                                 new RegExp(`stagione\\s*${season}\\s*episodio\\s*${episode}(?![0-9])`, 'i'),
+                                // Italian: S01 - 01 or S01 - E01 (Add extra support)
+                                new RegExp(`s${seasonStr}\\s*[-–—]\\s*[eE]?p?${episodeStr}(?![0-9])`, 'i'),
+                                new RegExp(`s${season}\\s*[-–—]\\s*[eE]?p?${episode}(?![0-9])`, 'i'),
                                 // Episodio: episodio.2 or episodio 2
                                 new RegExp(`episodio[\\s.]*${episode}(?![0-9])`, 'i'),
                                 // Compact numbers: 802 (surrounded by non-digits)
@@ -10826,13 +11028,15 @@ export default async function handler(req, res) {
                         }
                     }
 
-                    // 🚀 STEP 1: If no DB cache, try size-descending prediction
+                    // 🚀 STEP 1: If no DB cache, try ORIGINAL SELECTION ORDER prediction
                     if (!unrestricted) {
-                        const sortedBySize = [...selectedForLink].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
-                        const predictedIndex = sortedBySize.findIndex(f => f.id === targetFile.id);
+                        // 🔥 FIX: RD links array matches the order of selected files in the ORIGINAL torrent
+                        // Sort selected files by their RD ID (1-based index in torrent) to predict the link index
+                        const sortedByOriginalId = [...selectedForLink].sort((a, b) => (parseInt(a.id) || 0) - (parseInt(b.id) || 0));
+                        const predictedIndex = sortedByOriginalId.findIndex(f => f.id === targetFile.id);
 
                         if (predictedIndex >= 0 && predictedIndex < torrent.links.length) {
-                            console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (size-descending)...`);
+                            console.log(`[RealDebrid] 🎯 Trying predicted index ${predictedIndex} (original-order)...`);
                             try {
                                 const testUnrestricted = await realdebrid.unrestrictLink(torrent.links[predictedIndex]);
                                 if (testUnrestricted && testUnrestricted.filename) {

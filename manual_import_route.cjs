@@ -1059,7 +1059,35 @@ router.get('/', (req, res) => {
                  if(imdbInput.value) { isValidated = false; submitBtn.disabled = true; }
              }
              checkPackMode();
+             validateDebridKeys(); // Validate keys on type change too
         });
+
+        // Validation for Debrid Keys
+        function validateDebridKeys() {
+            const mode = modeSelector.value;
+            const rd = document.getElementById('rdKey').value.trim();
+            const tb = document.getElementById('tbKey').value.trim();
+            
+            if (mode === 'debrid' && !rd && !tb) {
+                submitBtn.disabled = true;
+                submitBtn.title = "Inserisci almeno una chiave API (RD o TorBox)";
+                return false;
+            }
+            
+            // Only re-enable if other validations pass (checked by checkPackMode or metadata check)
+            // But strict check: if debrid & no keys -> BLOCK
+            // If keys ok, we don't automatically enable, we let other checks decide or we enable if already validated
+            if (isValidated) {
+                 submitBtn.disabled = false;
+                 submitBtn.title = "";
+            }
+            return true;
+        }
+
+        // Add listeners for keys
+        document.getElementById('rdKey').addEventListener('input', validateDebridKeys);
+        document.getElementById('tbKey').addEventListener('input', validateDebridKeys);
+        modeSelector.addEventListener('change', validateDebridKeys);
 
         // Add listeners to Inputs to trigger Pack check (to enable button)
         document.getElementById('magnetLink').addEventListener('input', checkPackMode);

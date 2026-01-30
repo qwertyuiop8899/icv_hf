@@ -133,7 +133,20 @@ function extractOriginalProvider(text) {
 }
 
 /**
+ * Estrae il pack title dal campo 📁 nel title/description
+ * Questo è il nome della cartella/pack, NON il singolo file
+ */
+function extractPackTitle(stream) {
+    const text = stream.title || stream.description || '';
+    // 📁 indica il nome del PACK (cartella con più file)
+    const match = text.match(/📁\s*([^\n]+)/);
+    if (match) return match[1].trim();
+    return null;
+}
+
+/**
  * Estrae il filename dal campo behaviorHints o dal titolo
+ * 📄 indica il singolo file (episodio) all'interno di un pack
  */
 function extractFilename(stream) {
     if (stream.behaviorHints?.filename) {
@@ -233,6 +246,7 @@ function normalizeExternalStream(stream, addonKey) {
     if (DEBUG_MODE) console.log(`🔍 [Normalize] infoHash=${infoHash ? infoHash.substring(0, 8) + '...' : 'NULL'}, url=${stream.url?.substring(0, 60) || 'none'}...`);
 
     const filename = extractFilename(stream);
+    const packTitle = extractPackTitle(stream); // 📁 = nome del pack/cartella
     const quality = extractQuality(stream.name || filename || text);
     const sizeInfo = extractSize(text);
     const seeders = extractSeeders(text);
@@ -247,24 +261,31 @@ function normalizeExternalStream(stream, addonKey) {
         sizeBytes = stream.video_size;
     }
 
+    // 🔧 FIX: Per i PACK, usa il pack title (📁) come titolo principale
+    // Il filename (📄) è solo il nome dell'episodio singolo
+    // Il pack title è il nome corretto del torrent
+    const torrentTitle = packTitle || filename;
+
     return {
         // Campi principali per streaming
         infoHash: infoHash,
         fileIdx: stream.fileIdx ?? 0,
 
-        // Metadati per display
-        title: filename,
-        filename: filename,
-        websiteTitle: filename,
+        // 🔧 FIX: Metadati - usa pack title se disponibile
+        title: torrentTitle,           // Pack name (📁) oppure filename se non è un pack
+        filename: filename,            // Sempre il nome del singolo file (📄)
+        websiteTitle: torrentTitle,    // Same as title
+        file_title: filename,          // 🔧 NEW: Preserva sempre il nome file episodio
         quality: quality || stream.resolution?.replace(/[^0-9kp]/gi, '') || '',
         size: sizeInfo.formatted || formatBytes(sizeBytes),
         mainFileSize: sizeBytes,
         seeders: seeders || stream.peers || 0,
         leechers: 0,
 
-        // 🔧 Pack detection: if we have a description different from filename, it might be a pack
+        // 🔧 Pack detection: if we have a pack title, it's definitely a pack
         rawDescription: text,  // Full description from addon (e.g. "📁 Filmografia Disney... 📄 Le Follie...")
-        potentialPack: filename && text && !text.startsWith(filename) && text.length > filename.length + 20,
+        potentialPack: !!packTitle || (filename && text && !text.startsWith(filename) && text.length > filename.length + 20),
+        packTitle: packTitle,  // 🔧 NEW: Store pack title separately for reference
 
         // Sorgente e tracking
         source: originalProvider ? `${addon.name} (${originalProvider})` : addon.name,

@@ -1,18 +1,73 @@
 // =====================================================
-// RD CACHE CHECKER - Leviathan Style
+// RD CACHE CHECKER - Leviathan Style v2
 // =====================================================
 // Verifica proattiva della cache RealDebrid usando il metodo
 // Add → Status → Delete. Funziona anche con instantAvailability disabilitata.
+// v2: Aggiunto supporto per pack detection e validazione nome
 
 const RD_BASE_URL = 'https://api.real-debrid.com/rest/1.0';
 const RD_TIMEOUT = 30000;
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+
+// Video extensions for filtering
+const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
 /**
  * Sleep helper
  */
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Verifica se un nome torrent è un nome pack VALIDO
+ * Ritorna FALSE se sembra essere un nome di singolo episodio/file
+ */
+function isValidPackName(name) {
+    if (!name) return false;
+    
+    // 1. Troppo corto
+    if (name.length < 10) return false;
+    
+    // 2. Nomi generici invalidi
+    const INVALID_NAMES = ['magnet', 'invalid', 'torrent', 'download', 'error', '404', 'unavailable'];
+    if (INVALID_NAMES.some(n => name.toLowerCase().includes(n))) return false;
+    
+    // 3. È l'hash stesso
+    if (/^[a-f0-9]{32,40}$/i.test(name)) return false;
+    
+    // 4. Ha estensione video → è un filename, non pack name
+    if (VIDEO_EXTENSIONS.test(name)) return false;
+    
+    // ✅ 5. SEASON PACK → S05 senza episodio specifico = SEMPRE VALIDO!
+    // Match: S05, S5, S01 ma NON S05E01
+    if (/S\d{1,2}(?![Ee]\d)/i.test(name) && !/S\d{1,2}[Ee]\d{1,3}/i.test(name)) {
+        return true;  // Season pack senza episodio = valido!
+    }
+    
+    // ✅ 6. EPISODE RANGE → È un pack valido! (S05e01-04, S01E01-E08, ecc.)
+    const EPISODE_RANGE_PATTERNS = [
+        /S\d{1,2}[Ee]\d{1,3}[-–]\d{1,3}/i,           // S05e01-04, S01E01-08
+        /S\d{1,2}[Ee]\d{1,3}[-–][Ee]\d{1,3}/i,       // S01E01-E08
+        /S\d{1,2}[-–][Ee][Pp]?\d{1,3}[-–]\d{1,3}/i,  // S05-E5-8, S05-EP5-8
+        /S\d{1,2}[Ee][Pp]\d{1,3}[-–]\d{1,3}/i,       // S5EP5-8, S05EP01-04
+        /[Ee][Pp]?\d{1,3}[-–][Ee]?[Pp]?\d{1,3}/i,    // E01-E08, EP1-EP8, E01-08
+        /\d{1,2}x\d{1,3}[-–]\d{1,3}/i,               // 1x01-04
+    ];
+    if (EPISODE_RANGE_PATTERNS.some(pattern => pattern.test(name))) {
+        return true;  // Range di episodi = pack valido!
+    }
+    
+    // 7. Contiene riferimento a singolo episodio SENZA range → è nome file, non pack
+    // Solo se NON contiene un range (già controllato sopra)
+    const hasSingleEpisode = /S\d{1,2}[Ee]\d{1,3}/i.test(name);
+    const hasRange = /[-–]\d{1,3}|[-–][Ee]\d{1,3}/i.test(name);
+    if (hasSingleEpisode && !hasRange) {
+        return false;  // Singolo episodio senza range = filename
+    }
+    
+    // ✅ Sembra un nome pack valido
+    return true;
 }
 
 /**
@@ -175,16 +230,24 @@ async function checkSingleHash(infoHash, magnet, token) {
         // 6. Clean up - Always delete the torrent we just added
         await deleteTorrent(token, torrentId);
 
-        if (DEBUG_MODE) console.log(`🔍 [RD Cache Check] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'} (status: ${info?.status})`);
+        // 7. Determine pack name (prefer original_filename)
+        const packName = info.original_filename || info.filename || '';
+        const isPack = allVideoFiles.length > 1;
+        const validPackName = isValidPackName(packName) ? packName : null;
+
+        if (DEBUG_MODE) console.log(`🔍 [RD Cache Check] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'} (status: ${info?.status}, pack: ${isPack})`);
 
         return {
             hash: infoHash,
             cached: isCached,
-            torrent_title: torrentTitle, // ✅ Return torrent title
-            size: torrentSize,           // ✅ Return total size
+            torrent_title: info.filename || '',
+            original_filename: info.original_filename || '',
+            pack_name: validPackName,      // ✅ Validated pack name
+            is_pack: isPack,               // ✅ Is this a pack?
+            size: torrentSize,
             file_title: mainFileName || null,
             file_size: mainFileSize || null,
-            files: allVideoFiles         // 🚀 SPEEDUP: Return all video files for pack resolution
+            files: allVideoFiles
         };
 
     } catch (error) {
@@ -334,5 +397,6 @@ async function enrichCacheBackground(items, token, dbHelper) {
 module.exports = {
     checkSingleHash,
     checkCacheSync,
-    enrichCacheBackground
+    enrichCacheBackground,
+    isValidPackName  // Export for use in api/index.js
 };

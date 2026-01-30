@@ -91,12 +91,14 @@ function isVideoFile(filename) {
 }
 
 /**
- * Ottiene la lista file da Real-Debrid
+ * Ottiene la lista file da Real-Debrid con retry su 429
  * @param {string} infoHash - Hash del torrent
  * @param {string} rdKey - API key Real-Debrid
+ * @param {number} retryCount - Current retry attempt (default 0)
  * @returns {Promise<{torrentId: string, files: Array}|null>}
  */
-async function fetchFilesFromRealDebrid(infoHash, rdKey) {
+async function fetchFilesFromRealDebrid(infoHash, rdKey, retryCount = 0) {
+    const MAX_RETRIES = 3;
     const baseUrl = 'https://api.real-debrid.com/rest/1.0';
     const headers = { 'Authorization': `Bearer ${rdKey}` };
 
@@ -170,16 +172,24 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey) {
         };
 
     } catch (error) {
+        // ✅ RETRY on 429 Rate Limit with exponential backoff
+        const is429 = error.response?.status === 429 || error.message?.includes('429');
+        if (is429 && retryCount < MAX_RETRIES) {
+            const waitTime = Math.pow(2, retryCount + 1) * 5000; // 10s, 20s, 40s
+            console.log(`⏳ [PACK-HANDLER] Rate limited (429), waiting ${waitTime/1000}s before retry ${retryCount + 1}/${MAX_RETRIES}...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            return fetchFilesFromRealDebrid(infoHash, rdKey, retryCount + 1);
+        }
+        
         if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);
-        // return null; // OLD
-        throw error; // NEW: Rethrow to allow fail-open in caller
+        throw error;
     }
 }
 
 /**
  * Ottiene la lista file da Torbox
- * OPTIMIZED: Uses checkcached with list_files=true first (1 API call)
- * Falls back to add/check/delete only if not cached
+ * OPTIMIZED: Uses checkcached with list_files=true (1 API call)
+ * ✅ NO LONGER falls back to createtorrent - if not in cache, skip (user can't play anyway)
  * @param {string} infoHash - Hash del torrent
  * @param {string} torboxKey - API key Torbox
  * @returns {Promise<{torrentId: string, files: Array}|null>}
@@ -189,124 +199,60 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
     const headers = { 'Authorization': `Bearer ${torboxKey}` };
 
     try {
-        // ✅ STEP 1: Try checkcached with list_files=true (FAST PATH - 1 API call)
+        // ✅ ONLY USE checkcached with list_files=true (FAST PATH - 1 API call)
+        // If not in cache, return null - no point processing packs user can't play
         if (DEBUG_MODE) console.log(`📦 [PACK-HANDLER] Checking Torbox cache for file list: ${infoHash.substring(0, 8)}...`);
 
-        try {
-            const cacheResponse = await axios.get(
-                `${baseUrl}/torrents/checkcached`,
-                {
-                    headers,
-                    params: {
-                        hash: infoHash.toUpperCase(),
-                        format: 'object',
-                        list_files: true
-                    },
-                    timeout: 10000
-                }
-            );
-
-            // Check if we got files from cache
-            const cacheData = cacheResponse.data?.data;
-            if (cacheData && typeof cacheData === 'object') {
-                const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
-                if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
-                    const rawFiles = cacheData[hashKey].files;
-
-                    // ✅ FIX: Torbox cache doesn't provide original index, so we sort alphabetically
-                    // This is a best-effort approach - for accurate indices, we need the slow path
-                    // NOTE: Torbox cache files may not have reliable ordering
-                    const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
-
-                    const files = sortedFiles.map((f, idx) => ({
-                        id: idx,
-                        path: f.name || f.path || `file_${idx}`,
-                        bytes: f.size || 0,
-                        selected: 1
-                    }));
-                    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (fast path - alphabetical order)`);
-                    return { torrentId: 'cached', files };
-                }
-            }
-            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Not in cache or no files, trying slow path...`);
-        } catch (cacheError) {
-            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache check failed: ${cacheError.message}, trying slow path...`);
-        }
-
-        // ✅ STEP 2: Fallback - Add torrent to get file list (SLOW PATH - 3 API calls)
-        if (DEBUG_MODE) console.log(`📦 [PACK-HANDLER] Adding magnet to Torbox for file list: ${infoHash.substring(0, 8)}...`);
-        const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
-
-        const addResponse = await axios.post(
-            `${baseUrl}/torrents/createtorrent`,
-            { magnet: magnetLink },
-            { headers, timeout: 30000 }
-        );
-
-        if (!addResponse.data || !addResponse.data.data || !addResponse.data.data.torrent_id) {
-            throw new Error('Failed to add magnet to Torbox');
-        }
-
-        const torrentId = addResponse.data.data.torrent_id;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        const infoResponse = await axios.get(
-            `${baseUrl}/torrents/mylist`,
-            { headers, params: { id: torrentId }, timeout: 30000 }
-        );
-
-        const torrent = infoResponse.data?.data?.find(t => t.id === torrentId);
-        if (!torrent || !torrent.files) {
-            await axios.get(`${baseUrl}/torrents/controltorrent`, {
+        const cacheResponse = await axios.get(
+            `${baseUrl}/torrents/checkcached`,
+            {
                 headers,
-                params: { torrent_id: torrentId, operation: 'delete' }
-            }).catch(() => { });
-            throw new Error('No files in Torbox torrent info');
+                params: {
+                    hash: infoHash.toUpperCase(),
+                    format: 'object',
+                    list_files: true
+                },
+                timeout: 10000
+            }
+        );
+
+        // Check if we got files from cache
+        const cacheData = cacheResponse.data?.data;
+        if (cacheData && typeof cacheData === 'object') {
+            const hashKey = Object.keys(cacheData).find(k => k.toLowerCase() === infoHash.toLowerCase());
+            if (hashKey && cacheData[hashKey]?.files && cacheData[hashKey].files.length > 0) {
+                const rawFiles = cacheData[hashKey].files;
+
+                // ✅ FIX: Torbox cache doesn't provide original index, so we sort alphabetically
+                // This is a best-effort approach for file ordering
+                const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
+
+                const files = sortedFiles.map((f, idx) => ({
+                    id: idx,
+                    path: f.name || f.path || `file_${idx}`,
+                    bytes: f.size || 0,
+                    selected: 1
+                }));
+                if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE`);
+                return { torrentId: 'cached', files };
+            }
         }
-
-        // ✅ FIX: Torbox returns files with 'id' field which is the original torrent index
-        // If 'id' is not available, fall back to alphabetical sorting
-        const rawFiles = torrent.files;
-
-        // Check if Torbox provides file IDs
-        const hasFileIds = rawFiles.length > 0 && rawFiles[0].id !== undefined;
-
-        let files;
-        if (hasFileIds) {
-            // Use Torbox's original file indices
-            files = rawFiles.map((f) => ({
-                id: f.id,
-                path: f.name,
-                bytes: f.size,
-                selected: 1
-            }));
-            if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] Torbox file order (original IDs): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
-        } else {
-            // Fallback to alphabetical - best effort
-            const sortedFiles = [...rawFiles].sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''));
-            files = sortedFiles.map((f, idx) => ({
-                id: idx,
-                path: f.name,
-                bytes: f.size,
-                selected: 1
-            }));
-            if (DEBUG_MODE) console.log(`📊 [PACK-HANDLER] Torbox file order (alphabetical fallback): ${files.slice(0, 5).map(f => `id=${f.id}:${f.path?.substring(0, 30) || 'unknown'}`).join(', ')}...`);
-        }
-
-        if (DEBUG_MODE) console.log(`🗑️ [PACK-HANDLER] Deleting temporary Torbox torrent ${torrentId}`);
-        await axios.get(`${baseUrl}/torrents/controltorrent`, {
-            headers,
-            params: { torrent_id: torrentId, operation: 'delete' }
-        }).catch(err => {
-            console.warn(`⚠️ [PACK-HANDLER] Failed to delete Torbox torrent: ${err.message}`);
-        });
-
-        if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox (slow path)`);
-        return { torrentId, files };
+        
+        // ✅ NOT IN CACHE = Skip (no createtorrent to avoid rate limits)
+        // User can't play this pack anyway if it's not cached
+        if (DEBUG_MODE) console.log(`⏭️ [PACK-HANDLER] TB: Not in cache, skipping (no createtorrent to avoid rate limit)`);
+        return null;
 
     } catch (error) {
-        console.error(`❌ [PACK-HANDLER] Torbox API error: ${error.message}`);
-        throw error;
+        // ✅ Handle 429 gracefully - just skip, don't throw
+        const is429 = error.response?.status === 429 || error.message?.includes('429');
+        if (is429) {
+            console.log(`⏳ [PACK-HANDLER] TB Rate limited (429), skipping pack ${infoHash.substring(0, 8)}...`);
+            return null;
+        }
+        
+        if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] Torbox API error: ${error.message}`);
+        return null; // Return null instead of throwing - graceful degradation
     }
 }
 
@@ -580,7 +526,7 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
     let totalPackSize = 0;
     let videoFiles = [];
     let dbCacheCorrupted = forceRefresh; // If forceRefresh, treat cache as corrupted
-    const PACK_TTL_DAYS = 30; // TTL for pack files cache
+    const PACK_TTL_DAYS = 10; // TTL for pack files cache (same as torrents: 10 days base)
 
     // 1️⃣ CHECK DB CACHE Logic with TTL - SKIP if forceRefresh
     // 🚀 SPEEDUP: First try getPackFiles (with TTL check), then fallback to getSeriesPackFiles

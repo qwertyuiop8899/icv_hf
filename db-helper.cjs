@@ -1617,8 +1617,10 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     const result = await pool.query(query, params);
     if (DEBUG_MODE) console.log(`💾 [DB] Found ${result.rows.length} file-matches (ILIKE) for "${titleQuery}"`);
 
-    // 🔧 AUTO-INDEX: Update files.imdb_id when we find matches by title
-    // This allows future searches to find files directly by IMDb ID
+
+    // 🔧 AUTO-INDEX DISABLED: This logic causes false positives with fuzzy search (e.g. Dexter vs Dexter New Blood)
+    // We should NOT update files table based on loose title matching.
+    /*
     if (result.rows.length > 0 && movieImdbId) {
       for (const row of result.rows) {
         if (!row.file_imdb_id) {
@@ -1634,6 +1636,8 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
         }
       }
     }
+    */
+
 
     return result.rows;
   };

@@ -1538,19 +1538,16 @@ router.post('/add', upload.any(), async (req, res) => {
                 }
             }
 
-            // 📦 For movie packs with multiple files: DON'T set imdb_id on individual files
-            // Each file is a different movie, will be auto-indexed when searched by title
+            // 📦 For movie packs: imdb_id will be null, matching happens later
             // For series: imdbId is the series ID, applied to all episodes
-            // 📦 For movie packs with multiple files: DON'T set imdb_id on individual files
-            // Both if explicitly requested (forcePackMode) OR auto-detected (files > 1)
-            const isMultiMoviePack = (type === 'movie' && (data.files.length > 1 || forcePackMode === 'true'));
+            const fileImdbId = (type === 'movie' && (data.files.length > 1 || forcePackMode === 'true')) ? null : imdbId;
 
             filesToInsert.push({
                 info_hash: infoHash,
                 file_index: file.id,
                 title: filename,
                 size: file.bytes,
-                imdb_id: isMultiMoviePack ? null : imdbId,  // NULL for movie packs
+                imdb_id: fileImdbId,
                 imdb_season: season,
                 imdb_episode: episode
             });
@@ -1559,18 +1556,33 @@ router.post('/add', upload.any(), async (req, res) => {
         }
 
         // 6. Insert Files
-        if (filesToInsert.length > 0) {
-            await dbHelper.insertEpisodeFiles(filesToInsert);
-        }
+        // ✅ ALIGNED WITH NORMAL FLOW: 
+        // - Series/pack serie → files table (insertEpisodeFiles)
+        // - Pack film (multi-movie) → pack_files table (insertPackFiles) 
+        const isMultiMoviePack = (type === 'movie' && (data.files.length > 1 || forcePackMode === 'true'));
 
-        // 7. Special Pack Handling (Update pack_files if used)
-        if (type === 'series' && filesToInsert.length > 0) {
-            // Optional: populate pack_files if needed by specific logic, but insertEpisodeFiles should be enough for search
+        if (filesToInsert.length > 0) {
+            if (isMultiMoviePack) {
+                // 📦 PACK FILM: Use pack_files table (same as normal enrichment flow)
+                const packFilesData = filesToInsert.map(f => ({
+                    pack_hash: infoHash.toLowerCase(),
+                    imdb_id: null, // Will be matched later when user searches specific movie
+                    file_index: f.file_index,
+                    file_path: f.title,
+                    file_size: f.size || 0
+                }));
+                await dbHelper.insertPackFiles(packFilesData);
+                console.log(`📦 [MANUAL] Saved ${packFilesData.length} files to pack_files table`);
+            } else {
+                // 📺 SERIES or SINGLE MOVIE: Use files table
+                await dbHelper.insertEpisodeFiles(filesToInsert);
+                console.log(`📺 [MANUAL] Saved ${filesToInsert.length} files to files table`);
+            }
         }
 
         return res.json({
             status: "success",
-            message: `Imported ${filesToInsert.length} files for ${imdbId}`,
+            message: `Imported ${filesToInsert.length} files for ${imdbId || 'pack'}`,
             torrent: torrentEntry,
             files: processedFiles
         });

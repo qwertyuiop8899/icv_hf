@@ -306,18 +306,9 @@ async function checkCacheSync(items, token, limit = 5) {
  * @param {string} token - RealDebrid API token
  * @param {Object} dbHelper - Database helper module with updateRdCacheStatus function
  */
-// Helper to check if title indicates a MOVIE pack (trilogia, collection, etc.)
-// 🚫 Esclude pattern serie (S01, Season, Stagione, Episode, etc.)
+// Helper to check if title indicates a pack (trilogia, collection, etc.)
 function isPackTitle(title) {
     if (!title) return false;
-    
-    // 🚫 SERIES DETECTION: Se contiene pattern serie, NON è un movie pack
-    const seriesPatterns = /\b(S\d{1,2}(?:E\d{1,3})?|Season|Stagione|Serie|Episode|Episod|Puntata|E\d{2,3})\b/i;
-    if (seriesPatterns.test(title)) {
-        return false; // È una serie, non salvare in pack_files!
-    }
-    
-    // ✅ MOVIE PACK: Solo se contiene keyword di pack film
     return /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(title);
 }
 

@@ -137,7 +137,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     `;
 
     const params = [imdbId];
-    let paramIndex = 3;
+    let paramIndex = 2;
 
     // ✅ FIX: Include 'unknown' type to catch RD cache torrents that don't have type set
     if (type) {

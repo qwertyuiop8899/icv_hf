@@ -126,7 +126,6 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
         seeders,
         imdb_id,
         tmdb_id,
-        all_imdb_ids,
         cached_rd,
         last_cached_check,
         cached_tb,
@@ -134,10 +133,10 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
         file_index,
         file_title
       FROM torrents
-      WHERE (imdb_id = $1 OR all_imdb_ids @> $2)
+      WHERE (imdb_id = $1)
     `;
 
-    const params = [imdbId, JSON.stringify([imdbId])];
+    const params = [imdbId];
     let paramIndex = 3;
 
     // ✅ FIX: Include 'unknown' type to catch RD cache torrents that don't have type set
@@ -192,7 +191,6 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
         seeders,
         imdb_id,
         tmdb_id,
-        all_imdb_ids,
         cached_rd,
         last_cached_check,
         cached_tb,
@@ -1287,14 +1285,6 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
             WHERE pack_hash = $2 AND file_index = $3 AND (imdb_id IS NULL OR imdb_id = '')
           `, [imdbId, row.info_hash, row.file_index]);
 
-          // Also update all_imdb_ids on torrents table
-          await pool.query(`
-            UPDATE torrents
-            SET all_imdb_ids = COALESCE(all_imdb_ids, '[]'::jsonb) || $1::jsonb
-            WHERE info_hash = $2
-              AND NOT (COALESCE(all_imdb_ids, '[]'::jsonb) @> $1::jsonb)
-          `, [JSON.stringify(imdbId), row.info_hash]);
-
           if (DEBUG_MODE) console.log(`   📝 [DB] Auto-indexed ${imdbId} -> pack ${row.info_hash.substring(0, 8)}... file_idx=${row.file_index}`);
         } catch (updateErr) {
           // Ignore update errors (e.g., constraint violations)
@@ -1413,26 +1403,6 @@ async function updatePackAllImdbIds(packHash) {
 
     if (filesResult.rows.length === 0) {
       console.log(`   ⚠️  No IMDb IDs found in pack_files for ${packHash}`);
-      return false;
-    }
-
-    const imdbIds = filesResult.rows.map(row => row.imdb_id);
-    console.log(`   📝 Updating pack ${packHash} with IMDb IDs: ${imdbIds.join(', ')}`);
-
-    // Update torrents table with all_imdb_ids
-    const updateQuery = `
-      UPDATE torrents
-      SET all_imdb_ids = $1
-      WHERE info_hash = $2
-    `;
-
-    const result = await pool.query(updateQuery, [JSON.stringify(imdbIds), packHash]);
-
-    if (result.rowCount > 0) {
-      console.log(`   ✅ Updated all_imdb_ids for pack ${packHash}`);
-      return true;
-    } else {
-      console.log(`   ⚠️  Pack ${packHash} not found in torrents table`);
       return false;
     }
 

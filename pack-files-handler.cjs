@@ -153,16 +153,29 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey, retryCount = 0) {
 
         if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from RD`);
 
-        // ✅ SMART FILENAME SELECTION (Simplified via User Request)
-        // Always prefer original_filename. Only fallback to filename if original is missing.
-        // If original is missing (empty), filename is likely "Magnet" (waiting selection), 
-        // which will be filtered by api/index.js validation anyway.
-        const finalFilename = infoResponse.data.original_filename || infoResponse.data.filename;
-
-        if (DEBUG_MODE) {
-            if (finalFilename !== infoResponse.data.filename) {
-                console.log(`✨ [PACK-HANDLER] Using original_filename: "${finalFilename}" (was "${infoResponse.data.filename}")`);
+        // ✅ SMART FILENAME SELECTION
+        // Priority: original_filename > filename > folder from file path
+        let finalFilename = infoResponse.data.original_filename || infoResponse.data.filename;
+        
+        // ✅ FIX: If filename is invalid (Magnet, empty, or too short), extract from file paths
+        const isInvalidFilename = !finalFilename || 
+                                   finalFilename === 'Magnet' || 
+                                   finalFilename.length < 5 ||
+                                   /^[a-f0-9]{32,}$/i.test(finalFilename); // Hash-like name
+        
+        if (isInvalidFilename && files.length > 0) {
+            const firstPath = files[0].path || '';
+            // Extract folder name from path (e.g., "/FolderName/file.mkv" -> "FolderName")
+            const cleanPath = firstPath.replace(/^\/+/, ''); // Remove leading slashes
+            if (cleanPath.includes('/')) {
+                finalFilename = cleanPath.split('/')[0];
+            } else {
+                // Single file - use filename without extension
+                finalFilename = cleanPath.replace(/\.[^/.]+$/, '');
             }
+            if (DEBUG_MODE) console.log(`✨ [PACK-HANDLER] Extracted pack name from path: "${finalFilename}"`);
+        } else if (DEBUG_MODE && finalFilename !== infoResponse.data.filename) {
+            console.log(`✨ [PACK-HANDLER] Using original_filename: "${finalFilename}" (was "${infoResponse.data.filename}")`);
         }
 
         return {
@@ -233,8 +246,23 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                     bytes: f.size || 0,
                     selected: 1
                 }));
-                if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE`);
-                return { torrentId: 'cached', files };
+                
+                // ✅ FIX: Extract pack name from folder structure
+                // Torbox doesn't provide torrent name, so we extract from file paths
+                let extractedFilename = null;
+                if (files.length > 0) {
+                    const firstPath = files[0].path || '';
+                    // If path contains '/', use first segment as pack name
+                    if (firstPath.includes('/')) {
+                        extractedFilename = firstPath.split('/')[0];
+                    } else {
+                        // Single file or flat structure - use filename without extension
+                        extractedFilename = firstPath.replace(/\.[^/.]+$/, '');
+                    }
+                }
+                
+                if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (name: ${extractedFilename || 'unknown'})`);
+                return { torrentId: 'cached', files, filename: extractedFilename };
             }
         }
         
@@ -254,6 +282,185 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
         if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] Torbox API error: ${error.message}`);
         return null; // Return null instead of throwing - graceful degradation
     }
+}
+
+/**
+ * Simple Bencode decoder for parsing .torrent files
+ * (Minimal implementation for extracting files list)
+ */
+function decodeBencode(buffer, start = 0) {
+    if (buffer[start] === 0x64) { // 'd' = dict
+        const result = {};
+        let pos = start + 1;
+        while (buffer[pos] !== 0x65) { // 'e'
+            const keyResult = decodeBencode(buffer, pos);
+            pos = keyResult.end;
+            const valueResult = decodeBencode(buffer, pos);
+            pos = valueResult.end;
+            result[keyResult.value] = valueResult.value;
+        }
+        return { value: result, end: pos + 1 };
+    }
+    if (buffer[start] === 0x6C) { // 'l' = list
+        const result = [];
+        let pos = start + 1;
+        while (buffer[pos] !== 0x65) { // 'e'
+            const itemResult = decodeBencode(buffer, pos);
+            pos = itemResult.end;
+            result.push(itemResult.value);
+        }
+        return { value: result, end: pos + 1 };
+    }
+    if (buffer[start] === 0x69) { // 'i' = integer
+        let end = start + 1;
+        while (buffer[end] !== 0x65) end++;
+        const num = parseInt(buffer.slice(start + 1, end).toString());
+        return { value: num, end: end + 1 };
+    }
+    if (buffer[start] >= 0x30 && buffer[start] <= 0x39) { // string
+        let colonPos = start;
+        while (buffer[colonPos] !== 0x3A) colonPos++;
+        const len = parseInt(buffer.slice(start, colonPos).toString());
+        const strStart = colonPos + 1;
+        const strEnd = strStart + len;
+        const data = buffer.slice(strStart, strEnd);
+        try {
+            return { value: data.toString('utf8'), end: strEnd };
+        } catch {
+            return { value: data, end: strEnd };
+        }
+    }
+    throw new Error('Invalid bencode at position ' + start);
+}
+
+/**
+ * Parse a .torrent file from base64 data
+ * @param {string} base64Data - Base64 encoded torrent file
+ * @returns {{infoHash: string, files: Array, filename: string}}
+ */
+function parseTorrentFile(base64Data) {
+    const crypto = require('crypto');
+    const buffer = Buffer.from(base64Data, 'base64');
+    const decoded = decodeBencode(buffer, 0).value;
+
+    if (!decoded.info) throw new Error('No info dictionary in torrent');
+
+    const infoStart = buffer.indexOf('4:info') + 6;
+    const infoResult = decodeBencode(buffer, infoStart);
+    const infoBytes = buffer.slice(infoStart, infoResult.end);
+
+    const hash = crypto.createHash('sha1');
+    hash.update(infoBytes);
+    const infoHash = hash.digest('hex');
+
+    const info = decoded.info;
+    const files = [];
+    const torrentName = info.name || 'Unknown';
+
+    if (info.files) {
+        info.files.forEach((f, idx) => {
+            const path = Array.isArray(f.path) ? f.path.join('/') : f.path;
+            files.push({ id: idx, path: torrentName + '/' + path, bytes: f.length });
+        });
+    } else {
+        files.push({ id: 0, path: info.name, bytes: info.length });
+    }
+
+    return { infoHash, files, filename: torrentName };
+}
+
+/**
+ * Fetch torrent file from public caches (NO DEBRID REQUIRED)
+ * Tries multiple public torrent cache services in parallel
+ * @param {string} infoHash - Torrent info hash
+ * @returns {Promise<{files: Array, filename: string}|null>}
+ */
+async function fetchTorrentFromPublicCaches(infoHash) {
+    const hashUpper = infoHash.toUpperCase();
+    const urls = [
+        `https://itorrents.org/torrent/${hashUpper}.torrent`,
+        `https://torrage.info/torrent.php?h=${hashUpper}`,
+        `http://btcache.me/torrent/${hashUpper}`
+    ];
+
+    if (DEBUG_MODE) console.log(`🌐 [PACK-HANDLER] Trying public torrent caches for ${infoHash.substring(0, 8)}...`);
+
+    const fetchOne = async (url) => {
+        try {
+            const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 8000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+
+            if (response.status === 200 && response.data.length > 500) {
+                if (response.data[0] === 0x64) { // Valid bencoded data starts with 'd'
+                    const base64 = Buffer.from(response.data).toString('base64');
+                    return parseTorrentFile(base64);
+                }
+            }
+            throw new Error('Invalid data');
+        } catch (e) {
+            throw new Error(`Failed ${url}`);
+        }
+    };
+
+    try {
+        const result = await Promise.any(urls.map(u => fetchOne(u)));
+        if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${result.files.length} files from public cache (name: ${result.filename})`);
+        return { files: result.files, filename: result.filename };
+    } catch (aggregateError) {
+        if (DEBUG_MODE) console.log(`⏭️ [PACK-HANDLER] Public cache miss for ${infoHash.substring(0, 8)}`);
+        return null;
+    }
+}
+
+/**
+ * Fetch files from any available source (RD, TB, or public cache)
+ * With automatic fallback and rate limit handling
+ * @param {string} infoHash - Torrent info hash
+ * @param {Object} config - Config with rd_key and/or torbox_key
+ * @returns {Promise<{files: Array, filename: string, source: string}|null>}
+ */
+async function fetchFilesFromAnySource(infoHash, config) {
+    // 1. Try Real-Debrid first (most reliable)
+    if (config.rd_key) {
+        try {
+            const rdResult = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
+            if (rdResult && rdResult.files && rdResult.files.length > 0) {
+                return { files: rdResult.files, filename: rdResult.filename, source: 'RealDebrid' };
+            }
+        } catch (err) {
+            // Rate limit or error - try next source
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] RD failed for ${infoHash.substring(0, 8)}: ${err.message}`);
+        }
+    }
+    
+    // 2. Try Torbox
+    if (config.torbox_key) {
+        try {
+            const tbResult = await fetchFilesFromTorbox(infoHash, config.torbox_key);
+            if (tbResult && tbResult.files && tbResult.files.length > 0) {
+                return { files: tbResult.files, filename: tbResult.filename, source: 'Torbox' };
+            }
+        } catch (err) {
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] TB failed for ${infoHash.substring(0, 8)}: ${err.message}`);
+        }
+    }
+    
+    // 3. Fallback to public torrent caches (no debrid needed)
+    try {
+        const cacheResult = await fetchTorrentFromPublicCaches(infoHash);
+        if (cacheResult && cacheResult.files && cacheResult.files.length > 0) {
+            return { ...cacheResult, source: 'PublicCache' };
+        }
+    } catch (err) {
+        if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Public cache failed for ${infoHash.substring(0, 8)}: ${err.message}`);
+    }
+    
+    return null;
 }
 
 /**
@@ -429,15 +636,21 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     const allVideoFiles = fetchedData.files.filter(f => isVideoFile(f.path));
     const firstVideoFile = allVideoFiles[0];
 
-    // ✅ FIX: Clean path and prefer RD filename
+    // ✅ FIX: Prefer fetchedData.filename (already extracted properly by fetch functions)
     let generatedTitle = `Pack-${infoHash.substring(0, 16)}`;
 
-    if (fetchedData.filename) {
+    if (fetchedData.filename && fetchedData.filename.length > 5) {
         generatedTitle = fetchedData.filename;
     } else if (firstVideoFile) {
-        // Remove leading slashes and take the first segment
-        const cleanPath = firstVideoFile.path.replace(/^[\\/]+/, '');
-        generatedTitle = cleanPath.split('/')[0] || firstVideoFile.path;
+        // Fallback: Extract folder name from first file path
+        const cleanPath = (firstVideoFile.path || '').replace(/^[\\/]+/, '');
+        if (cleanPath.includes('/')) {
+            generatedTitle = cleanPath.split('/')[0];
+        } else {
+            // Single file - use filename without extension
+            generatedTitle = cleanPath.replace(/\.[^/.]+$/, '') || generatedTitle;
+        }
+        if (DEBUG_MODE) console.log(`✨ [PACK-HANDLER] Extracted title from path: "${generatedTitle}"`);
     }
 
     const processedFiles = await processSeriesPackFiles(
@@ -494,6 +707,48 @@ function isSeasonPack(torrentTitle) {
     }
 
     return packPatterns.some(pattern => pattern.test(torrentTitle));
+}
+
+/**
+ * Checks if a torrent title indicates a MOVIE pack (trilogy, collection, saga, etc.)
+ * @param {string} torrentTitle - Titolo del torrent
+ * @returns {boolean}
+ */
+function isMoviePack(torrentTitle) {
+    if (!torrentTitle) return false;
+    
+    // Pattern keywords for movie collections
+    const packKeywords = /\b(trilog|quadrilog|pentolog|saga|collection|collezione|anthology|antologia|pack|completa|integrale|filmografia|duolog|box\s*set|complete|1\s*2\s*3|I\s*II\s*III)\b/i;
+    
+    // Year range pattern (e.g., 1985-1990, 1999-2003)
+    const yearRange = /\b(19|20)\d{2}\s*[-–—]\s*(19|20)?\d{2}\b/;
+    
+    // Multiple part indicators (Part 1, Parte 2, Vol 1, Volume 2)
+    const multiPart = /\b(part|parte|vol|volume)\s*\d+/i;
+    
+    return packKeywords.test(torrentTitle) || yearRange.test(torrentTitle) || multiPart.test(torrentTitle);
+}
+
+/**
+ * Checks if a torrent might be a pack based on external stream info
+ * Uses fileIdx, patterns, etc. to determine if background verification is needed
+ * @param {Object} stream - Stream object from external addon
+ * @param {string} streamTitle - Title/filename from stream
+ * @returns {{isPotentialPack: boolean, reason: string}}
+ */
+function isPotentialMoviePack(stream, streamTitle) {
+    // 1. fileIdx present means addon already identified it as a pack file
+    if (stream.fileIdx !== undefined && stream.fileIdx !== null) {
+        return { isPotentialPack: true, reason: 'fileIdx present' };
+    }
+    
+    // 2. Check title for pack keywords
+    if (isMoviePack(streamTitle)) {
+        return { isPotentialPack: true, reason: 'pack keyword in title' };
+    }
+    
+    // 3. No indicators found
+    return { isPotentialPack: false, reason: 'no pack indicators' };
 }
 
 /**
@@ -625,17 +880,19 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
         console.log(`ℹ️ [PACK-HANDLER] Single video file found. Assuming it's the movie.`);
         const f = videoFiles[0];
         const correctIndex = f.id; // Use original index directly
-        // Save to DB
-        if (dbHelper && movieImdbId) {
-            await dbHelper.insertEpisodeFiles([{
-                info_hash: infoHash,
-                file_index: correctIndex,
-                title: f.path.split('/').pop(),
-                size: f.bytes,
-                imdb_id: movieImdbId,
-                imdb_season: null,
-                imdb_episode: null
-            }]);
+        // Save to pack_files (NOT files table - that's for series only)
+        if (dbHelper && movieImdbId && typeof dbHelper.insertPackFiles === 'function') {
+            try {
+                await dbHelper.insertPackFiles([{
+                    pack_hash: infoHash.toLowerCase(),
+                    imdb_id: movieImdbId,
+                    file_index: correctIndex,
+                    file_path: f.path,
+                    file_size: f.bytes || 0
+                }]);
+            } catch (e) {
+                console.warn(`⚠️ [PACK-HANDLER] pack_files save failed: ${e.message}`);
+            }
         }
         return {
             fileIndex: correctIndex,
@@ -652,37 +909,23 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
     if (match) {
         console.log(`✅ [PACK-HANDLER] Found Movie: ${match.path} (${(match.bytes / 1024 / 1024 / 1024).toFixed(2)} GB)`);
 
-        // Save to DB
-        if (dbHelper && movieImdbId) {
-            // ✅ INDEX ALL FILES IN PACK (for P2P reverse search)
-            // Use original file.id as torrent index
-            const allFilesToSave = videoFiles.map(f => ({
-                info_hash: infoHash,
-                file_index: f.id, // Use original index directly
-                title: f.path.split('/').pop(),
-                size: f.bytes,
-                imdb_id: (f.id === match.id) ? movieImdbId : null,
-                imdb_season: null,
-                imdb_episode: null
-            }));
+        // Save to DB - ONLY use pack_files for movie packs (NOT files table)
+        if (dbHelper && typeof dbHelper.insertPackFiles === 'function') {
+            try {
+                // ✅ FIX: Save ALL pack files to pack_files table (not files table!)
+                // files table is for SERIES episodes only
+                const allPackFilesToSave = videoFiles.map(f => ({
+                    pack_hash: infoHash.toLowerCase(),
+                    imdb_id: (f.id === match.id) ? movieImdbId : null,
+                    file_index: f.id,
+                    file_path: f.path,
+                    file_size: f.bytes || 0
+                }));
 
-            await dbHelper.insertEpisodeFiles(allFilesToSave);
-            console.log(`💾 [PACK-HANDLER] Indexed ${allFilesToSave.length} files from movie pack.`);
-
-            // 🔧 FIX: Also update pack_files with the IMDb ID for direct lookups
-            if (typeof dbHelper.insertPackFiles === 'function') {
-                try {
-                    await dbHelper.insertPackFiles([{
-                        pack_hash: infoHash.toLowerCase(),
-                        imdb_id: movieImdbId,
-                        file_index: match.id,
-                        file_path: match.path,
-                        file_size: match.bytes || 0
-                    }]);
-                    console.log(`💾 [PACK-HANDLER] Updated pack_files with IMDb ${movieImdbId} for file idx=${match.id}`);
-                } catch (e) {
-                    console.warn(`⚠️ [PACK-HANDLER] pack_files update failed (non-critical): ${e.message}`);
-                }
+                await dbHelper.insertPackFiles(allPackFilesToSave);
+                console.log(`💾 [PACK-HANDLER] Saved ${allPackFilesToSave.length} files to pack_files (matched: ${movieImdbId})`);
+            } catch (e) {
+                console.warn(`⚠️ [PACK-HANDLER] pack_files save failed: ${e.message}`);
             }
         }
 
@@ -772,10 +1015,14 @@ module.exports = {
     resolveSeriesPackFile,
     processSeriesPackFiles,
     isSeasonPack,
+    isMoviePack,
+    isPotentialMoviePack,
     isVideoFile,
     parseSeasonEpisode,
     resolveMoviePackFile,
     fetchFilesFromRealDebrid,
     fetchFilesFromTorbox,
+    fetchTorrentFromPublicCaches,
+    fetchFilesFromAnySource,
     findMovieFile
 };

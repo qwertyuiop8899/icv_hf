@@ -775,5 +775,7 @@ module.exports = {
     isVideoFile,
     parseSeasonEpisode,
     resolveMoviePackFile,
-    fetchFilesFromRealDebrid
+    fetchFilesFromRealDebrid,
+    fetchFilesFromTorbox,
+    findMovieFile
 };

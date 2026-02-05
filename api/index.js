@@ -6194,18 +6194,6 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                         }
 
-                        // Delete corrupted cache entries in background
-                        if (corruptedHashes.length > 0 && typeof dbHelper.deletePackFilesCache === 'function') {
-                            console.log(`🗑️ [DB SANITY] Deleting corrupted cache for ${corruptedHashes.length} pack(s)...`);
-                            for (const hash of [...new Set(corruptedHashes)]) {
-                                try {
-                                    await dbHelper.deletePackFilesCache(hash);
-                                } catch (e) {
-                                    console.warn(`⚠️ Failed to delete cache for ${hash}: ${e.message}`);
-                                }
-                            }
-                        }
-
                         if (validPackResults.length < packResults.length) {
                             console.log(`💾 [DB SANITY] Filtered pack results: ${validPackResults.length}/${packResults.length} valid`);
                         }
@@ -8293,12 +8281,6 @@ async function handleStream(type, id, config, workerOrigin) {
                         try {
                             // 🔧 Check if this hash was marked as having corrupted cache
                             const needsForceRefresh = corruptedCacheHashes.has(infoHash);
-
-                            // If corrupted cache, delete it first
-                            if (needsForceRefresh && typeof dbHelper.deletePackFilesCache === 'function') {
-                                if (DEBUG_MODE) console.log(`🗑️ [MOVIE VERIFY] Deleting corrupted cache for ${infoHash.substring(0, 8)}...`);
-                                await dbHelper.deletePackFilesCache(infoHash);
-                            }
 
                             // 🚀 SPEEDUP: Check DB with TTL BEFORE calling resolveMoviePackFile
                             // This avoids API calls for expired cache

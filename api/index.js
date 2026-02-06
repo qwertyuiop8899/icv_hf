@@ -356,8 +356,30 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2: Pack resolution for SERIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
+        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
+        let packStatusMap = {};
+        const allPackHashes = packsToProcess.map(p => p.hash).filter(Boolean);
+        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allPackHashes.length > 0) {
+            try {
+                packStatusMap = await dbHelper.getPackStatusBatch(allPackHashes);
+                const knownNonPacks = Object.values(packStatusMap).filter(v => v === false).length;
+                if (knownNonPacks > 0) {
+                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
+                }
+            } catch (err) {
+                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
+            }
+        }
+
         for (let i = 0; i < packsToProcess.length; i++) {
             const pack = packsToProcess[i];
+
+            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
+            const packStatus = packStatusMap[pack.hash?.toLowerCase()];
+            if (packStatus === false) {
+                if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] ⏭️ ${pack.hash.substring(0, 8)} verified as non-pack, skipping`);
+                continue;
+            }
 
             try {
                 let packData = null;
@@ -418,6 +440,10 @@ const runSequentialBackgroundJobs = async (options) => {
                         if (filesToInsert.length > 0 && typeof dbHelper.insertEpisodeFiles === 'function') {
                             await dbHelper.insertEpisodeFiles(filesToInsert);
                             console.log(`   📦 Saved ${filesToInsert.length} episode files for ${pack.hash.substring(0, 8)}`);
+                            // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
+                            if (typeof dbHelper.updatePackStatus === 'function') {
+                                await dbHelper.updatePackStatus(pack.hash, true);
+                            }
                         }
                     }
 
@@ -453,8 +479,30 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2B: Pack resolution for MOVIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
+        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
+        let packStatusMapMovies = {};
+        const allMoviePackHashes = packsToProcess.map(p => p.hash).filter(Boolean);
+        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allMoviePackHashes.length > 0) {
+            try {
+                packStatusMapMovies = await dbHelper.getPackStatusBatch(allMoviePackHashes);
+                const knownNonPacks = Object.values(packStatusMapMovies).filter(v => v === false).length;
+                if (knownNonPacks > 0) {
+                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
+                }
+            } catch (err) {
+                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
+            }
+        }
+
         for (let i = 0; i < packsToProcess.length; i++) {
             const pack = packsToProcess[i];
+
+            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
+            const packStatusMovie = packStatusMapMovies[pack.hash?.toLowerCase()];
+            if (packStatusMovie === false) {
+                if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] ⏭️ ${pack.hash.substring(0, 8)} verified as non-pack, skipping`);
+                continue;
+            }
 
             try {
                 let packData = null;
@@ -493,18 +541,29 @@ const runSequentialBackgroundJobs = async (options) => {
                             packFilesHandler.isVideoFile(f.path) && f.bytes > 50 * 1024 * 1024
                         );
 
+                        // ✅ FIX: Clean file paths - extract just filename, no folder prefix
+                        const cleanFilePath = (p) => {
+                            if (!p) return 'unknown.mkv';
+                            const cleaned = p.replace(/^\/+/, ''); // Remove leading slashes
+                            return cleaned.includes('/') ? cleaned.split('/').pop() : cleaned;
+                        };
+
                         if (videoFiles.length > 0) {
                             const packFilesToInsert = videoFiles.map(file => ({
                                 pack_hash: pack.hash.toLowerCase(),
                                 imdb_id: null, // Will be matched when user searches specific movie
                                 file_index: file.id,
-                                file_path: file.path,
+                                file_path: cleanFilePath(file.path), // ✅ Only filename, no folder
                                 file_size: file.bytes || 0
                             }));
 
                             try {
                                 await dbHelper.insertPackFiles(packFilesToInsert);
                                 console.log(`   📦 Saved ${packFilesToInsert.length} movie pack files for ${pack.hash.substring(0, 8)}`);
+                                // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
+                                if (typeof dbHelper.updatePackStatus === 'function') {
+                                    await dbHelper.updatePackStatus(pack.hash, true);
+                                }
                             } catch (packErr) {
                                 console.warn(`   ⚠️ Failed to save movie pack files: ${packErr.message}`);
                             }
@@ -542,6 +601,21 @@ const runSequentialBackgroundJobs = async (options) => {
     if (rejectedPotentialPacks && rejectedPotentialPacks.length > 0 && type === 'movie') {
         console.log(`\n🔍 [Sequential BG] Phase 2C: Verifying ${rejectedPotentialPacks.length} potential packs rejected by year filter`);
 
+        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
+        let packStatusMap = {};
+        const allHashes = rejectedPotentialPacks.map(r => r.infoHash || r.hash).filter(Boolean);
+        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allHashes.length > 0) {
+            try {
+                packStatusMap = await dbHelper.getPackStatusBatch(allHashes);
+                const knownNonPacks = Object.values(packStatusMap).filter(v => v === false).length;
+                if (knownNonPacks > 0) {
+                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
+                }
+            } catch (err) {
+                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
+            }
+        }
+
         for (let i = 0; i < rejectedPotentialPacks.length; i++) {
             const rejected = rejectedPotentialPacks[i];
             const hash = rejected.infoHash || rejected.hash;
@@ -551,8 +625,15 @@ const runSequentialBackgroundJobs = async (options) => {
                 continue;
             }
 
+            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
+            const packStatus = packStatusMap[hash.toLowerCase()];
+            if (packStatus === false) {
+                if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ⏭️ ${hash.substring(0, 8)} already verified as non-pack, skipping`);
+                continue;
+            }
+
             try {
-                // Check if we already have this pack in DB
+                // Check if we already have this pack in DB (pack_files table)
                 if (dbHelper && typeof dbHelper.getPackFiles === 'function') {
                     const existingPack = await dbHelper.getPackFiles(hash);
                     if (existingPack && existingPack.length > 0) {
@@ -587,12 +668,19 @@ const runSequentialBackgroundJobs = async (options) => {
                         console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ✅ Confirmed pack: "${packName?.substring(0, 40)}..." with ${videoFiles.length} movies`);
 
                         // Save pack files to DB
+                        // ✅ FIX: Clean file paths - extract just filename, no folder prefix
+                        const cleanFilePath = (p) => {
+                            if (!p) return 'unknown.mkv';
+                            const cleaned = p.replace(/^\/+/, ''); // Remove leading slashes
+                            return cleaned.includes('/') ? cleaned.split('/').pop() : cleaned;
+                        };
+
                         if (dbHelper && typeof dbHelper.insertPackFiles === 'function') {
                             const packFilesToInsert = videoFiles.map(file => ({
                                 pack_hash: hash.toLowerCase(),
                                 imdb_id: null, // Will be matched when user searches specific movie
                                 file_index: file.id,
-                                file_path: file.path,
+                                file_path: cleanFilePath(file.path), // ✅ Only filename, no folder
                                 file_size: file.bytes || 0
                             }));
 
@@ -605,14 +693,23 @@ const runSequentialBackgroundJobs = async (options) => {
                                     files_count: videoFiles.length,
                                     source: packData.source || 'unknown'
                                 });
+                                // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
+                                if (dbHelper && typeof dbHelper.updatePackStatus === 'function') {
+                                    await dbHelper.updatePackStatus(hash, true);
+                                }
                             } catch (packErr) {
                                 console.warn(`   ⚠️ Failed to save pack files: ${packErr.message}`);
                             }
                         }
                     } else {
                         if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Not a pack: only ${videoFiles.length} video file(s)`);
+                        // 🚀 OPTIMIZATION: Mark as non-pack (is_torrent_pack = false) - won't check again
+                        if (dbHelper && typeof dbHelper.updatePackStatus === 'function') {
+                            await dbHelper.updatePackStatus(hash, false);
+                        }
                     }
                 } else {
+                    // Could not fetch files - leave is_torrent_pack as NULL (will retry next time)
                     if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Could not fetch files for ${hash.substring(0, 8)}`);
                 }
 
@@ -6356,6 +6453,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             const fileTitle = normalizeForMatch(pack.file_title || pack.file_path || '');
                             const fileWords = fileTitle.split(' ').filter(w => w.length > 2);
 
+                            // ✅ TRUST IMDB ID: If pack has correct IMDb ID, skip all other checks
+                            if (pack.imdb_id && pack.imdb_id === mediaDetails.imdbId) {
+                                validPackResults.push(pack);
+                                continue;
+                            }
+
                             // Check if at least 2 significant words match (or 1 if title is short)
                             const minMatches = requestedWords.length <= 2 ? 1 : 2;
                             const matchCount = requestedWords.filter(w => fileWords.some(fw => fw.includes(w) || w.includes(fw))).length;
@@ -6391,7 +6494,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         packResults.push(...validPackResults);
                     }
 
-                    // PRIORITY 2: Search regular torrents (single movies or packs via all_imdb_ids)
+                    // PRIORITY 2: Search regular torrents (single movies)
                     const regularResults = await dbHelper.searchByImdbId(mediaDetails.imdbId, type, selectedProviders);
 
                     // Merge: packs first (with file_index), then regular
@@ -7527,6 +7630,7 @@ async function handleStream(type, id, config, workerOrigin) {
                         source: `💾 ${dbResult.provider || 'Database'}`,
                         fileIndex: finalFileIndex, // For series episodes and pack movies
                         file_title: fileName, // Real filename from DB (only for specific episode)
+                        imdb_id: dbResult.imdb_id || null, // ✅ Pass IMDb ID for pack movie trust check
                         trusted: true // ✅ DB results are pre-verified, skip strict year check
                     });
 
@@ -8542,6 +8646,11 @@ async function handleStream(type, id, config, workerOrigin) {
                                     result.file_title = fileInfo.fileName;
                                     result.sizeInBytes = fileInfo.fileSize;
                                     result.size = formatBytes(fileInfo.fileSize);
+                                    // ✅ FIX: Use pack title from OUR DB, not from external addon metadata
+                                    if (fileInfo.packTitle) {
+                                        result.title = fileInfo.packTitle;
+                                        if (DEBUG_MODE) console.log(`   📦 Using DB pack title: "${fileInfo.packTitle.substring(0, 50)}..."`);
+                                    }
                                     newlyVerified.push(result);
                                 } else {
                                     if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
@@ -8610,6 +8719,11 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.file_title = fileInfo.fileName;
                                 result.sizeInBytes = fileInfo.fileSize;
                                 result.size = formatBytes(fileInfo.fileSize);
+                                // ✅ FIX: Use pack title from OUR DB, not from external addon metadata
+                                if (fileInfo.packTitle) {
+                                    result.title = fileInfo.packTitle;
+                                    if (DEBUG_MODE) console.log(`   📦 Using DB pack title: "${fileInfo.packTitle.substring(0, 50)}..."`);
+                                }
                                 newlyVerified.push(result);
                             } else {
                                 // If resolve returns null, it means it's a pack but movie NOT found.
@@ -9369,7 +9483,7 @@ async function handleStream(type, id, config, workerOrigin) {
             console.log(`\n🎯 [Pack] Checking for pack torrents in ${filteredResults.length} results...`);
 
             for (const result of filteredResults) {
-                // Detect if this is a pack (has all_imdb_ids or matches pack pattern)
+                // Detect if this is a pack (matches pack pattern in title)
                 const isPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title) ||
                     /\b(19[2-9]\d|20[0-3]\d)-(19[2-9]\d|20[0-3]\d)\b/.test(result.title);
 
@@ -11641,12 +11755,19 @@ export default async function handler(req, res) {
                                 const sortedAlphabetically = [...allVideoFiles].sort((a, b) =>
                                     (a.path || '').localeCompare(b.path || ''));
 
+                                // ✅ FIX: Clean file paths - extract just filename, no folder prefix
+                                const cleanFilePath = (p) => {
+                                    if (!p) return 'unknown.mkv';
+                                    const cleaned = p.replace(/^\/+/, ''); // Remove leading slashes
+                                    return cleaned.includes('/') ? cleaned.split('/').pop() : cleaned;
+                                };
+
                                 // Create pack file entries for ALL files (imdb_id = NULL for now)
                                 const packFilesData = sortedAlphabetically.map((file, index) => ({
                                     pack_hash: infoHash.toLowerCase(),
                                     imdb_id: null, // Will be filled in by searchPacksByTitle when accessed
                                     file_index: file.id, // Use RD file.id for playback
-                                    file_path: file.path,
+                                    file_path: cleanFilePath(file.path), // ✅ Only filename, no folder
                                     file_size: file.bytes || 0
                                 }));
 
@@ -11987,20 +12108,24 @@ export default async function handler(req, res) {
                                     const correctMovieFileIndex = movieFileIdToTorrentIndex.get(targetFile.id) ?? targetFile.id;
                                     console.log(`📊 [DB] Movie pack file order (ALPHABETICAL):`, sortedAlphabetically.map((f, i) => `${i}=${f.path.split('/').pop()}`).join(', '));
 
+                                    // ✅ FIX: Clean file paths - extract just filename, no folder prefix
+                                    const cleanFilePath = (p) => {
+                                        if (!p) return 'unknown.mkv';
+                                        const cleaned = p.replace(/^\/+/, ''); // Remove leading slashes
+                                        return cleaned.includes('/') ? cleaned.split('/').pop() : cleaned;
+                                    };
+
                                     // Save this specific file mapping to pack_files table
                                     const packFileData = [{
                                         pack_hash: infoHash.toLowerCase(),
                                         imdb_id: movieImdbId,
                                         file_index: correctMovieFileIndex, // ✅ Use correct torrent index, not RealDebrid file.id
-                                        file_path: targetFile.path,
+                                        file_path: cleanFilePath(targetFile.path), // ✅ Only filename, no folder
                                         file_size: targetFile.bytes || 0
                                     }];
 
                                     await dbHelper.insertPackFiles(packFileData);
                                     console.log(`✅ [DB] Saved pack mapping: ${movieImdbId} -> file idx=${correctMovieFileIndex} in pack ${infoHash}`);
-
-                                    // Also update the all_imdb_ids array on the torrents table
-                                    await dbHelper.updatePackAllImdbIds(infoHash.toLowerCase());
                                 } else {
                                     console.warn(`⚠️ [DB] No IMDb ID found for movie pack, skipping save`);
                                 }

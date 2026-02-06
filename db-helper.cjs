@@ -1994,69 +1994,6 @@ async function cleanupTorrentSearchCache(ttlHours = 6) {
   }
 }
 
-// ✅ OPTIMIZATION: Get pack status for multiple hashes (batch)
-/**
- * Get is_torrent_pack status for multiple hashes
- * @param {Array<string>} hashes - Array of info hashes
- * @returns {Promise<Object>} Map of hash -> is_torrent_pack (null/true/false)
- */
-async function getPackStatusBatch(hashes) {
-  if (!pool) throw new Error('Database not initialized');
-  if (!hashes || hashes.length === 0) return {};
-
-  try {
-    const lowerHashes = hashes.map(h => h.toLowerCase());
-    const query = `
-      SELECT info_hash, is_torrent_pack 
-      FROM torrents 
-      WHERE info_hash = ANY($1)
-    `;
-    const result = await pool.query(query, [lowerHashes]);
-
-    const statusMap = {};
-    result.rows.forEach(row => {
-      statusMap[row.info_hash] = row.is_torrent_pack;
-    });
-
-    if (DEBUG_MODE) console.log(`💾 [DB] Got pack status for ${result.rows.length}/${hashes.length} hashes`);
-    return statusMap;
-  } catch (error) {
-    console.error(`❌ [DB] Error getting pack status batch:`, error.message);
-    return {};
-  }
-}
-
-/**
- * Update is_torrent_pack flag for a torrent (UPSERT - creates if not exists)
- * @param {string} infoHash - Torrent info hash
- * @param {boolean} isPack - true if pack (2+ video files), false if single file
- * @param {string} title - Optional title for new torrents
- * @returns {Promise<boolean>} Success status
- */
-async function updatePackStatus(infoHash, isPack, title = null) {
-  if (!pool) throw new Error('Database not initialized');
-  if (typeof isPack !== 'boolean') return false; // Only update with true/false, not null
-
-  try {
-    // UPSERT: Insert if not exists, update if exists
-    const query = `
-      INSERT INTO torrents (info_hash, is_torrent_pack, title, provider, type, upload_date)
-      VALUES ($1, $2, $3, 'pack_check', 'unknown', NOW())
-      ON CONFLICT (info_hash) DO UPDATE SET
-        is_torrent_pack = EXCLUDED.is_torrent_pack
-    `;
-    const result = await pool.query(query, [infoHash.toLowerCase(), isPack, title || 'Pack verified']);
-
-    if (result.rowCount > 0) {
-      console.log(`💾 [DB] Pack status: ${infoHash.substring(0, 8)}... = ${isPack}`);
-    }
-    return result.rowCount > 0;
-  } catch (error) {
-    console.error(`❌ [DB] Error updating pack status:`, error.message);
-    return false;
-  }
-}
-
 // ✅ ADDED: Update torrent title (for fixing pack names)
 /**
  * Update the title of a torrent in the database
@@ -2114,9 +2051,6 @@ module.exports = {
   closeDatabase,
   searchFilesByTitle,
   deletePackFilesCache,
-  // 🚀 OPTIMIZATION: Pack status tracking
-  getPackStatusBatch,
-  updatePackStatus,
   // 🌐 Global Torrent Search Cache
   getTorrentSearchCache,
   setTorrentSearchCache,

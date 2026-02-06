@@ -356,30 +356,8 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2: Pack resolution for SERIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
-        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
-        let packStatusMap = {};
-        const allPackHashes = packsToProcess.map(p => p.hash).filter(Boolean);
-        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allPackHashes.length > 0) {
-            try {
-                packStatusMap = await dbHelper.getPackStatusBatch(allPackHashes);
-                const knownNonPacks = Object.values(packStatusMap).filter(v => v === false).length;
-                if (knownNonPacks > 0) {
-                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
-                }
-            } catch (err) {
-                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
-            }
-        }
-
         for (let i = 0; i < packsToProcess.length; i++) {
             const pack = packsToProcess[i];
-
-            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
-            const packStatus = packStatusMap[pack.hash?.toLowerCase()];
-            if (packStatus === false) {
-                if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] ⏭️ ${pack.hash.substring(0, 8)} verified as non-pack, skipping`);
-                continue;
-            }
 
             try {
                 let packData = null;
@@ -440,10 +418,6 @@ const runSequentialBackgroundJobs = async (options) => {
                         if (filesToInsert.length > 0 && typeof dbHelper.insertEpisodeFiles === 'function') {
                             await dbHelper.insertEpisodeFiles(filesToInsert);
                             console.log(`   📦 Saved ${filesToInsert.length} episode files for ${pack.hash.substring(0, 8)}`);
-                            // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
-                            if (typeof dbHelper.updatePackStatus === 'function') {
-                                await dbHelper.updatePackStatus(pack.hash, true);
-                            }
                         }
                     }
 
@@ -479,30 +453,8 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2B: Pack resolution for MOVIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
-        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
-        let packStatusMapMovies = {};
-        const allMoviePackHashes = packsToProcess.map(p => p.hash).filter(Boolean);
-        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allMoviePackHashes.length > 0) {
-            try {
-                packStatusMapMovies = await dbHelper.getPackStatusBatch(allMoviePackHashes);
-                const knownNonPacks = Object.values(packStatusMapMovies).filter(v => v === false).length;
-                if (knownNonPacks > 0) {
-                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
-                }
-            } catch (err) {
-                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
-            }
-        }
-
         for (let i = 0; i < packsToProcess.length; i++) {
             const pack = packsToProcess[i];
-
-            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
-            const packStatusMovie = packStatusMapMovies[pack.hash?.toLowerCase()];
-            if (packStatusMovie === false) {
-                if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] ⏭️ ${pack.hash.substring(0, 8)} verified as non-pack, skipping`);
-                continue;
-            }
 
             try {
                 let packData = null;
@@ -560,10 +512,6 @@ const runSequentialBackgroundJobs = async (options) => {
                             try {
                                 await dbHelper.insertPackFiles(packFilesToInsert);
                                 console.log(`   📦 Saved ${packFilesToInsert.length} movie pack files for ${pack.hash.substring(0, 8)}`);
-                                // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
-                                if (typeof dbHelper.updatePackStatus === 'function') {
-                                    await dbHelper.updatePackStatus(pack.hash, true);
-                                }
                             } catch (packErr) {
                                 console.warn(`   ⚠️ Failed to save movie pack files: ${packErr.message}`);
                             }
@@ -601,21 +549,6 @@ const runSequentialBackgroundJobs = async (options) => {
     if (rejectedPotentialPacks && rejectedPotentialPacks.length > 0 && type === 'movie') {
         console.log(`\n🔍 [Sequential BG] Phase 2C: Verifying ${rejectedPotentialPacks.length} potential packs rejected by year filter`);
 
-        // 🚀 OPTIMIZATION: Batch fetch pack status to skip already-verified non-packs
-        let packStatusMap = {};
-        const allHashes = rejectedPotentialPacks.map(r => r.infoHash || r.hash).filter(Boolean);
-        if (dbHelper && typeof dbHelper.getPackStatusBatch === 'function' && allHashes.length > 0) {
-            try {
-                packStatusMap = await dbHelper.getPackStatusBatch(allHashes);
-                const knownNonPacks = Object.values(packStatusMap).filter(v => v === false).length;
-                if (knownNonPacks > 0) {
-                    console.log(`   ⏭️ Skipping ${knownNonPacks} torrents already verified as non-packs`);
-                }
-            } catch (err) {
-                console.warn(`   ⚠️ Could not fetch pack status batch: ${err.message}`);
-            }
-        }
-
         for (let i = 0; i < rejectedPotentialPacks.length; i++) {
             const rejected = rejectedPotentialPacks[i];
             const hash = rejected.infoHash || rejected.hash;
@@ -625,15 +558,8 @@ const runSequentialBackgroundJobs = async (options) => {
                 continue;
             }
 
-            // 🚀 OPTIMIZATION: Skip if already verified as non-pack (is_torrent_pack = false)
-            const packStatus = packStatusMap[hash.toLowerCase()];
-            if (packStatus === false) {
-                if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ⏭️ ${hash.substring(0, 8)} already verified as non-pack, skipping`);
-                continue;
-            }
-
             try {
-                // Check if we already have this pack in DB (pack_files table)
+                // Check if we already have this pack in DB
                 if (dbHelper && typeof dbHelper.getPackFiles === 'function') {
                     const existingPack = await dbHelper.getPackFiles(hash);
                     if (existingPack && existingPack.length > 0) {
@@ -693,23 +619,14 @@ const runSequentialBackgroundJobs = async (options) => {
                                     files_count: videoFiles.length,
                                     source: packData.source || 'unknown'
                                 });
-                                // 🚀 OPTIMIZATION: Mark as pack (is_torrent_pack = true)
-                                if (dbHelper && typeof dbHelper.updatePackStatus === 'function') {
-                                    await dbHelper.updatePackStatus(hash, true);
-                                }
                             } catch (packErr) {
                                 console.warn(`   ⚠️ Failed to save pack files: ${packErr.message}`);
                             }
                         }
                     } else {
                         if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Not a pack: only ${videoFiles.length} video file(s)`);
-                        // 🚀 OPTIMIZATION: Mark as non-pack (is_torrent_pack = false) - won't check again
-                        if (dbHelper && typeof dbHelper.updatePackStatus === 'function') {
-                            await dbHelper.updatePackStatus(hash, false);
-                        }
                     }
                 } else {
-                    // Could not fetch files - leave is_torrent_pack as NULL (will retry next time)
                     if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Could not fetch files for ${hash.substring(0, 8)}`);
                 }
 

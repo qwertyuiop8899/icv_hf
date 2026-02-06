@@ -13,6 +13,13 @@ const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
 /**
+ * Check if file is a video file
+ */
+function isVideoFile(path) {
+    return VIDEO_EXTENSIONS.test(path || '');
+}
+
+/**
  * Sleep helper
  */
 function sleep(ms) {
@@ -371,15 +378,27 @@ async function enrichCacheBackground(items, token, dbHelper) {
 
                         if (result.cached && isPack) {
                             try {
-                                const packFilesData = result.files.map(f => ({
+                                // ✅ FIX: Clean file paths - extract just filename, no folder prefix
+                                const cleanFilePath = (p) => {
+                                    if (!p) return 'unknown.mkv';
+                                    const cleaned = p.replace(/^\/+/, ''); // Remove leading slashes
+                                    return cleaned.includes('/') ? cleaned.split('/').pop() : cleaned;
+                                };
+
+                                // ✅ FIX: Filter ONLY video files (skip .txt, .nfo, .srt, etc.)
+                                const videoFiles = result.files.filter(f => isVideoFile(f.path) && f.bytes > 50 * 1024 * 1024);
+                                
+                                if (videoFiles.length === 0) continue;
+
+                                const packFilesData = videoFiles.map(f => ({
                                     pack_hash: result.hash.toLowerCase(),
                                     imdb_id: null,
                                     file_index: f.id,
-                                    file_path: f.path,
+                                    file_path: cleanFilePath(f.path), // ✅ Only filename, no folder
                                     file_size: f.bytes || 0
                                 }));
                                 await dbHelper.insertPackFiles(packFilesData);
-                                if (DEBUG_MODE) console.log(`📦 [RD Cache Background] Saved ${result.files.length} pack files for ${result.hash.substring(0, 8)}`);
+                                if (DEBUG_MODE) console.log(`📦 [RD Cache Background] Saved ${videoFiles.length} pack files for ${result.hash.substring(0, 8)}`);
                             } catch (packErr) {
                                 console.warn(`⚠️ [RD Cache Background] Failed to save pack files: ${packErr.message}`);
                             }

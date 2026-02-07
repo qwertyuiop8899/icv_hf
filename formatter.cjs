@@ -430,20 +430,20 @@ const PRESET_TEMPLATES = {
     },
     minimal: {
         name: `{stream.quality} {stream.codec}`,
-        description: `{stream.size::bytes} • {stream.seeders} seeds`
+        description: `{stream.title}
+{stream.size::bytes} • {stream.seeders} seeds`
     },
     verbose: {
         name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
         description: `📁 {stream.filename}
-💾 Ep: {stream.size::bytes}{stream.packSize::>0[" / Pack: {stream.packSize::bytes}"||""]}
+💾 Ep: {stream.size::bytes}{stream.folderName::exists[" / Pack: {stream.folderSize::bytes}"||""]}
 👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}
 🌍 {stream.languages::join(' | ')}`
     },
     italiano: {
         name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
-        description: `📺 {stream.title}
-📁 {stream.filename}
-💾 {stream.size::bytes}{stream.isPack::istrue[" (Pack: {stream.packSize::bytes})"||""]}
+        description: `📄 {stream.filename}
+💾 {stream.size::bytes}
 🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}
 🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
     },
@@ -458,12 +458,12 @@ const PRESET_TEMPLATES = {
 {stream.filename::exists["📄 ❯ {stream.filename}"||""]}`
     },
     dav: {
-        name: `{stream.resolution::=2160p["🎥4K UHD"]||""}{stream.resolution::=1440p["🎬 QHD"]||""}{stream.resolution::=1080p["📀 FHD"]||""}{stream.resolution::=720p["💿 HD"]||""}{stream.resolution::=480p["💩 SD"]||""}{stream.resolution::exists[""||"❓ Unknown"]}`,
+        name: `{stream.resolution::=2160p["🎥4K UHD"||""]}{stream.resolution::=1440p["🎬 QHD"||""]}{stream.resolution::=1080p["📀 FHD"||""]}{stream.resolution::=720p["💿 HD"||""]}{stream.resolution::=480p["💩 SD"||""]}{stream.resolution::exists[""||"❓ Unknown"]}`,
         description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}
 "||""]}{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}
 {stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}
 {stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}
-{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}
+{stream.size::>0["📦 {stream.size::bytes}"||""]}{stream.folderName::exists[" / 📦 {stream.folderSize::bytes}"||""]}  {stream.duration::>0["⏱️ {stream.duration::time}"||""]}  {stream.seeders::>0["👥 {stream.seeders}"||""]}  {stream.releaseGroup::exists["🏷️ {stream.releaseGroup}"||""]}  {stream.age::exists["📅 {stream.age}"||""]}
 {service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]}{stream.type::=p2p["⚠️ P2P "||""]}{stream.type::=http["💻 Web Link "||""]}{stream.type::=youtube["▶️ Youtube "||""]}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}
 {stream.folderName::exists["📂 {stream.folderName}"||""]}
 {stream.filename::exists["📄 {stream.filename}"||""]}`
@@ -472,8 +472,7 @@ const PRESET_TEMPLATES = {
         name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
         description: `{stream.quality} {service.cached::istrue["/⚡"||"/⏳"]}
 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}
-Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}
+{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')} "||""]}Specifiche: {stream.quality}{stream.visualTags::exists["| 📺 {stream.visualTags::join(' ')}"||""]} {stream.audioTags::exists["| 🔊 {stream.audioTags::join(', ')}"||""]}
 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
     },
@@ -487,9 +486,7 @@ Specifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTa
 {stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
     },
     pri: {
-        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]}
-{stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]}
-[{addon.name}]`,
+        name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]} {stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]} [{addon.name}]`,
         description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}
 {stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.quality::~DVDRip["💿 ᴅᴠᴅʀɪᴘ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}
 {stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}

@@ -977,7 +977,7 @@
                                     <option value="pri">Pri</option>
                                     <option value="custom">Custom...</option>
                                 </select>
-                                <a href="/formatter.html" target="_blank" id="formatter_preview_link"
+                                <a href="#" id="formatter_preview_link"
                                     style="font-size: 12px; color: #a78bfa; text-decoration: underline; cursor: pointer; white-space: nowrap; margin-left: 5px;"
                                     title="Anteprima Template">📋 Anteprima</a>
                             </div>
@@ -1026,6 +1026,19 @@
                     <span id="formatter_save_status"
                         style="color: #10b981; font-size: 11px; align-self: center;"></span>
                 </div>
+            </div>
+
+            <!-- Inline Formatter Preview (same page) -->
+            <div id="formatter_preview_container"
+                style="display: none; margin-top: 15px; padding: 12px; border-radius: 10px; background: rgba(10, 10, 26, 0.5); border: 1px solid rgba(147, 51, 234, 0.3);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <div style="font-size: 12px; font-weight: bold; color: #c084fc;">📋 Anteprima Template</div>
+                    <button type="button" id="formatter_preview_close"
+                        style="background: transparent; border: none; color: #a78bfa; font-size: 16px; cursor: pointer;">✕</button>
+                </div>
+                <iframe id="formatter_preview_iframe"
+                    style="width: 100%; height: 520px; border: 1px solid rgba(147, 51, 234, 0.3); border-radius: 8px; background: #0a0515;"
+                    title="Anteprima Formatter"></iframe>
             </div>
 
             <!-- Action Buttons -->
@@ -1704,6 +1717,9 @@
             const formatterCustomName = document.getElementById('formatter_custom_name');
             const formatterCustomDesc = document.getElementById('formatter_custom_desc');
             const formatterPreviewLink = document.getElementById('formatter_preview_link');
+            const formatterPreviewContainer = document.getElementById('formatter_preview_container');
+            const formatterPreviewIframe = document.getElementById('formatter_preview_iframe');
+            const formatterPreviewClose = document.getElementById('formatter_preview_close');
             const formatterStatus = document.getElementById('formatter_status');
 
             // ✅ Helper: Toggle formatter based on AIOStreams mode
@@ -1720,6 +1736,7 @@
                     formatterStatus.textContent = '⚠️ Disabilitato in modalità AIOStreams';
                     formatterStatus.style.color = '#f59e0b';
                     customFormatterContainer.style.display = 'none';
+                    if (formatterPreviewContainer) formatterPreviewContainer.style.display = 'none';
                 } else {
                     // Show current preset name
                     const presetNames = {
@@ -1737,6 +1754,9 @@
                     } else {
                         customFormatterContainer.style.display = 'none';
                     }
+                    if (formatterPreviewContainer && formatterPreviewContainer.style.display !== 'none') {
+                        updateFormatterPreview();
+                    }
                 }
                 updateInstallLink();
             }
@@ -1748,17 +1768,40 @@
             formatterPresetSelect.addEventListener('change', updateFormatterState);
 
             // Update link when custom templates change
-            formatterCustomName.addEventListener('input', updateInstallLink);
-            formatterCustomDesc.addEventListener('input', updateInstallLink);
+            formatterCustomName.addEventListener('input', () => {
+                updateInstallLink();
+                if (formatterPreviewContainer && formatterPreviewContainer.style.display !== 'none') {
+                    updateFormatterPreview();
+                }
+            });
+            formatterCustomDesc.addEventListener('input', () => {
+                updateInstallLink();
+                if (formatterPreviewContainer && formatterPreviewContainer.style.display !== 'none') {
+                    updateFormatterPreview();
+                }
+            });
 
-            // Preview link opens popup with current templates
-            formatterPreviewLink.addEventListener('click', (e) => {
-                e.preventDefault();
+            function updateFormatterPreview() {
+                if (!formatterPreviewIframe) return;
                 const currentPreset = formatterPresetSelect.value;
                 const customName = encodeURIComponent(formatterCustomName.value || '');
                 const customDesc = encodeURIComponent(formatterCustomDesc.value || '');
-                window.open(`/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`, 'formatter', 'width=1100,height=750');
+                formatterPreviewIframe.src = `/formatter.html?preset=${currentPreset}&name=${customName}&desc=${customDesc}`;
+            }
+
+            // Preview link opens inline preview (same page)
+            formatterPreviewLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (!formatterPreviewContainer) return;
+                formatterPreviewContainer.style.display = 'block';
+                updateFormatterPreview();
             });
+
+            if (formatterPreviewClose) {
+                formatterPreviewClose.addEventListener('click', () => {
+                    if (formatterPreviewContainer) formatterPreviewContainer.style.display = 'none';
+                });
+            }
 
             // Save button explicitly updates install link with current formatter values
             const formatterSaveBtn = document.getElementById('formatter_save_btn');

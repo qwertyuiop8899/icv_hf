@@ -245,44 +245,6 @@
 
 <body>
     <div class="container">
-        <header>
-            <h1>🎨 ICV Custom Formatter</h1>
-        </header>
-
-        <div id="currentSelection" class="current-selection" style="display: none;">
-            ✓ Preset attuale: <span id="currentPresetName">-</span>
-        </div>
-
-        <!-- Preset Selector -->
-        <div class="preset-selector"
-            style="margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 200px;">
-                <label
-                    style="display: block; color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 0.4rem;">Preset</label>
-                <select id="presetSelect"
-                    style="width: 100%; padding: 0.6rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.9rem;">
-                    <option value="default">Default</option>
-                    <option value="torrentio">Torrentio Style</option>
-                    <option value="minimal">Minimal</option>
-                    <option value="verbose">Verbose</option>
-                    <option value="italiano">Italiano</option>
-                    <option value="fra">FRA Style</option>
-                    <option value="dav">DAV Style</option>
-                    <option value="and">AND Style</option>
-                    <option value="lad">LAD Style</option>
-                    <option value="pri">PRI Style</option>
-                    <option value="custom">✏️ Personalizzato</option>
-                </select>
-            </div>
-            <div class="button-row" style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
-                <button id="saveBtn"
-                    style="padding: 0.6rem 1.2rem; background: var(--accent); border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: 600;">💾
-                    Salva</button>
-                <button id="cancelBtn"
-                    style="padding: 0.6rem 1.2rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: pointer;">Annulla</button>
-            </div>
-        </div>
-
         <div class="main-grid">
             <!-- Left: Editor -->
             <div class="panel">
@@ -477,23 +439,23 @@
             },
             minimal: {
                 name: `{stream.quality} {stream.codec}`,
-                description: `{stream.size::bytes} • {stream.seeders} seeds`
+                description: `{stream.title}\n{stream.size::bytes} • {stream.seeders} seeds`
             },
             verbose: {
                 name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
-                description: `📁 {stream.filename}\n💾 Ep: {stream.size::bytes}{stream.packSize::>0[" / Pack: {stream.packSize::bytes}"||""]}\n👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}\n🌍 {stream.languages::join(' | ')}`
+                description: `📁 {stream.filename}\n💾 Ep: {stream.size::bytes}{stream.folderName::exists[" / Pack: {stream.folderSize::bytes}"||""]}\n👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}\n🌍 {stream.languages::join(' | ')}`
             },
             italiano: {
                 name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
-                description: `📺 {stream.title}\n📁 {stream.filename}\n💾 {stream.size::bytes}{stream.isPack::istrue[" (Pack: {stream.packSize::bytes})"||""]}\n🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}\n🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
+                description: `📄 {stream.filename}\n💾 {stream.size::bytes}\n🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}\n🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
             },
             fra: {
                 name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K"||""]}{stream.quality::exists[""||"UNK"]}`,
                 description: `📄 ❯ {stream.filename}\n{stream.languages::exists["🌎 ❯ {stream.languages::join(' • ')}"||""]}\n✨ ❯ {service.shortName::exists["{service.shortName}"||""]}{stream.releaseGroup::exists[" • {stream.releaseGroup}"||""]}\n{stream.quality::exists["🔥 ❯ {stream.quality}"||""]}{stream.visualTags::exists[" • {stream.visualTags::join(' • ')}"||""]}\n{stream.size::>0["💾 ❯ {stream.size::bytes}"||""]}{service.cached::isfalse[" / 👥 ❯ {stream.seeders}"||""]}`
             },
             dav: {
-                name: `{stream.resolution::=2160p["🎥4K UHD"||""]} {stream.resolution::=1440p["🎬 QHD"||""]} {stream.resolution::=1080p["📀 FHD"||""]} {stream.resolution::=720p["💿 HD"||""]} {stream.resolution::=480p["💩 SD"||""]} {stream.resolution::exists[""||"❓ Unknown"]}`.replace(/\s+/g, ''),
-                description: `{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}\n{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}\n{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}\n{stream.size::>0["📦 {stream.size::bytes} "||""]}{stream.folderSize::>0["/ 📦 {stream.folderSize::bytes} "||""]}{stream.duration::>0["⏱️ {stream.duration::time} "||""]}{stream.seeders::>0["👥 {stream.seeders} "||""]}{stream.releaseGroup::exists["🏷️ {stream.releaseGroup} "||""]}{stream.age::exists["📅 {stream.age}"||""]}\n{service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]} {stream.type::=p2p["⚠️ P2P "||""]} {stream.type::=http["💻 Web Link "||""]} {stream.type::=youtube["▶️ Youtube "||""]} {stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}\n{stream.folderName::exists["📂 {stream.folderName}"||""]}\n{stream.filename::exists["📄 {stream.filename}"||""]}`
+                name: `{stream.resolution::=2160p["🎥4K UHD"||""]}{stream.resolution::=1440p["🎬 QHD"||""]}{stream.resolution::=1080p["📀 FHD"||""]}{stream.resolution::=720p["💿 HD"||""]}{stream.resolution::=480p["💩 SD"||""]}{stream.resolution::exists[""||"❓ Unknown"]}`,
+                description: `{stream.regexMatched::exists["🎚️ {stream.regexMatched}\n"||""]}{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.visualTags::exists["📺 {stream.visualTags::join(' | ')} "||""]}{stream.encode::exists["🎞️ {stream.encode}"||""]}\n{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')} "||""]}{stream.audioChannels::exists["🔊 {stream.audioChannels::join(' | ')}"||""]}\n{stream.uLanguages::exists["🗣️ {stream.uLanguages::join(' / ')::upper::truncate(57)}"||""]}\n{stream.size::>0["📦 {stream.size::bytes}"||""]}{stream.folderName::exists[" / 📦 {stream.folderSize::bytes}"||""]}  {stream.duration::>0["⏱️ {stream.duration::time}"||""]}  {stream.seeders::>0["👥 {stream.seeders}"||""]}  {stream.releaseGroup::exists["🏷️ {stream.releaseGroup}"||""]}  {stream.age::exists["📅 {stream.age}"||""]}\n{service.cached::istrue["⚡"||""]}{service.cached::isfalse["⏳"||""]}{service.shortName::exists["{service.shortName} "||""]}{stream.type::=Usenet["📰 Usenet "||""]}{stream.type::=p2p["⚠️ P2P "||""]}{stream.type::=http["💻 Web Link "||""]}{stream.type::=youtube["▶️ Youtube "||""]}{stream.type::=live["📺 Live "||""]}🔍{addon.name}{stream.indexer::exists[" 📡 {stream.indexer}"||""]}\n{stream.folderName::exists["📂 {stream.folderName}"||""]}\n{stream.filename::exists["📄 {stream.filename}"||""]}`
             },
             and: {
                 name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
@@ -504,8 +466,8 @@
                 description: `{stream.title::exists["🎟️ {stream.title}"||""]}\n📜 S{stream.season}E{stream.episode}\n{stream.quality::exists["🎥 {stream.quality} "||""]}{stream.codec::exists["🎞️ {stream.codec} "||""]}{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}\n{stream.size::>0["📦 {stream.size::bytes}"||""]}\n🔗 {addon.name}\n{stream.languageEmojis::exists["🌐 {stream.languageEmojis::join(' ')}"||""]}`
             },
             pri: {
-                name: `{service.shortName::exists["[{service.shortName}"]||""}{service.cached::istrue["⚡️"]||"❌️"}{service.shortName::exists["☁️]"]||""}\n{stream.resolution::=2160p["4K🔥UHD"]||""}{stream.resolution::=1440p["2K✨QHD"]||""}{stream.resolution::=1080p["FHD🚀1080p"]||""}{stream.resolution::=720p["HD💿720p"]||""}{stream.resolution::=480p["SD📺"]||""}{stream.resolution::exists[""]||"Unknown💩"}\n[{addon.name}]`,
-                description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "]||""}{stream.formattedSeasons::exists["{stream.formattedSeasons}"]||""}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"]||""}\n{stream.quality::~Remux["💎 ʀᴇᴍᴜx"]||""}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"]||""}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"]||""}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"]||""}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"]||""}{stream.encode::exists[" | 🎞️ {stream.encode::small}"]||""}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"]||""}\n{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"]||""}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"]||""}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"]||""}\n{stream.size::>0["📁 {stream.size::bytes}"]||""}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"]||""}{stream.duration::>0[" | ⏱️ {stream.duration::time}"]||""}\n📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
+                name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡️"||"❌️"]}{service.shortName::exists["☁️]"||""]} {stream.resolution::=2160p["4K🔥UHD"||""]}{stream.resolution::=1440p["2K✨QHD"||""]}{stream.resolution::=1080p["FHD🚀1080p"||""]}{stream.resolution::=720p["HD💿720p"||""]}{stream.resolution::=480p["SD📺"||""]}{stream.resolution::exists::isfalse["Unknown💩"||""]} [{addon.name}]`,
+                description: `🎬 {stream.title::title} {stream.year::exists["({stream.year}) "||""]}{stream.formattedSeasons::exists["{stream.formattedSeasons}"||""]}{stream.formattedEpisodes::exists["{stream.formattedEpisodes}"||""]}\n{stream.quality::~Remux["💎 ʀᴇᴍᴜx"||""]}{stream.quality::~BluRay["📀 ʙʟᴜʀᴀʏ"||""]}{stream.quality::~WEB-DL["🖥 ᴡᴇʙ-ᴅʟ"||""]}{stream.quality::~WEBRip["💻 ᴡᴇʙʀɪᴘ"||""]}{stream.quality::~HDTV["📺 ʜᴅᴛᴠ"||""]}{stream.quality::~DVDRip["💿 ᴅᴠᴅʀɪᴘ"||""]}{stream.encode::exists[" | 🎞️ {stream.encode::small}"||""]}{stream.visualTags::exists[" | 🔆 {stream.visualTags::join(' | ')}"||""]}\n{stream.audioTags::exists["🎧 {stream.audioTags::join(' | ')}"||""]}{stream.audioChannels::exists[" | 🔊{stream.audioChannels::first}"||""]}{stream.languageEmojis::exists[" | 🗣️ {stream.languageEmojis::join(' / ')}"||""]}\n{stream.size::>0["📁 {stream.size::bytes}"||""]}{stream.releaseGroup::exists["  | 🏷️ {stream.releaseGroup}"||""]}{stream.duration::>0[" | ⏱️ {stream.duration::time}"||""]}\n📄 ▶️{stream.filename::replace('.',' ')::small}◀️`
             },
             custom: { name: '', description: '' }
         };
@@ -736,15 +698,10 @@
         }
 
         // UI Elements
-        const presetSelect = document.getElementById('presetSelect');
         const nameTemplate = document.getElementById('nameTemplate');
         const descriptionTemplate = document.getElementById('descriptionTemplate');
         const previewName = document.getElementById('previewName');
         const previewDescription = document.getElementById('previewDescription');
-        const currentSelection = document.getElementById('currentSelection');
-        const currentPresetName = document.getElementById('currentPresetName');
-
-        let selectedPreset = 'default';
 
         function updatePreview() {
             try {
@@ -756,16 +713,10 @@
         }
 
         function loadPreset(presetId) {
-            if (presetId === 'custom') {
-                // ✅ FIX: Update selectedPreset even for 'custom'
-                selectedPreset = 'custom';
-                return;
-            }
             const preset = PRESETS[presetId];
             if (preset) {
                 nameTemplate.value = preset.name;
                 descriptionTemplate.value = preset.description;
-                selectedPreset = presetId;
                 updatePreview();
             }
         }
@@ -780,45 +731,12 @@
             } else {
                 descriptionTemplate.value += variable;
             }
-            presetSelect.value = 'custom';
-            selectedPreset = 'custom';
             updatePreview();
         }
 
         // Event listeners
-        presetSelect.addEventListener('change', e => loadPreset(e.target.value));
-        nameTemplate.addEventListener('input', () => { presetSelect.value = 'custom'; selectedPreset = 'custom'; updatePreview(); });
-        descriptionTemplate.addEventListener('input', () => { presetSelect.value = 'custom'; selectedPreset = 'custom'; updatePreview(); });
-
-        // Save button - uses localStorage for cross-origin compatibility
-        document.getElementById('saveBtn').addEventListener('click', () => {
-            const config = {
-                preset: selectedPreset,
-                customName: selectedPreset === 'custom' ? nameTemplate.value : null,
-                customDesc: selectedPreset === 'custom' ? descriptionTemplate.value : null
-            };
-
-            // Save to localStorage (works cross-origin within same domain)
-            localStorage.setItem('formatter_config', JSON.stringify(config));
-            localStorage.setItem('formatter_config_timestamp', Date.now().toString());
-
-            // Also try postMessage as backup
-            if (window.opener) {
-                try {
-                    window.opener.postMessage({ type: 'formatter-config', config }, '*');
-                } catch (e) {
-                    console.warn('postMessage failed:', e);
-                }
-            }
-
-            alert('✅ Formatter salvato! Torna alla pagina principale per vedere le modifiche.');
-            window.close();
-        });
-
-        // Cancel button
-        document.getElementById('cancelBtn').addEventListener('click', () => {
-            if (window.opener) window.close();
-        });
+        nameTemplate.addEventListener('input', updatePreview);
+        descriptionTemplate.addEventListener('input', updatePreview);
 
         // Load initial config from URL or opener
         function init() {
@@ -828,20 +746,12 @@
             const customName = decodeURIComponent(urlParams.get('name') || '');
             const customDesc = decodeURIComponent(urlParams.get('desc') || '');
 
-            // If we have a custom config, load it
             if (preset === 'custom' && (customName || customDesc)) {
-                presetSelect.value = 'custom';
                 nameTemplate.value = customName;
                 descriptionTemplate.value = customDesc;
-                selectedPreset = 'custom';
-                currentSelection.style.display = 'block';
-                currentPresetName.textContent = 'Custom (salvato)';
                 updatePreview();
             } else if (preset && PRESETS[preset]) {
-                presetSelect.value = preset;
                 loadPreset(preset);
-                currentSelection.style.display = 'block';
-                currentPresetName.textContent = preset.charAt(0).toUpperCase() + preset.slice(1);
             } else {
                 loadPreset('default');
             }

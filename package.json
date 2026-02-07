@@ -1,6 +1,6 @@
 {
   "name": "ilcorsaroviola",
-  "version": "7.1.0",
+  "version": "7.2.3",
   "private": true,
   "description": "Addon Stremio CorsaroNero con DB interno e altri provider con supporto Real-Debrid con MFP per la condivisione, Torbox e Jackett.",
   "type": "module",
@@ -30,4 +30,5 @@
     "vercel": "^34.2.0"
   }
 }
+
 

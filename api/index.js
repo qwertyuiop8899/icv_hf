@@ -356,8 +356,25 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2: Pack resolution for SERIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
-        for (let i = 0; i < packsToProcess.length; i++) {
-            const pack = packsToProcess[i];
+        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs
+        const seriesPacksToVerify = [];
+        for (const pack of packsToProcess) {
+            if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
+                const isPack = await dbHelper.getIsTorrentPack(pack.hash);
+                if (isPack === false) {
+                    if (DEBUG_MODE) console.log(`   ⏭️ Skip ${pack.hash.substring(0, 8)}: already verified as NOT a pack`);
+                    continue;
+                }
+            }
+            seriesPacksToVerify.push(pack);
+        }
+
+        if (seriesPacksToVerify.length < packsToProcess.length) {
+            console.log(`   📊 Skipped ${packsToProcess.length - seriesPacksToVerify.length} already-verified non-packs`);
+        }
+
+        for (let i = 0; i < seriesPacksToVerify.length; i++) {
+            const pack = seriesPacksToVerify[i];
 
             try {
                 let packData = null;
@@ -365,13 +382,13 @@ const runSequentialBackgroundJobs = async (options) => {
                 // Try RD first
                 if (rdKey && typeof packFilesHandler.fetchFilesFromRealDebrid === 'function') {
                     packData = await packFilesHandler.fetchFilesFromRealDebrid(pack.hash, rdKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] RD pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
+                    if (DEBUG_MODE) console.log(`   [${i + 1}/${seriesPacksToVerify.length}] RD pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
                 }
 
                 // Fallback to TB
                 if (!packData && tbKey && typeof packFilesHandler.fetchFilesFromTorbox === 'function') {
                     packData = await packFilesHandler.fetchFilesFromTorbox(pack.hash, tbKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${allPacksToResolve.length}] TB pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
+                    if (DEBUG_MODE) console.log(`   [${i + 1}/${seriesPacksToVerify.length}] TB pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
                 }
 
                 if (packData) {
@@ -418,6 +435,17 @@ const runSequentialBackgroundJobs = async (options) => {
                         if (filesToInsert.length > 0 && typeof dbHelper.insertEpisodeFiles === 'function') {
                             await dbHelper.insertEpisodeFiles(filesToInsert);
                             console.log(`   📦 Saved ${filesToInsert.length} episode files for ${pack.hash.substring(0, 8)}`);
+                            
+                            // ✅ Mark as confirmed pack
+                            if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                await dbHelper.updateIsTorrentPack(pack.hash, true);
+                            }
+                        } else if (packData.files.length > 0 && filesToInsert.length === 0) {
+                            // ✅ Has files but no valid episodes → NOT a series pack
+                            if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                await dbHelper.updateIsTorrentPack(pack.hash, false);
+                            }
+                            if (DEBUG_MODE) console.log(`   ❌ Not a series pack: 0 valid episode files`);
                         }
                     }
 
@@ -430,7 +458,7 @@ const runSequentialBackgroundJobs = async (options) => {
 
                 // ⏱️ 4 second delay between pack resolutions (API intensive - 3 calls per pack)
                 // RD rate limits after ~15-20 rapid calls to addMagnet
-                if (i < allPacksToResolve.length - 1) {
+                if (i < seriesPacksToVerify.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 4000));
                 }
 
@@ -549,12 +577,32 @@ const runSequentialBackgroundJobs = async (options) => {
     if (rejectedPotentialPacks && rejectedPotentialPacks.length > 0 && type === 'movie') {
         console.log(`\n🔍 [Sequential BG] Phase 2C: Verifying ${rejectedPotentialPacks.length} potential packs rejected by year filter`);
 
-        for (let i = 0; i < rejectedPotentialPacks.length; i++) {
-            const rejected = rejectedPotentialPacks[i];
+        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs
+        const packsToVerify = [];
+        for (const rejected of rejectedPotentialPacks) {
+            const hash = rejected.infoHash || rejected.hash;
+            if (!hash) continue;
+            
+            if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
+                const isPack = await dbHelper.getIsTorrentPack(hash);
+                if (isPack === false) {
+                    if (DEBUG_MODE) console.log(`   ⏭️ Skip ${hash.substring(0, 8)}: already verified as NOT a pack`);
+                    continue;
+                }
+            }
+            packsToVerify.push(rejected);
+        }
+
+        if (packsToVerify.length < rejectedPotentialPacks.length) {
+            console.log(`   📊 Skipped ${rejectedPotentialPacks.length - packsToVerify.length} already-verified non-packs`);
+        }
+
+        for (let i = 0; i < packsToVerify.length; i++) {
+            const rejected = packsToVerify[i];
             const hash = rejected.infoHash || rejected.hash;
 
             if (!hash) {
-                console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ⚠️ No hash found, skipping`);
+                console.log(`   [${i + 1}/${packsToVerify.length}] ⚠️ No hash found, skipping`);
                 continue;
             }
 
@@ -563,7 +611,7 @@ const runSequentialBackgroundJobs = async (options) => {
                 if (dbHelper && typeof dbHelper.getPackFiles === 'function') {
                     const existingPack = await dbHelper.getPackFiles(hash);
                     if (existingPack && existingPack.length > 0) {
-                        if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ⏭️ Pack ${hash.substring(0, 8)} already in DB, skipping`);
+                        if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToVerify.length}] ⏭️ Pack ${hash.substring(0, 8)} already in DB, skipping`);
                         continue;
                     }
                 }
@@ -591,7 +639,7 @@ const runSequentialBackgroundJobs = async (options) => {
                     if (videoFiles.length > 1) {
                         // ✅ It's a real pack with multiple movies!
                         const packName = packData.filename || rejected.title;
-                        console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ✅ Confirmed pack: "${packName?.substring(0, 40)}..." with ${videoFiles.length} movies`);
+                        console.log(`   [${i + 1}/${packsToVerify.length}] ✅ Confirmed pack: "${packName?.substring(0, 40)}..." with ${videoFiles.length} movies`);
 
                         // Save pack files to DB
                         // ✅ FIX: Clean file paths - extract just filename, no folder prefix
@@ -613,6 +661,12 @@ const runSequentialBackgroundJobs = async (options) => {
                             try {
                                 await dbHelper.insertPackFiles(packFilesToInsert);
                                 console.log(`   📦 Saved ${packFilesToInsert.length} pack files for ${hash.substring(0, 8)}`);
+                                
+                                // ✅ Mark as confirmed pack
+                                if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                    await dbHelper.updateIsTorrentPack(hash, true);
+                                }
+                                
                                 rejectedPacksResults.push({
                                     hash: hash,
                                     pack_name: packName,
@@ -624,14 +678,20 @@ const runSequentialBackgroundJobs = async (options) => {
                             }
                         }
                     } else {
-                        if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Not a pack: only ${videoFiles.length} video file(s)`);
+                        if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToVerify.length}] ❌ Not a pack: only ${videoFiles.length} video file(s)`);
+                        
+                        // ✅ Mark as NOT a pack (won't be rechecked)
+                        if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
+                            await dbHelper.updateIsTorrentPack(hash, false);
+                        }
                     }
                 } else {
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${rejectedPotentialPacks.length}] ❌ Could not fetch files for ${hash.substring(0, 8)}`);
+                    if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToVerify.length}] ❌ Could not fetch files for ${hash.substring(0, 8)}`);
+                    // ❌ Do NOT update flag - leave NULL so it can be retried
                 }
 
                 // ⏱️ 4 second delay between checks
-                if (i < rejectedPotentialPacks.length - 1) {
+                if (i < packsToVerify.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 4000));
                 }
 
@@ -8568,6 +8628,10 @@ async function handleStream(type, id, config, workerOrigin) {
                                         result.title = fileInfo.packTitle;
                                         if (DEBUG_MODE) console.log(`   📦 Using DB pack title: "${fileInfo.packTitle.substring(0, 50)}..."`);
                                     }
+                                    // ✅ Mark as confirmed pack
+                                    if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                        dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                    }
                                     newlyVerified.push(result);
                                 } else {
                                     if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Cache HIT but Movie NOT in pack - EXCLUDING`);
@@ -8601,6 +8665,10 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         if (!isLikelyPack) {
                             newlyVerified.push(result); // Assume valid single movie
+                            // ✅ Mark as NOT a pack (single movie, won't be rechecked)
+                            if (infoHash && typeof dbHelper.updateIsTorrentPack === 'function') {
+                                dbHelper.updateIsTorrentPack(infoHash, false).catch(() => {});
+                            }
                             continue;
                         }
 
@@ -8641,11 +8709,18 @@ async function handleStream(type, id, config, workerOrigin) {
                                     result.title = fileInfo.packTitle;
                                     if (DEBUG_MODE) console.log(`   📦 Using DB pack title: "${fileInfo.packTitle.substring(0, 50)}..."`);
                                 }
+                                // ✅ Mark as confirmed pack
+                                if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                }
                                 newlyVerified.push(result);
                             } else {
                                 // If resolve returns null, it means it's a pack but movie NOT found.
-                                // OR fetch failed.
+                                // OR fetch failed. Mark as pack anyway (has multiple files)
                                 if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
+                                if (typeof dbHelper.updateIsTorrentPack === 'function') {
+                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                }
                                 excluded.push(result);
                             }
                         } catch (err) {
@@ -8680,17 +8755,31 @@ async function handleStream(type, id, config, workerOrigin) {
                                 const BG_DELAY_MS = 1000; // 1 second between calls (RD: 200/min limit)
                                 let processed = 0;
                                 let skippedNotPack = 0;
+                                let skippedByFlag = 0;
 
                                 for (let i = 0; i < skipped.length; i++) {
                                     const result = skipped[i];
                                     const infoHash = result.infoHash?.toLowerCase();
                                     if (!infoHash) continue;
 
+                                    // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs
+                                    if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
+                                        const isPack = await dbHelper.getIsTorrentPack(infoHash);
+                                        if (isPack === false) {
+                                            skippedByFlag++;
+                                            continue;
+                                        }
+                                    }
+
                                     // ✅ FIXED: Only process if TITLE indicates pack (trilogia, collection, etc.)
                                     // NOT size-based - a single 4K movie can be >4GB!
                                     const isLikelyPack = /\b(trilog|saga|collection|collezione|pack|completa|integrale|filmografia)\b/i.test(result.title);
                                     if (!isLikelyPack) {
                                         skippedNotPack++;
+                                        // ✅ Mark as NOT a pack (title doesn't indicate pack)
+                                        if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
+                                            await dbHelper.updateIsTorrentPack(infoHash, false);
+                                        }
                                         continue;
                                     }
 
@@ -8707,11 +8796,15 @@ async function handleStream(type, id, config, workerOrigin) {
                                         );
                                         processed++;
                                         console.log(`✅ [MOVIE VERIFY BG] Pre-cached pack ${infoHash.substring(0, 8)}`);
+                                        // ✅ Mark as confirmed pack
+                                        if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
+                                            await dbHelper.updateIsTorrentPack(infoHash, true);
+                                        }
                                     } catch (e) {
-                                        // Ignore errors in background
+                                        // Ignore errors in background - leave is_torrent_pack as NULL for retry
                                     }
                                 }
-                                console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified (${skippedNotPack} non-pack skipped)`);
+                                console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified, ${skippedNotPack} non-pack title, ${skippedByFlag} already-verified non-packs`);
                             })().catch(() => { });
                         }, 5000); // 5 second delay to let response complete first
                     }

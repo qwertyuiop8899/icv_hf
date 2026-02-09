@@ -279,7 +279,7 @@
                         <div class="var-item" onclick="insertVar('{stream.title}')">{stream.title}</div>
                         <div class="var-item" onclick="insertVar('{stream.filename}')">{stream.filename}</div>
                         <div class="var-item" onclick="insertVar('{stream.size::bytes}')">{stream.size::bytes}</div>
-                        <div class="var-item" onclick="insertVar('{stream.packSize::bytes}')">{stream.packSize::bytes}
+                        <div class="var-item" onclick="insertVar('{stream.folderSize::bytes}')">{stream.folderSize::bytes}
                         </div>
                         <div class="var-item" onclick="insertVar('{stream.quality}')">{stream.quality}</div>
                         <div class="var-item" onclick="insertVar('{stream.codec}')">{stream.codec}</div>
@@ -431,23 +431,23 @@
         const PRESETS = {
             default: {
                 name: `{service.shortName::exists["[{service.shortName}] "||""]}📺 {stream.title}`,
-                description: `{stream.quality} | 💾 {stream.size::bytes} | 👤 {stream.seeders} seeders`
+                description: `{stream.quality::=Unknown[""||"{stream.quality}"]} | 💾 {stream.size::bytes} | 👤 {stream.seeders} seeders`
             },
             torrentio: {
-                name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["+]"||"]"]} ICV {stream.quality}`,
-                description: `{stream.filename}\n💾 {stream.size::bytes} {stream.packSize::>0["/ 📦 {stream.packSize::bytes}"||""]} 👤 {stream.seeders}\n{stream.languageEmojis::join(' ')}`
+                name: `{service.shortName::exists["[{service.shortName}"||""]}{service.cached::istrue["⚡]"||"⏳]"]} IlCorsaroViola {stream.quality::=Unknown[""||"{stream.quality}"]}`,
+                description: `🎬 {stream.filename}\n{stream.size::>0["💾 {stream.size::bytes}"||""]} 👤 {stream.seeders}\n{stream.languageEmojis::join(' / ')}`
             },
             minimal: {
-                name: `{stream.quality} {stream.codec}`,
+                name: `{stream.quality::=Unknown[""||"{stream.quality}"]} {stream.codec}`,
                 description: `{stream.title}\n{stream.size::bytes} • {stream.seeders} seeds`
             },
             verbose: {
-                name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality} {stream.codec}`,
+                name: `{service.cached::istrue["⚡"||"⏳"]} [{service.shortName}] {stream.quality::=Unknown[""||"{stream.quality}"]} {stream.codec}`,
                 description: `📁 {stream.filename}\n💾 Ep: {stream.size::bytes}{stream.folderName::exists[" / Pack: {stream.folderSize::bytes}"||""]}\n👤 {stream.seeders} • 🎬 {stream.source} • 🔊 {stream.audio}\n🌍 {stream.languages::join(' | ')}`
             },
             italiano: {
-                name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality} {stream.codec}`,
-                description: `📄 {stream.filename}\n💾 {stream.size::bytes}\n🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}\n🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
+                name: `{service.cached::istrue["⚡"||"⏳"]} {service.shortName::exists["[{service.shortName}]"||""]} {stream.quality::=Unknown[""||"{stream.quality}"]} {stream.codec}`,
+                description: `📄 {stream.filename}\n💾 {stream.size::bytes} {stream.folderName::exists["/ 📦 {stream.folderSize::bytes}"||""]}\n🌍 {stream.languageEmojis::join(' ')} | 👤 {stream.seeders} | ⏰ {stream.age}\n🎬 {stream.source} | 🔊 {stream.audio} | 🏷️ {stream.releaseGroup::exists["{stream.releaseGroup}"||"N/A"]}`
             },
             fra: {
                 name: `{service.cached::istrue["⚡️"||"⏳"]} {addon.name} {stream.quality::=1080p["FHD"||""]}{stream.quality::=720p["HD"||""]}{stream.quality::=2160p["4K"||""]}{stream.quality::exists[""||"UNK"]}`,
@@ -459,7 +459,7 @@
             },
             and: {
                 name: `{stream.title::exists["🎬 {stream.title}"||""]} S{stream.season}E{stream.episode}`,
-                description: `{stream.quality} {service.cached::istrue["/⚡"||"/⏳"]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}\nSpecifiche: {stream.quality}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
+                description: `{stream.quality::=Unknown[""||"{stream.quality}"]} {service.cached::istrue["/⚡"||"/⏳"]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n{stream.languageEmojis::exists["Lingue: {stream.languageEmojis::join(' | ')}"||""]}\nSpecifiche: {stream.quality::=Unknown[""||"{stream.quality}"]}{stream.visualTags::exists[" | 📺 {stream.visualTags::join(' ')}"||""]}{stream.audioTags::exists[" | 🔊 {stream.audioTags::join(', ')}"||""]}\n─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n📂 {stream.size::>0["{stream.size::bytes}"||""]}{service.name::exists[" | ☁️ {service.name}"||""]}{addon.name::exists[" | 🛰️ {addon.name}"||""]}`
             },
             lad: {
                 name: `{stream.resolution::=2160p["🖥️ 4K"||""]}{stream.resolution::=1080p["🖥️ 1080p"||""]}{stream.resolution::=720p["🖥️ 720p"||""]}{stream.resolution::exists::isfalse["🖥️ Unknown"||""]}`,
@@ -473,7 +473,7 @@
         };
 
         // Parser functions (same as formatter.cjs)
-        function formatBytes(bytes, base = 1000, round = false) {
+        function formatBytes(bytes, base = 1024, round = false) {
             if (!bytes || bytes === 0) return '0 B';
             const sizes = base === 1024 ? ['B', 'KiB', 'MiB', 'GiB', 'TiB'] : ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(base));
@@ -523,8 +523,8 @@
 
         // Number modifiers
         const numberModifiers = {
-            bytes: v => formatBytes(Number(v), 1000, false),
-            rbytes: v => formatBytes(Number(v), 1000, true),
+            bytes: v => formatBytes(Number(v), 1024, false),
+            rbytes: v => formatBytes(Number(v), 1024, true),
             bytes2: v => formatBytes(Number(v), 1024, false),
             time: v => formatDuration(Number(v)),
             hex: v => Number(v).toString(16),

@@ -129,25 +129,102 @@ const resolvePackNamesInBackground = async (torrents, config, mediaDetails, seas
 
                 const realPackName = packData.filename;
 
-                // 1. Update title if different - BUT FILTER INVALID NAMES
-                const invalidNames = ['invalid magnet', 'magnet', 'torrent', 'download', 'error', 'unavailable', '404 not found'];
-                const isInvalidName = invalidNames.some(n => realPackName.toLowerCase().includes(n));
-                const isTooShort = realPackName.length < 5; // "Magnet" is 6, but let's be safe for abbreviations like "S01" (3) but packs usually longer
+                // ✅ HELPER: Strip Emoji Prefixes
+                const stripEmoji = (str) => {
+                    if (!str) return '';
+                    return str.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+                };
 
-                // Regex to catch "magnet:?xt=..." or similar raw garbage
-                const isRawMagnet = /magnet:\?xt=/i.test(realPackName);
+                // ✅ HELPER: Get best pack title based on Provider Priority
+                // Priority 1: Torrentio (parse from title="📁 Pack Name")
+                // Priority 2: MediaFusion (parse from title="📂 Pack Name ┈➤ File Name")
+                // Priority 3: Scraper Title (if not generic)
+                // Priority 4: RD/TB Title (fallback)
+                const getBestPackTitle = (currentTorrent, rdName) => {
+                    const streams = torrents.filter(t => t.info_hash?.toLowerCase() === currentTorrent.info_hash?.toLowerCase());
 
-                if (realPackName &&
-                    realPackName !== torrent.title &&
-                    !isInvalidName &&
-                    !isTooShort &&
-                    !isRawMagnet) {
+                    // 1. TORRENTIO (Look for "📁" prefix)
+                    const torrentioStream = streams.find(s => (s.name || '').includes('Torrentio') && (s.title || '').includes('📁'));
+                    if (torrentioStream) {
+                        try {
+                            const lines = torrentioStream.title.split('\n');
+                            const firstLine = lines[0] || '';
+                            const clean = stripEmoji(firstLine).trim();
+                            if (clean && clean.length > 5) return { title: clean, source: 'Torrentio' };
+                        } catch (e) { /* ignore */ }
+                    }
 
-                    console.log(`📦 [BG-FIX] Fixing title: "${torrent.title.substring(0, 40)}..." -> "${realPackName.substring(0, 40)}..."`);
-                    await dbHelperRef.updateTorrentTitle(infoHash, realPackName);
+                    // 2. MEDIAFUSION (Look for "┈➤" separator)
+                    const mediafusionStream = streams.find(s => (s.name || '').includes('MediaFusion') && (s.title || '').includes('┈➤'));
+                    if (mediafusionStream) {
+                        // Format: "📂 Pack Name ┈➤ File Name"
+                        const parts = mediafusionStream.title.split('┈➤');
+                        if (parts.length > 1) {
+                            const packPart = parts[0].replace('📂', '').trim();
+                            const clean = stripEmoji(packPart).trim();
+                            if (clean && clean.length > 5) return { title: clean, source: 'MediaFusion' };
+                        }
+                    }
 
-                } else if (isInvalidName || isTooShort || isRawMagnet) {
-                    console.log(`⚠️ [BG-FIX] Skipped title update: "${realPackName}" is invalid/generic/short`);
+                    // 3. SCRAPER TITLE (Original title)
+                    const scraperTitle = currentTorrent.title || '';
+                    if (scraperTitle && scraperTitle.length > 5 && !scraperTitle.startsWith('📂')) {
+                        const clean = stripEmoji(scraperTitle).trim();
+                        // Reject generic titles like "Season 1"
+                        if (!/^Season \d+$/i.test(clean) && !/^Stagione \d+$/i.test(clean)) {
+                            return { title: clean, source: 'Scraper' };
+                        }
+                    }
+
+                    // 4. RD/TB TITLE (Fallback)
+                    if (rdName && rdName.length > 5) {
+                        return { title: rdName, source: 'Debrid' };
+                    }
+
+                    return { title: scraperTitle || 'Unknown Pack', source: 'Fallback' };
+                };
+
+                // ✅ Determine Best Title
+                const bestTitleData = getBestPackTitle(torrent, realPackName);
+                const finalTitle = bestTitleData.title;
+
+                console.log(`📦 [BG-FIX] Best Title: "${finalTitle.substring(0, 50)}..." (Source: ${bestTitleData.source})`);
+
+                // ✅ CONSERVATIVE UPDATE LOGIC
+                // 1. New title MUST contain ITA or MULTi
+                // 2. ONLY update if current title is "weak" (missing Season/Complete info) OR missing language
+                const shouldUpdate = (() => {
+                    const curr = (torrent.title || '').toLowerCase();
+                    const next = (finalTitle || '').toLowerCase();
+
+                    // Rule 0: If basically generic identical, don't bother (unless cleaning emoji)
+                    if (curr.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim() === next) {
+                        // Only update if we are effectively just stripping emojis
+                        return torrent.title !== finalTitle;
+                    }
+
+                    // Rule 1: New title MUST have Language (ITA/MULTi)
+                    if (!/ita|multi/.test(next)) return false;
+
+                    // Rule 2: If current title lacks Language, ALWAYS update (upgrade to ITA)
+                    if (!/ita|multi/.test(curr)) return true;
+
+                    // Rule 3: Conservative Series Check
+                    // If current has Season Info (S01, Season, Complete...) -> KEEP IT
+                    // Exception: If it's a generic "Friends [1994-2004]" pattern from RD, update it
+                    const hasSeason = /s\d+|season|stagion|complete|episod/i.test(curr);
+                    const isGenericRD = /^[\w\s]+\s*\[\d{4}[-–]\d{4}\]$/.test(torrent.title.trim());
+
+                    if (hasSeason && !isGenericRD) return false;
+
+                    return true;
+                })();
+
+                // ✅ UPDATE DB with best title
+                if (finalTitle && finalTitle !== torrent.title && shouldUpdate) {
+                    if (dbHelperRef && typeof dbHelperRef.updateTorrentTitle === 'function') {
+                        await dbHelperRef.updateTorrentTitle(infoHash, finalTitle);
+                    }
                 }
 
                 // 2. Populate files table
@@ -323,8 +400,11 @@ const runSequentialBackgroundJobs = async (options) => {
         // Check if pack_name is valid (not episode name)
         const packNameValid = r.pack_name && rdCacheChecker.isValidPackName(r.pack_name);
 
-        // If pack_name is invalid, we need to resolve it
-        return !packNameValid || !r.files || r.files.length === 0;
+        // ✅ RE-SCAN TRIGGER: If title has emoji, force re-resolution to clean it
+        const hasEmoji = r.torrent_title && /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu.test(r.torrent_title);
+
+        // If pack_name is invalid, OR has emoji, OR no files -> resolve it
+        return !packNameValid || !r.files || r.files.length === 0 || hasEmoji;
     });
 
     // Also add items from itemsForPackCheck that aren't already in cache results
@@ -392,19 +472,79 @@ const runSequentialBackgroundJobs = async (options) => {
                 }
 
                 if (packData) {
-                    // ✅ VALIDATE PACK NAME before saving
                     const realPackName = packData.filename;
-                    const isValidName = rdCacheChecker.isValidPackName(realPackName);
 
-                    if (realPackName && isValidName && realPackName !== pack.title) {
-                        console.log(`   📦 Fixing pack name: "${pack.title?.substring(0, 30)}..." -> "${realPackName?.substring(0, 30)}..."`);
+                    // ✅ HELPER: Strip Emoji Prefixes
+                    const stripEmoji = (str) => {
+                        if (!str) return '';
+                        return str.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+                    };
 
-                        // Update title in DB
-                        if (dbHelper && typeof dbHelper.updateTorrentTitle === 'function') {
-                            await dbHelper.updateTorrentTitle(pack.hash, realPackName);
+                    // ✅ BEST TITLE: pack.title is already cleaned by batchInsertTorrents (first line, no emoji, no ┈➤)
+                    // At this point options.streams are already formatted, so Torrentio/MediaFusion markers are gone.
+                    // We just compare the existing DB title (pack.title) vs RD/TB filename (rdName).
+                    const getBestTitle = (rdName) => {
+                        const scraperTitle = pack.title || '';
+                        const cleanScraperTitle = stripEmoji(scraperTitle).trim();
+
+                        // 1. Scraper title (from DB, already cleaned) - prefer if valid
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
+                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                            !/^Stagione \d+$/i.test(cleanScraperTitle)) {
+                            return { title: cleanScraperTitle, source: 'Scraper' };
                         }
-                    } else if (!isValidName) {
-                        console.log(`   ⚠️ Skipped invalid pack name: "${realPackName}"`);
+
+                        // 2. RD/TB filename fallback
+                        if (rdName && rdName.length > 5) {
+                            return { title: rdName, source: 'Debrid' };
+                        }
+
+                        return { title: cleanScraperTitle || 'Unknown Pack', source: 'Fallback' };
+                    };
+
+                    const bestTitleData = getBestTitle(realPackName);
+                    const finalTitle = bestTitleData.title;
+
+                    if (finalTitle && finalTitle !== pack.title) {
+                        // ✅ CONSERVATIVE UPDATE LOGIC (Sequential Job Version)
+                        const curr = (pack.title || '').toLowerCase();
+                        const next = (finalTitle || '').toLowerCase();
+                        let shouldUpdate = false;
+
+                        // Rule 0: Emoji cleanup is always allowed
+                        if (curr.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim() === next) {
+                            shouldUpdate = true;
+                        }
+                        // Rule 1: New title MUST have Language
+                        else if (/ita|multi/.test(next)) {
+                            // Rule 2: If current lacks language, update
+                            if (!/ita|multi/.test(curr)) {
+                                shouldUpdate = true;
+                            }
+                            // Rule 3: Weakness check based on type
+                            else {
+                                if (type === 'movie') {
+                                    // Movie: Update if missing Year (conservative)
+                                    if (!/\b(19|20)\d{2}\b/.test(curr)) shouldUpdate = true;
+                                } else {
+                                    // Series: Update if missing Season Info (unless generic RD pattern)
+                                    const hasSeason = /s\d+|season|stagion|complete|episod/i.test(curr);
+                                    const isGenericRD = /^[\w\s]+\s*\[\d{4}[-–]\d{4}\]$/.test(pack.title.trim());
+                                    if (!hasSeason || isGenericRD) shouldUpdate = true;
+                                }
+                            }
+                        }
+
+                        if (shouldUpdate) {
+                            console.log(`   📦 [BG-FIX] Updating title: "${pack.title?.substring(0, 30)}..." -> "${finalTitle.substring(0, 50)}..." (Source: ${bestTitleData.source})`);
+                            if (dbHelper && typeof dbHelper.updateTorrentTitle === 'function') {
+                                await dbHelper.updateTorrentTitle(pack.hash, finalTitle);
+                            }
+                        } else {
+                            console.log(`   ⏭️ [BG-FIX] Keeping better/equivalent title: "${pack.title?.substring(0, 30)}..."`);
+                        }
+                    } else {
+                        console.log(`   📦 [BG-FIX] Title verified: "${finalTitle.substring(0, 50)}..." (Source: ${bestTitleData.source})`);
                     }
 
                     // Save pack files to DB (SERIES → files table)
@@ -435,7 +575,7 @@ const runSequentialBackgroundJobs = async (options) => {
                         if (filesToInsert.length > 0 && typeof dbHelper.insertEpisodeFiles === 'function') {
                             await dbHelper.insertEpisodeFiles(filesToInsert);
                             console.log(`   📦 Saved ${filesToInsert.length} episode files for ${pack.hash.substring(0, 8)}`);
-                            
+
                             // ✅ Mark as confirmed pack
                             if (typeof dbHelper.updateIsTorrentPack === 'function') {
                                 await dbHelper.updateIsTorrentPack(pack.hash, true);
@@ -473,7 +613,7 @@ const runSequentialBackgroundJobs = async (options) => {
 
         console.log(`   ✅ Pack resolution complete: ${packResults.length}/${packsToProcess.length} resolved${skippedPacks > 0 ? ` (${skippedPacks} deferred to next search)` : ''}`);
     }
-    
+
     // ═══════════════════════════════════════════════════════════
     // PHASE 2B: MOVIE PACK RESOLUTION (trilogies, sagas, collections)
     // ═══════════════════════════════════════════════════════════
@@ -500,24 +640,48 @@ const runSequentialBackgroundJobs = async (options) => {
                 }
 
                 if (packData) {
-                    // ✅ VALIDATE PACK NAME before saving
                     const realPackName = packData.filename;
-                    const isValidName = rdCacheChecker.isValidPackName(realPackName);
 
-                    if (realPackName && isValidName && realPackName !== pack.title) {
-                        console.log(`   📦 Fixing movie pack name: "${pack.title?.substring(0, 30)}..." -> "${realPackName?.substring(0, 30)}..."`);
+                    // ✅ HELPER: Strip Emoji Prefixes
+                    const stripEmoji = (str) => {
+                        if (!str) return '';
+                        return str.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+                    };
 
-                        // Update title in DB
-                        if (dbHelper && typeof dbHelper.updateTorrentTitle === 'function') {
-                            await dbHelper.updateTorrentTitle(pack.hash, realPackName);
+                    // ✅ BEST TITLE: pack.title is already cleaned by batchInsertTorrents
+                    // At this point options.streams are already formatted, so Torrentio/MediaFusion markers are gone.
+                    const getBestTitle = (rdName) => {
+                        const scraperTitle = pack.title || '';
+                        const cleanScraperTitle = stripEmoji(scraperTitle).trim();
+
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
+                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                            !/^Stagione \d+$/i.test(cleanScraperTitle)) {
+                            return { title: cleanScraperTitle, source: 'Scraper' };
                         }
-                    } else if (!isValidName) {
-                        console.log(`   ⚠️ Skipped invalid movie pack name: "${realPackName}"`);
+
+                        if (rdName && rdName.length > 5) {
+                            return { title: rdName, source: 'Debrid' };
+                        }
+
+                        return { title: cleanScraperTitle || 'Unknown Pack', source: 'Fallback' };
+                    };
+
+                    const bestTitleData = getBestTitle(realPackName);
+                    const finalTitle = bestTitleData.title;
+
+                    if (finalTitle && finalTitle !== pack.title) {
+                        console.log(`   📦 [BG-FIX] Updating title: "${pack.title?.substring(0, 30)}..." -> "${finalTitle.substring(0, 50)}..." (Source: ${bestTitleData.source})`);
+                        if (dbHelper && typeof dbHelper.updateTorrentTitle === 'function') {
+                            await dbHelper.updateTorrentTitle(pack.hash, finalTitle);
+                        }
+                    } else {
+                        console.log(`   📦 [BG-FIX] Title verified: "${finalTitle.substring(0, 50)}..." (Source: ${bestTitleData.source})`);
                     }
 
                     // ✅ Save pack files to DB (MOVIE → pack_files table, NOT files!)
                     if (packData.files && packData.files.length > 0 && dbHelper && typeof dbHelper.insertPackFiles === 'function') {
-                        const videoFiles = packData.files.filter(f => 
+                        const videoFiles = packData.files.filter(f =>
                             packFilesHandler.isVideoFile(f.path) && f.bytes > 50 * 1024 * 1024
                         );
 
@@ -582,7 +746,7 @@ const runSequentialBackgroundJobs = async (options) => {
         for (const rejected of rejectedPotentialPacks) {
             const hash = rejected.infoHash || rejected.hash;
             if (!hash) continue;
-            
+
             if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
                 const isPack = await dbHelper.getIsTorrentPack(hash);
                 if (isPack === false) {
@@ -632,7 +796,7 @@ const runSequentialBackgroundJobs = async (options) => {
 
                 if (packData && packData.files) {
                     // Filter only video files > 50MB
-                    const videoFiles = packData.files.filter(f => 
+                    const videoFiles = packData.files.filter(f =>
                         packFilesHandler.isVideoFile(f.path) && f.bytes > 50 * 1024 * 1024
                     );
 
@@ -661,12 +825,12 @@ const runSequentialBackgroundJobs = async (options) => {
                             try {
                                 await dbHelper.insertPackFiles(packFilesToInsert);
                                 console.log(`   📦 Saved ${packFilesToInsert.length} pack files for ${hash.substring(0, 8)}`);
-                                
+
                                 // ✅ Mark as confirmed pack
                                 if (typeof dbHelper.updateIsTorrentPack === 'function') {
                                     await dbHelper.updateIsTorrentPack(hash, true);
                                 }
-                                
+
                                 rejectedPacksResults.push({
                                     hash: hash,
                                     pack_name: packName,
@@ -679,7 +843,7 @@ const runSequentialBackgroundJobs = async (options) => {
                         }
                     } else {
                         if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToVerify.length}] ❌ Not a pack: only ${videoFiles.length} video file(s)`);
-                        
+
                         // ✅ Mark as NOT a pack (won't be rechecked)
                         if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
                             await dbHelper.updateIsTorrentPack(hash, false);
@@ -771,7 +935,14 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
 
         if (!templates) return stream;
 
-        const filename = result.filename || result.title || '';
+        // ✅ FIX: Strip unwanted emojis/prefixes from the source title immediately
+        let filename = result.filename || result.title || '';
+
+        // Remove 📁, 📂, 📄, 📦 and other common emojis
+        filename = filename.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
         const fn = filename.toLowerCase();
 
         // ============================================
@@ -5599,7 +5770,7 @@ function isExactEpisodeMatch(torrentTitle, showTitleOrTitles, seasonNum, episode
     // ✅ COMPLETE SERIES PACK: Check for [COMPLETA] / [COMPLETE] / [FULL SERIES] without specific season number
     // This handles anime and series that are packaged as complete series (e.g., "Death Note (2006) [COMPLETA]")
     // Also supports year ranges like (2011-2019) which indicate full series run
-    const completeSeriesPattern = /(?:completa?|complete|full.*series|serie.*completa?|integrale|\(\d{4}-\d{4}\))/i;
+    const completeSeriesPattern = /(?:completa?|complete|full.*series|serie.*completa?|integrale|[\[(]\d{4}[-–—]\d{4}[\])])/i;
     if (completeSeriesPattern.test(normalizedTorrentTitle)) {
         // Only match if there's NO explicit season number (avoids false positives like "S02 COMPLETA")
         const hasExplicitSeason = /(?:stagione|season|s)\s*\d{1,2}/i.test(normalizedTorrentTitle);
@@ -7932,19 +8103,14 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
                         isNewBetter = true;
                     } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
-                        // Helper to check source type (handles "💾 CorsaroNero" etc.)
-                        const isJackettio = (src) => src && (src === 'Jackettio' || src.includes('Jackettio'));
-                        const isCorsaro = (src) => src && (src === 'CorsaroNero' || src.includes('CorsaroNero'));
+                        // ✅ PROVIDER PRIORITY (uses shared dbHelper.getProviderPriority)
+                        const existingPriority = dbHelper.getProviderPriority(existing.source || existing.externalAddon);
+                        const newPriority = dbHelper.getProviderPriority(result.source || result.externalAddon);
 
-                        // If language is the same, prefer Jackettio (private instance)
-                        if (isJackettio(result.source) && !isJackettio(existing.source)) {
+                        if (newPriority < existingPriority) {
                             isNewBetter = true;
-                        } else if (isJackettio(existing.source) && !isJackettio(result.source)) {
-                            isNewBetter = false; // Keep Jackettio
-                        } else if (isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(existing.source)) {
-                            isNewBetter = true;
-                        } else if (result.source === existing.source || (!isCorsaro(result.source) && !isCorsaro(existing.source) && !isJackettio(result.source) && !isJackettio(existing.source))) {
-                            // If source is also the same, or neither is the preferred one, prefer more seeders
+                        } else if (newPriority === existingPriority) {
+                            // Same priority class: prefer more seeders
                             if ((result.seeders || 0) > (existing.seeders || 0)) {
                                 isNewBetter = true;
                             }
@@ -8058,9 +8224,25 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                             return true;
                         })
-                        .map(r => ({
+                        .map(r => {
+                        // ✅ FIX: Clean multiline titles to first line only, strip emojis
+                        // External addons (Torrentio, MediaFusion) send multiline titles with
+                        // size, seeders, flags info that should NOT be saved as the torrent title
+                        let cleanTitle = (r.title || r.websiteTitle || 'Unknown');
+                        cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
+                        cleanTitle = cleanTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim(); // Strip emojis
+                        // Strip MediaFusion separator: take only part before ┈➤
+                        if (cleanTitle.includes('┈➤')) {
+                            cleanTitle = cleanTitle.split('┈➤')[0].trim();
+                        }
+                        // If title looks like a path (contains / with extension), take folder name
+                        if (/\/[^/]+\.\w{2,4}$/.test(cleanTitle)) {
+                            cleanTitle = cleanTitle.split('/')[0].trim();
+                        }
+                        if (!cleanTitle || cleanTitle.length < 3) cleanTitle = r.title || r.websiteTitle || 'Unknown';
+                        return ({
                             info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
-                            title: r.title || r.websiteTitle || 'Unknown',
+                            title: cleanTitle,
                             provider: r.source || r.externalAddon || 'unknown',
                             size: r.sizeInBytes || null,
                             type: type,
@@ -8069,7 +8251,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
                             upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
                             cached_rd: r.cached || false // Save cached status if available
-                        }));
+                        })});
 
                     if (torrentsToSave.length > 0) {
                         // 🚀 Fire-and-forget: Save to DB in background without blocking response
@@ -8110,9 +8292,14 @@ async function handleStream(type, id, config, workerOrigin) {
                             });
 
                             for (const pack of packCandidates) {
+                                // ✅ FIX: Clean multiline title to first line, strip emojis
+                                let packTitle = pack.rawDescription || pack.title || pack.websiteTitle;
+                                packTitle = (packTitle || '').split(/\r?\n/)[0] || packTitle;
+                                packTitle = packTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+                                if (packTitle.includes('┈➤')) packTitle = packTitle.split('┈➤')[0].trim();
                                 backgroundPackItems.push({
                                     hash: pack.infoHash.toLowerCase(),
-                                    title: pack.rawDescription || pack.title || pack.websiteTitle
+                                    title: packTitle
                                 });
                             }
                             if (packCandidates.length > 0) {
@@ -8630,7 +8817,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                     }
                                     // ✅ Mark as confirmed pack
                                     if (typeof dbHelper.updateIsTorrentPack === 'function') {
-                                        dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                        dbHelper.updateIsTorrentPack(infoHash, true).catch(() => { });
                                     }
                                     newlyVerified.push(result);
                                 } else {
@@ -8667,7 +8854,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             newlyVerified.push(result); // Assume valid single movie
                             // ✅ Mark as NOT a pack (single movie, won't be rechecked)
                             if (infoHash && typeof dbHelper.updateIsTorrentPack === 'function') {
-                                dbHelper.updateIsTorrentPack(infoHash, false).catch(() => {});
+                                dbHelper.updateIsTorrentPack(infoHash, false).catch(() => { });
                             }
                             continue;
                         }
@@ -8711,7 +8898,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 }
                                 // ✅ Mark as confirmed pack
                                 if (typeof dbHelper.updateIsTorrentPack === 'function') {
-                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => { });
                                 }
                                 newlyVerified.push(result);
                             } else {
@@ -8719,7 +8906,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 // OR fetch failed. Mark as pack anyway (has multiple files)
                                 if (DEBUG_MODE) console.log(`❌ [MOVIE VERIFY] Movie NOT in pack - EXCLUDING`);
                                 if (typeof dbHelper.updateIsTorrentPack === 'function') {
-                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => {});
+                                    dbHelper.updateIsTorrentPack(infoHash, true).catch(() => { });
                                 }
                                 excluded.push(result);
                             }
@@ -10574,6 +10761,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 itemsForCacheCheck: backgroundCacheItems,
                 itemsForPackCheck: backgroundPackItems,
                 rejectedPotentialPacks: backgroundRejectedPacks,
+                streams: streams, // ✅ Pass raw streams for title extraction
                 config,
                 dbHelper,
                 type,
@@ -11246,6 +11434,22 @@ export default async function handler(req, res) {
 
                 // STEP 2: Get torrent info
                 let torrent = await realdebrid.getTorrentInfo(torrentId);
+
+                // STEP 2.5: Poll if magnet is still converting (like Torrentio _openTorrent)
+                // RD needs time to resolve the magnet link (find peers, download metadata)
+                // Polling: every 2s, max 15 attempts (30s total)
+                if (torrent.status === 'magnet_conversion') {
+                    console.log(`[RealDebrid] ⏳ Magnet converting, polling (max 30s)...`);
+                    for (let poll = 0; poll < 15; poll++) {
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        torrent = await realdebrid.getTorrentInfo(torrentId);
+                        console.log(`[RealDebrid] ⏳ Poll ${poll + 1}/15: status=${torrent.status}`);
+                        if (torrent.status !== 'magnet_conversion') break;
+                    }
+                    if (torrent.status === 'magnet_conversion') {
+                        console.log(`[RealDebrid] ⚠️ Magnet conversion timeout after 30s`);
+                    }
+                }
 
                 // STEP 3: Handle file selection if needed (like Torrentio _selectTorrentFiles)
                 let targetFile = null;

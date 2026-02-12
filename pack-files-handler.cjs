@@ -14,6 +14,12 @@
 const axios = require('axios');
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
+// ✅ ANTI-LOOP: In-memory cache to prevent repeated external lookups for multi-season packs
+// Key: "hash_SxEy" → Value: timestamp of last external lookup
+// After first external lookup fails to find the episode, skip for 30 minutes
+const _multiSeasonLookupCache = new Map();
+const MULTI_SEASON_LOOKUP_TTL = 30 * 60 * 1000; // 30 minutes
+
 // Video file extensions
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
@@ -156,13 +162,13 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey, retryCount = 0) {
         // ✅ SMART FILENAME SELECTION
         // Priority: original_filename > filename > folder from file path
         let finalFilename = infoResponse.data.original_filename || infoResponse.data.filename;
-        
+
         // ✅ FIX: If filename is invalid (Magnet, empty, or too short), extract from file paths
-        const isInvalidFilename = !finalFilename || 
-                                   finalFilename === 'Magnet' || 
-                                   finalFilename.length < 5 ||
-                                   /^[a-f0-9]{32,}$/i.test(finalFilename); // Hash-like name
-        
+        const isInvalidFilename = !finalFilename ||
+            finalFilename === 'Magnet' ||
+            finalFilename.length < 5 ||
+            /^[a-f0-9]{32,}$/i.test(finalFilename); // Hash-like name
+
         if (isInvalidFilename && files.length > 0) {
             const firstPath = files[0].path || '';
             // Extract folder name from path (e.g., "/FolderName/file.mkv" -> "FolderName")
@@ -189,11 +195,11 @@ async function fetchFilesFromRealDebrid(infoHash, rdKey, retryCount = 0) {
         const is429 = error.response?.status === 429 || error.message?.includes('429');
         if (is429 && retryCount < MAX_RETRIES) {
             const waitTime = Math.pow(2, retryCount + 1) * 5000; // 10s, 20s, 40s
-            console.log(`⏳ [PACK-HANDLER] Rate limited (429), waiting ${waitTime/1000}s before retry ${retryCount + 1}/${MAX_RETRIES}...`);
+            console.log(`⏳ [PACK-HANDLER] Rate limited (429), waiting ${waitTime / 1000}s before retry ${retryCount + 1}/${MAX_RETRIES}...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
             return fetchFilesFromRealDebrid(infoHash, rdKey, retryCount + 1);
         }
-        
+
         if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] RD API error: ${error.message}`);
         throw error;
     }
@@ -246,7 +252,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                     bytes: f.size || 0,
                     selected: 1
                 }));
-                
+
                 // ✅ FIX: Extract pack name from folder structure
                 // Torbox doesn't provide torrent name, so we extract from file paths
                 let extractedFilename = null;
@@ -260,12 +266,12 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
                         extractedFilename = firstPath.replace(/\.[^/.]+$/, '');
                     }
                 }
-                
+
                 if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${files.length} files from Torbox CACHE (name: ${extractedFilename || 'unknown'})`);
                 return { torrentId: 'cached', files, filename: extractedFilename };
             }
         }
-        
+
         // ✅ NOT IN CACHE = Skip (no createtorrent to avoid rate limits)
         // User can't play this pack anyway if it's not cached
         if (DEBUG_MODE) console.log(`⏭️ [PACK-HANDLER] TB: Not in cache, skipping (no createtorrent to avoid rate limit)`);
@@ -278,7 +284,7 @@ async function fetchFilesFromTorbox(infoHash, torboxKey) {
             console.log(`⏳ [PACK-HANDLER] TB Rate limited (429), skipping pack ${infoHash.substring(0, 8)}...`);
             return null;
         }
-        
+
         if (DEBUG_MODE) console.error(`❌ [PACK-HANDLER] Torbox API error: ${error.message}`);
         return null; // Return null instead of throwing - graceful degradation
     }
@@ -438,7 +444,7 @@ async function fetchFilesFromAnySource(infoHash, config) {
             if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] RD failed for ${infoHash.substring(0, 8)}: ${err.message}`);
         }
     }
-    
+
     // 2. Try Torbox
     if (config.torbox_key) {
         try {
@@ -450,7 +456,7 @@ async function fetchFilesFromAnySource(infoHash, config) {
             if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] TB failed for ${infoHash.substring(0, 8)}: ${err.message}`);
         }
     }
-    
+
     // 3. Fallback to public torrent caches (no debrid needed)
     try {
         const cacheResult = await fetchTorrentFromPublicCaches(infoHash);
@@ -460,7 +466,7 @@ async function fetchFilesFromAnySource(infoHash, config) {
     } catch (err) {
         if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Public cache failed for ${infoHash.substring(0, 8)}: ${err.message}`);
     }
-    
+
     return null;
 }
 
@@ -597,10 +603,29 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
                         totalPackSize
                     };
                 } else {
-                    if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss: Pack is indexed but S${season}E${episode} not found. Skipping external lookup.`);
-                    // If we have index but no file, assume pack doesn't contain it. 
-                    // Do NOT fall back to RD to avoid rate limits on incomplete packs.
-                    return null;
+                    // Cache Miss: Pack is indexed but S${season}E${episode} not found.
+                    // ✅ FIX: Check if it's a multi-season pack (e.g. S01-S10) or Complete Series
+                    // If so, the DB cache might be partial/incomplete. We should TRY external lookup!
+
+                    const packTitle = (cachedFiles[0]?.pack_title || '').toLowerCase();
+                    const isMultiSeason = /s\d+[-–]s?\d+|complete|series|stagione\s*\d+[-–]\d+/i.test(packTitle);
+
+                    if (isMultiSeason) {
+                        // ✅ ANTI-LOOP: Check if we already did an external lookup recently
+                        // After the first lookup, processSeriesPackFiles saves ALL files to DB.
+                        // If the episode still isn't found next time, it truly doesn't exist.
+                        const lookupKey = `${infoHash}_S${season}E${episode}`;
+                        const lastLookup = _multiSeasonLookupCache.get(lookupKey);
+                        if (lastLookup && (Date.now() - lastLookup) < MULTI_SEASON_LOOKUP_TTL) {
+                            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss for S${season}E${episode} in MULTI-SEASON pack ("${packTitle}"). Already looked up ${Math.round((Date.now() - lastLookup) / 60000)}min ago. Skipping.`);
+                            return null;
+                        }
+                        if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss for S${season}E${episode} but pack seems MULTI-SEASON/COMPLETE ("${packTitle}"). Forcing external lookup!`);
+                        // Return nothing here so execution continues to step 2 (External Provider)
+                    } else {
+                        if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss: Pack is indexed but S${season}E${episode} not found. Skipping external lookup.`);
+                        return null;
+                    }
                 }
             }
         } catch (err) {
@@ -669,6 +694,8 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
 
     if (!targetFile) {
         if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes)`);
+        // ✅ ANTI-LOOP: Record that we did an external lookup and episode wasn't found
+        _multiSeasonLookupCache.set(`${infoHash}_S${season}E${episode}`, Date.now());
         return null;  // ❌ Episodio non esiste nel pack - NESSUN FALLBACK
     }
 
@@ -717,16 +744,16 @@ function isSeasonPack(torrentTitle) {
  */
 function isMoviePack(torrentTitle) {
     if (!torrentTitle) return false;
-    
+
     // Pattern keywords for movie collections
     const packKeywords = /\b(trilog|quadrilog|pentolog|saga|collection|collezione|anthology|antologia|pack|completa|integrale|filmografia|duolog|box\s*set|complete|1\s*2\s*3|I\s*II\s*III)\b/i;
-    
+
     // Year range pattern (e.g., 1985-1990, 1999-2003)
     const yearRange = /\b(19|20)\d{2}\s*[-–—]\s*(19|20)?\d{2}\b/;
-    
+
     // Multiple part indicators (Part 1, Parte 2, Vol 1, Volume 2)
     const multiPart = /\b(part|parte|vol|volume)\s*\d+/i;
-    
+
     return packKeywords.test(torrentTitle) || yearRange.test(torrentTitle) || multiPart.test(torrentTitle);
 }
 
@@ -743,16 +770,16 @@ function isPotentialMoviePack(stream, streamTitle) {
     //    - fileIndex: from our DB
     const hasFileIdx = stream.fileIdx !== undefined && stream.fileIdx !== null;
     const hasFileIndex = stream.fileIndex !== undefined && stream.fileIndex !== null;
-    
+
     if (hasFileIdx || hasFileIndex) {
         return { isPotentialPack: true, reason: 'fileIdx present' };
     }
-    
+
     // 2. Check title for pack keywords
     if (isMoviePack(streamTitle)) {
         return { isPotentialPack: true, reason: 'pack keyword in title' };
     }
-    
+
     // 3. No indicators found
     return { isPotentialPack: false, reason: 'no pack indicators' };
 }
@@ -885,7 +912,7 @@ async function resolveMoviePackFile(infoHash, config, movieImdbId, targetTitles,
         const correctIndex = f.id; // Use original index directly
         // ✅ FIX: Clean path - extract just filename
         const cleanFilename = f.path.replace(/^\/+/, '').split('/').pop() || f.path;
-        
+
         // Save to pack_files (NOT files table - that's for series only)
         if (dbHelper && movieImdbId && typeof dbHelper.insertPackFiles === 'function') {
             try {
@@ -978,7 +1005,7 @@ function findMovieFile(files, targetTitles, targetYear) {
     // EXCLUDE years like 1985, 1989, 2023
     const extractSequelNumber = (str) => {
         const s = str.toLowerCase();
-        
+
         // Pattern 1: "Part II", "Part 2", "Parte II", "Parte 2"
         const partMatch = s.match(/\b(?:part|parte)\s*([ivx]+|\d)\b/i);
         if (partMatch) {
@@ -992,7 +1019,7 @@ function findMovieFile(files, targetTitles, targetYear) {
             const parsed = parseInt(num);
             if (parsed >= 1 && parsed <= 10) return parsed;
         }
-        
+
         // Pattern 2: Standalone number 1-9 NOT preceded by year pattern
         // e.g. "Frozen 2", "Shrek 3", "Back to the Future 1"
         // But NOT "Back to the Future (1985)" or "2160p"
@@ -1000,7 +1027,7 @@ function findMovieFile(files, targetTitles, targetYear) {
         if (standaloneMatch) {
             return parseInt(standaloneMatch[1]);
         }
-        
+
         // Pattern 3: Roman numerals standalone (not part of resolution like "IV" in random text)
         const romanMatch = s.match(/\b(ii|iii|iv|v|vi)\b/);
         if (romanMatch) {
@@ -1011,7 +1038,7 @@ function findMovieFile(files, targetTitles, targetYear) {
             if (num === 'v') return 5;
             if (num === 'vi') return 6;
         }
-        
+
         return null;
     };
 
@@ -1031,16 +1058,16 @@ function findMovieFile(files, targetTitles, targetYear) {
 
         // ✅ FIX: Check sequel number - but treat null as potential match for "1"
         const fileSequelNumber = extractSequelNumber(filename);
-        
+
         // Sequel matching logic:
         // - If target has no sequel (null) and file has "1" → MATCH (first film)
         // - If target has no sequel (null) and file has "2"/"3" → SKIP
         // - If target has sequel N and file has N → MATCH
         // - If target has sequel N and file has different → SKIP
-        const isSequelMatch = 
+        const isSequelMatch =
             (targetSequelNumber === null && (fileSequelNumber === null || fileSequelNumber === 1)) ||
             (targetSequelNumber !== null && fileSequelNumber === targetSequelNumber);
-        
+
         if (!isSequelMatch) {
             console.log(`🔍 [FUZZY DEBUG] "${filename}" - sequel mismatch (file: ${fileSequelNumber || 'none'}, want: ${targetSequelNumber || 'none/1'})`);
             continue; // Skip this file entirely for sequel mismatches

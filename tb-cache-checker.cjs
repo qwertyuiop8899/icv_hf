@@ -25,16 +25,16 @@ function sleep(ms) {
  */
 function extractPackName(info) {
     if (!info || !info.files || info.files.length === 0) return null;
-    
+
     // Se c'è solo 1 file, non è un pack
     if (info.files.length === 1) return null;
-    
+
     // Prendi il primo segmento del path (prima di /)
     const firstFile = info.files[0];
     if (firstFile.name && firstFile.name.includes('/')) {
         return firstFile.name.split('/')[0];
     }
-    
+
     return null;
 }
 
@@ -44,26 +44,37 @@ function extractPackName(info) {
  */
 function isValidPackName(name) {
     if (!name) return false;
-    
+
     // 1. Troppo corto
     if (name.length < 10) return false;
-    
-    // 2. Nomi generici invalidi
-    const INVALID_NAMES = ['magnet', 'invalid', 'torrent', 'download', 'error', '404', 'unavailable'];
-    if (INVALID_NAMES.some(n => name.toLowerCase().includes(n))) return false;
-    
+
+    // 2. Nomi generici invalidi — MA solo se NON contengono anche contenuti validi
+    // Es: "Invalid Magnet" → invalido (solo parole generiche)
+    // Es: "[Torrent911.my] Friends.S05.MULTi.1080p..." → valido (ha tracker name ma anche release info)
+    const INVALID_KEYWORDS = ['magnet', 'invalid', 'torrent', 'download', 'error', '404', 'unavailable'];
+    const lowerName = name.toLowerCase();
+    const hasInvalidKeyword = INVALID_KEYWORDS.some(n => lowerName.includes(n));
+    if (hasInvalidKeyword) {
+        // Check if name also has real release content (season/episode patterns, resolution, codecs, etc.)
+        const hasReleaseContent = /(?:s\d{1,2}|season|stagion|\d{3,4}p|bluray|blu-ray|web-?dl|web-?rip|hdtv|dvdrip|bdrip|remux|x\.?26[45]|h\.?26[45]|hevc|avc|xvid|mkv|mp4|aac|ac3|dts|dd[p+]?|multi|dual|ita|eng|complete|completa)/i.test(name);
+        if (!hasReleaseContent) {
+            return false; // Solo parole generiche, nessun contenuto release → invalido
+        }
+        // Ha contenuto release → il keyword invalido è probabilmente un tracker name, continua validazione
+    }
+
     // 3. È l'hash stesso
     if (/^[a-f0-9]{32,40}$/i.test(name)) return false;
-    
+
     // 4. Ha estensione video → è un filename, non pack name
     if (VIDEO_EXTENSIONS.test(name)) return false;
-    
+
     // ✅ 5. SEASON PACK → S05 senza episodio specifico = SEMPRE VALIDO!
     // Match: S05, S5, S01 ma NON S05E01
     if (/S\d{1,2}(?![Ee]\d)/i.test(name) && !/S\d{1,2}[Ee]\d{1,3}/i.test(name)) {
         return true;  // Season pack senza episodio = valido!
     }
-    
+
     // ✅ 6. EPISODE RANGE → È un pack valido! (S05e01-04, S01E01-E08, ecc.)
     const EPISODE_RANGE_PATTERNS = [
         /S\d{1,2}[Ee]\d{1,3}[-–]\d{1,3}/i,           // S05e01-04, S01E01-08
@@ -76,7 +87,7 @@ function isValidPackName(name) {
     if (EPISODE_RANGE_PATTERNS.some(pattern => pattern.test(name))) {
         return true;  // Range di episodi = pack valido!
     }
-    
+
     // 7. Contiene riferimento a singolo episodio SENZA range → è nome file, non pack
     // Solo se NON contiene un range (già controllato sopra)
     const hasSingleEpisode = /S\d{1,2}[Ee]\d{1,3}/i.test(name);
@@ -84,7 +95,7 @@ function isValidPackName(name) {
     if (hasSingleEpisode && !hasRange) {
         return false;  // Singolo episodio senza range = filename
     }
-    
+
     // ✅ Sembra un nome pack valido
     return true;
 }
@@ -140,11 +151,11 @@ async function checkCacheBatch(hashes, token) {
                         // Extract pack name from file paths
                         const packName = extractPackName(info);
                         const isPack = info.files && info.files.length > 1;
-                        
+
                         // Find largest video file for main file info
                         let mainFile = null;
                         let videoFiles = [];
-                        
+
                         if (info.files && info.files.length > 0) {
                             videoFiles = info.files
                                 .filter(f => VIDEO_EXTENSIONS.test(f.name || f.short_name))
@@ -154,7 +165,7 @@ async function checkCacheBatch(hashes, token) {
                                     filename: f.short_name || f.name.split('/').pop(),
                                     size: f.size
                                 }));
-                            
+
                             // Largest video file
                             mainFile = videoFiles.sort((a, b) => b.size - a.size)[0];
                         }
@@ -174,7 +185,7 @@ async function checkCacheBatch(hashes, token) {
                         results[hashLower] = { cached: false };
                     }
                 }
-                
+
                 // Mark missing hashes as uncached
                 for (const hash of chunk) {
                     const hashLower = hash.toLowerCase();
@@ -250,9 +261,9 @@ async function checkCacheSync(items, token, limit = 5) {
  */
 async function checkAllHashesBatch(hashes, token) {
     if (!hashes || hashes.length === 0) return {};
-    
+
     if (DEBUG_MODE) console.log(`🔄 [TB Batch] Checking ALL ${hashes.length} hashes...`);
-    
+
     return await checkCacheBatch(hashes, token);
 }
 

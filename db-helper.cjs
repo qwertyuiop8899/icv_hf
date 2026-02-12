@@ -246,28 +246,60 @@ async function insertTorrent(torrent) {
   try {
     await client.query('BEGIN');
 
-    // Check if torrent exists (and get current size)
+    // Check if torrent exists (and get current size + provider)
     const checkResult = await client.query(
-      'SELECT info_hash, size, title FROM torrents WHERE info_hash = $1',
+      'SELECT info_hash, size, title, provider FROM torrents WHERE info_hash = $1',
       [torrent.infoHash]
     );
 
     if (checkResult.rows.length > 0) {
       const existingSize = checkResult.rows[0].size;
       const existingTitle = checkResult.rows[0].title;
+      const existingProvider = checkResult.rows[0].provider;
       const newSize = torrent.size || 0;
-      
+
+      // ✅ PROVIDER PRIORITY: torrentio(1) > mediafusion(2) > corsaro(3) > comet(4) > others(10) > rd_cache/tb_cache(99)
+      const getProviderPriority = (p) => {
+        if (!p) return 99;
+        const lp = p.toLowerCase();
+        if (lp.includes('torrentio')) return 1;
+        if (lp.includes('mediafusion')) return 2;
+        if (lp.includes('corsaro')) return 3;
+        if (lp.includes('comet')) return 4;
+        if (lp === 'rd_cache' || lp === 'tb_cache') return 99;
+        return 10;
+      };
+
+      const existingPriority = getProviderPriority(existingProvider);
+      const newPriority = getProviderPriority(torrent.provider);
+
+      let updated = false;
+
+      // Update title + provider if new provider has higher priority (lower number)
+      if (newPriority < existingPriority) {
+        await client.query(
+          'UPDATE torrents SET title = $1, provider = $2 WHERE info_hash = $3',
+          [torrent.title, torrent.provider, torrent.infoHash]
+        );
+        updated = true;
+        if (DEBUG_MODE) console.log(`📦 [DB] Updated title by priority: "${existingTitle?.substring(0, 30)}..." -> "${torrent.title?.substring(0, 30)}..." (${existingProvider} -> ${torrent.provider})`);
+      }
+
       // ✅ UPSERT: Update size if current is 0/NULL and new size is provided
       if ((!existingSize || existingSize === 0) && newSize > 0) {
         await client.query(
           'UPDATE torrents SET size = $1 WHERE info_hash = $2',
           [newSize, torrent.infoHash]
         );
-        await client.query('COMMIT');
+        updated = true;
         console.log(`📏 [DB] Updated size for ${torrent.infoHash.substring(0, 8)}...: 0 -> ${(newSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+      }
+
+      if (updated) {
+        await client.query('COMMIT');
         return true;
       }
-      
+
       if (DEBUG_MODE) console.log(`💾 [DB] Torrent ${torrent.infoHash.substring(0, 8)}... already exists (size: ${(existingSize / 1024 / 1024 / 1024).toFixed(2)} GB), skipping`);
       await client.query('ROLLBACK');
       return false;
@@ -663,6 +695,48 @@ async function batchInsertTorrents(torrents) {
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
             size = CASE WHEN torrents.size = 0 OR torrents.size IS NULL THEN EXCLUDED.size ELSE torrents.size END,
             seeders = GREATEST(EXCLUDED.seeders, torrents.seeders),
+            -- ✅ PROVIDER PRIORITY: Update title + provider if new provider has higher priority
+            -- Priority: torrentio(1) > mediafusion(2) > corsaro(3) > comet(4) > others(10) > rd_cache/tb_cache(99)
+            title = CASE WHEN (
+              CASE 
+                WHEN EXCLUDED.provider ILIKE '%torrentio%' THEN 1
+                WHEN EXCLUDED.provider ILIKE '%mediafusion%' THEN 2
+                WHEN EXCLUDED.provider ILIKE '%corsaro%' THEN 3
+                WHEN EXCLUDED.provider ILIKE '%comet%' THEN 4
+                WHEN EXCLUDED.provider IN ('rd_cache', 'tb_cache') THEN 99
+                ELSE 10
+              END
+            ) < (
+              CASE 
+                WHEN torrents.provider ILIKE '%torrentio%' THEN 1
+                WHEN torrents.provider ILIKE '%mediafusion%' THEN 2
+                WHEN torrents.provider ILIKE '%corsaro%' THEN 3
+                WHEN torrents.provider ILIKE '%comet%' THEN 4
+                WHEN torrents.provider IN ('rd_cache', 'tb_cache') THEN 99
+                ELSE 10
+              END
+            ) THEN EXCLUDED.title
+            ELSE torrents.title END,
+            provider = CASE WHEN (
+              CASE 
+                WHEN EXCLUDED.provider ILIKE '%torrentio%' THEN 1
+                WHEN EXCLUDED.provider ILIKE '%mediafusion%' THEN 2
+                WHEN EXCLUDED.provider ILIKE '%corsaro%' THEN 3
+                WHEN EXCLUDED.provider ILIKE '%comet%' THEN 4
+                WHEN EXCLUDED.provider IN ('rd_cache', 'tb_cache') THEN 99
+                ELSE 10
+              END
+            ) < (
+              CASE 
+                WHEN torrents.provider ILIKE '%torrentio%' THEN 1
+                WHEN torrents.provider ILIKE '%mediafusion%' THEN 2
+                WHEN torrents.provider ILIKE '%corsaro%' THEN 3
+                WHEN torrents.provider ILIKE '%comet%' THEN 4
+                WHEN torrents.provider IN ('rd_cache', 'tb_cache') THEN 99
+                ELSE 10
+              END
+            ) THEN EXCLUDED.provider
+            ELSE torrents.provider END,
             cached_rd = CASE 
               WHEN torrents.cached_rd = true THEN true  -- Never overwrite true with false
               WHEN EXCLUDED.cached_rd = true THEN true  -- Allow updating to true
@@ -1240,7 +1314,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
         /\s+(?:ii+|iii+|iv|v|vi|vii|viii|ix|x)\s*$/i,                          // Roman numeral at end
         /\s+(\d)\s*$/                                                          // Single digit at end "Movie 2"
       ];
-      
+
       for (const pattern of patterns) {
         if (pattern.test(str)) {
           return str.replace(pattern, '').trim();
@@ -1250,7 +1324,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
     };
 
     const baseTitle = extractSequelInfo(title);
-    
+
     // Build search pattern - clean title for ILIKE matching
     const cleanTitle = title.toLowerCase()
       .replace(/[^a-z0-9\s]/g, ' ')  // Remove special chars
@@ -1270,7 +1344,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
     // This finds "Back to the Future 2" when searching "Back to the Future Part II"
     let query;
     let params;
-    
+
     if (baseSearchPattern && baseSearchPattern !== searchPattern) {
       // Search with both patterns using OR
       query = `
@@ -1329,18 +1403,18 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
     let filteredResults = result.rows;
     if (year && result.rows.length > 0) {
       const yearStr = String(year);
-      
+
       // Separate files: with matching year, with wrong year, without year
       const withMatchingYear = [];
       const withoutYear = [];
       const withWrongYear = [];
-      
+
       for (const row of result.rows) {
         const filePath = row.file_path || '';
         // Extract year from filename - various formats: (1985), .1985., _1985_, -1985-
         const fileYearMatch = filePath.match(/[\(\.\-_](\d{4})[\)\.\-_]/);
         const fileYear = fileYearMatch ? fileYearMatch[1] : null;
-        
+
         if (fileYear === yearStr) {
           withMatchingYear.push(row);
         } else if (!fileYear) {
@@ -1349,11 +1423,11 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
           withWrongYear.push(row);
         }
       }
-      
+
       // Prioritize: matching year first, then no-year, exclude wrong year
       // (wrong year files are likely different movies, e.g., "Frozen 2" vs "Frozen")
       filteredResults = [...withMatchingYear, ...withoutYear];
-      
+
       if (DEBUG_MODE && withWrongYear.length > 0) {
         console.log(`   ⏭️  [DB] Excluded ${withWrongYear.length} file(s) with wrong year (not ${yearStr})`);
       }
@@ -1363,32 +1437,32 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
     if (filteredResults.length > 0 && imdbId) {
       const yearStr = year ? String(year) : null;
       let indexedCount = 0;
-      
+
       // ✅ FIX: Unified sequel number extraction
       // ALL these are equivalent: "Part 2" = "Part II" = "Parte 2" = "Parte II" = "2" = "II"
       const extractTitleNumber = (str) => {
         if (!str) return null;
         const s = str.toLowerCase();
-        
+
         // Pattern 1: "part 2", "part ii", "parte 2", "parte ii", "part. 2", etc.
         let match = s.match(/\bpart[ae]?\.?\s*(\d+|i{1,3}|iv|v|vi{0,3}|ix|x{1,3})\b/);
         if (match) return romanOrDigitToNumber(match[1]);
-        
+
         // Pattern 2: Standalone roman numerals (ii, iii, iv, etc.) but NOT single "i"
         match = s.match(/\b(ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)\b/);
         if (match) return romanOrDigitToNumber(match[1]);
-        
+
         // Pattern 3: Number after title, before tech specs: "movie 2 ", "movie 2-", "movie 2 (", "movie 2 1080p"
         match = s.match(/[\s\-\.]\s*(\d)\s*(?:[\s\-\.\(\[]|1080|720|2160|4k|hdr|ac3|dts|bluray|bdrip|webrip|mkv|mp4|avi|$)/);
         if (match) return parseInt(match[1]);
-        
+
         // Pattern 4: Number at very end: "...futuro 2"
         match = s.match(/\s(\d)\s*$/);
         if (match) return parseInt(match[1]);
-        
+
         return null;
       };
-      
+
       // Helper: convert roman numeral or digit string to number
       const romanOrDigitToNumber = (s) => {
         const map = { 'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10, 'xi': 11, 'xii': 12 };
@@ -1397,21 +1471,21 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
         const n = parseInt(s);
         return (n >= 1 && n <= 99) ? n : null;
       };
-      
+
       const requestedTitleNumber = extractTitleNumber(title);
       if (DEBUG_MODE) console.log(`   🔢 Requested sequel number: ${requestedTitleNumber} (from "${title}")`);
-      
+
       for (const row of filteredResults) {
         const filePath = row.file_path || row.file_title || '';
         const fileName = filePath.split('/').pop() || filePath;
-        
+
         // Extract year from filename
         const fileYearMatch = filePath.match(/[\(\.\-_](\d{4})[\)\.\-_]/);
         const fileYear = fileYearMatch ? fileYearMatch[1] : null;
-        
+
         // Check for sequel number mismatch (e.g., searching "Titanic" but file is "Titanic 2")
         const fileTitleNumber = extractTitleNumber(fileName);
-        
+
         // ✅ Sequel matching logic:
         // - "Part 2" matches file with "2", "II", "Part II", "Parte 2", etc. (all = 2)
         // - Searching without number (null) matches files with no number OR number 1
@@ -1427,28 +1501,28 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
           // Both have numbers: must match exactly
           return fileTitleNumber !== requestedTitleNumber;
         };
-        
+
         if (isSequelMismatch()) {
           if (DEBUG_MODE) console.log(`   ⏭️  [DB] Skipping "${fileName}" - sequel number mismatch (file: ${fileTitleNumber}, want: ${requestedTitleNumber || 'none/1'})`);
           continue;
         }
-        
+
         // Decide if we should assign IMDb ID:
         // 1. File has matching year → YES
         // 2. File has no year AND title matches well → YES  
         // 3. File has wrong year → NO (already filtered out)
         const shouldUpdate = (fileYear === yearStr) || (!fileYear && yearStr) || (!yearStr);
-        
+
         if (!shouldUpdate) {
           continue;
         }
-        
+
         // Skip if already has an IMDb ID
         if (row.film_imdb_id && row.film_imdb_id !== '' && row.film_imdb_id !== imdbId) {
           if (DEBUG_MODE) console.log(`   ⏭️  [DB] Skipping ${row.info_hash.substring(0, 8)}... already has IMDb ${row.film_imdb_id}`);
           continue;
         }
-        
+
         try {
           await pool.query(`
             UPDATE pack_files 
@@ -1462,7 +1536,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
           // Ignore update errors (e.g., constraint violations)
         }
       }
-      
+
       if (indexedCount > 0) {
         console.log(`   🏷️  Auto-indexed ${indexedCount}/${filteredResults.length} file(s) with ${imdbId}${year ? ` (${year})` : ''}`);
       }
@@ -1741,24 +1815,24 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     if (result.rows.length > 0 && movieImdbId && year) {
       const yearStr = String(year);
       let indexedCount = 0;
-      
+
       for (const row of result.rows) {
         if (row.file_imdb_id) continue; // Already has IMDb ID
-        
+
         const fileTitle = row.file_title || '';
         // Extract year from filename
         const fileYearMatch = fileTitle.match(/[\(\._](\d{4})[\)\._]/);
         const fileYear = fileYearMatch ? fileYearMatch[1] : null;
-        
+
         // Only update if file year matches OR no year and single result
-        const shouldUpdate = (fileYear === yearStr) || 
-                             (!fileYear && result.rows.length === 1);
-        
+        const shouldUpdate = (fileYear === yearStr) ||
+          (!fileYear && result.rows.length === 1);
+
         if (!shouldUpdate) {
           if (DEBUG_MODE) console.log(`   ⏭️  [DB] Skipping file "${fileTitle}" - year ${fileYear || 'none'} != ${yearStr}`);
           continue;
         }
-        
+
         try {
           await pool.query(
             'UPDATE files SET imdb_id = $1 WHERE info_hash = $2 AND file_index = $3 AND imdb_id IS NULL',
@@ -1770,7 +1844,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
           // Ignore update errors
         }
       }
-      
+
       if (indexedCount > 0) {
         console.log(`   🏷️  Auto-indexed ${indexedCount}/${result.rows.length} file(s) with ${movieImdbId} (year ${year})`);
       }

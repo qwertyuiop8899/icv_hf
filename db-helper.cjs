@@ -3,6 +3,51 @@ const { Pool } = require('pg');
 // ✅ VERBOSE LOGGING - configurabile via ENV
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
+// =====================================================
+// PROVIDER PRIORITY (single source of truth)
+// Lower number = higher priority
+// =====================================================
+const PROVIDER_PRIORITY_MAP = {
+  torrentio: 1,
+  mediafusion: 2,
+  corsaro: 3,
+  comet: 4,
+  rd_cache: 99,
+  tb_cache: 99
+};
+const PROVIDER_PRIORITY_DEFAULT = 10;
+
+/**
+ * Get priority number for a provider string.
+ * Lower = better. Used in JS code (insertTorrent, dedup, etc.)
+ * @param {string} provider
+ * @returns {number}
+ */
+function getProviderPriority(provider) {
+  if (!provider) return PROVIDER_PRIORITY_DEFAULT;
+  const lp = provider.toLowerCase();
+  for (const [key, priority] of Object.entries(PROVIDER_PRIORITY_MAP)) {
+    if (lp.includes(key) || lp === key) return priority;
+  }
+  return PROVIDER_PRIORITY_DEFAULT;
+}
+
+/**
+ * Generate SQL CASE WHEN expression for provider priority.
+ * @param {string} columnRef - e.g. 'EXCLUDED.provider' or 'torrents.provider'
+ * @returns {string} SQL CASE expression
+ */
+function providerPrioritySQL(columnRef) {
+  return `CASE
+                WHEN ${columnRef} ILIKE '%torrentio%' THEN 1
+                WHEN ${columnRef} ILIKE '%mediafusion%' THEN 2
+                WHEN ${columnRef} ILIKE '%corsaro%' THEN 3
+                WHEN ${columnRef} ILIKE '%comet%' THEN 4
+                WHEN ${columnRef} IN ('rd_cache', 'tb_cache') THEN 99
+                ELSE 10
+              END`;
+}
+
 // Database connection pool
 let pool = null;
 
@@ -258,18 +303,7 @@ async function insertTorrent(torrent) {
       const existingProvider = checkResult.rows[0].provider;
       const newSize = torrent.size || 0;
 
-      // ✅ PROVIDER PRIORITY: torrentio(1) > mediafusion(2) > corsaro(3) > comet(4) > others(10) > rd_cache/tb_cache(99)
-      const getProviderPriority = (p) => {
-        if (!p) return 99;
-        const lp = p.toLowerCase();
-        if (lp.includes('torrentio')) return 1;
-        if (lp.includes('mediafusion')) return 2;
-        if (lp.includes('corsaro')) return 3;
-        if (lp.includes('comet')) return 4;
-        if (lp === 'rd_cache' || lp === 'tb_cache') return 99;
-        return 10;
-      };
-
+      // ✅ PROVIDER PRIORITY (uses shared getProviderPriority function)
       const existingPriority = getProviderPriority(existingProvider);
       const newPriority = getProviderPriority(torrent.provider);
 
@@ -695,47 +729,10 @@ async function batchInsertTorrents(torrents) {
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
             size = CASE WHEN torrents.size = 0 OR torrents.size IS NULL THEN EXCLUDED.size ELSE torrents.size END,
             seeders = GREATEST(EXCLUDED.seeders, torrents.seeders),
-            -- ✅ PROVIDER PRIORITY: Update title + provider if new provider has higher priority
-            -- Priority: torrentio(1) > mediafusion(2) > corsaro(3) > comet(4) > others(10) > rd_cache/tb_cache(99)
-            title = CASE WHEN (
-              CASE 
-                WHEN EXCLUDED.provider ILIKE '%torrentio%' THEN 1
-                WHEN EXCLUDED.provider ILIKE '%mediafusion%' THEN 2
-                WHEN EXCLUDED.provider ILIKE '%corsaro%' THEN 3
-                WHEN EXCLUDED.provider ILIKE '%comet%' THEN 4
-                WHEN EXCLUDED.provider IN ('rd_cache', 'tb_cache') THEN 99
-                ELSE 10
-              END
-            ) < (
-              CASE 
-                WHEN torrents.provider ILIKE '%torrentio%' THEN 1
-                WHEN torrents.provider ILIKE '%mediafusion%' THEN 2
-                WHEN torrents.provider ILIKE '%corsaro%' THEN 3
-                WHEN torrents.provider ILIKE '%comet%' THEN 4
-                WHEN torrents.provider IN ('rd_cache', 'tb_cache') THEN 99
-                ELSE 10
-              END
-            ) THEN EXCLUDED.title
+            -- ✅ PROVIDER PRIORITY: Update title + provider if new provider has higher priority (uses providerPrioritySQL)
+            title = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.title
             ELSE torrents.title END,
-            provider = CASE WHEN (
-              CASE 
-                WHEN EXCLUDED.provider ILIKE '%torrentio%' THEN 1
-                WHEN EXCLUDED.provider ILIKE '%mediafusion%' THEN 2
-                WHEN EXCLUDED.provider ILIKE '%corsaro%' THEN 3
-                WHEN EXCLUDED.provider ILIKE '%comet%' THEN 4
-                WHEN EXCLUDED.provider IN ('rd_cache', 'tb_cache') THEN 99
-                ELSE 10
-              END
-            ) < (
-              CASE 
-                WHEN torrents.provider ILIKE '%torrentio%' THEN 1
-                WHEN torrents.provider ILIKE '%mediafusion%' THEN 2
-                WHEN torrents.provider ILIKE '%corsaro%' THEN 3
-                WHEN torrents.provider ILIKE '%comet%' THEN 4
-                WHEN torrents.provider IN ('rd_cache', 'tb_cache') THEN 99
-                ELSE 10
-              END
-            ) THEN EXCLUDED.provider
+            provider = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.provider
             ELSE torrents.provider END,
             cached_rd = CASE 
               WHEN torrents.cached_rd = true THEN true  -- Never overwrite true with false
@@ -2122,5 +2119,7 @@ module.exports = {
   // 🌐 Global Torrent Search Cache
   getTorrentSearchCache,
   setTorrentSearchCache,
-  cleanupTorrentSearchCache
+  cleanupTorrentSearchCache,
+  // 🏷️ Provider Priority (shared)
+  getProviderPriority
 };

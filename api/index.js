@@ -480,50 +480,29 @@ const runSequentialBackgroundJobs = async (options) => {
                         return str.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
                     };
 
-                    // ✅ HELPER: Get best pack title using Provider Priority
-                    const getBestPackTitle = (currentHash, rdName) => {
-                        const allStreams = options.streams || [];
-                        const streams = allStreams.filter(t => t.infoHash?.toLowerCase() === currentHash.toLowerCase());
-
-                        // 1. TORRENTIO (Look for "📁")
-                        const torrentioStream = streams.find(s => (s.name || '').includes('Torrentio') && (s.title || '').includes('📁'));
-                        if (torrentioStream) {
-                            const match = torrentioStream.title.match(/📁\s*(.+?)(\n|$)/);
-                            if (match && match[1]) {
-                                const clean = stripEmoji(match[1]).trim();
-                                if (clean && clean.length > 5) return { title: clean, source: 'Torrentio' };
-                            }
-                        }
-
-                        // 2. MEDIAFUSION (Look for "┈➤")
-                        const mediafusionStream = streams.find(s => (s.name || '').includes('MediaFusion') && (s.title || '').includes('┈➤'));
-                        if (mediafusionStream) {
-                            const parts = mediafusionStream.title.split('┈➤');
-                            if (parts.length > 1) {
-                                const packPart = parts[0].replace('📂', '').trim();
-                                const clean = stripEmoji(packPart).trim();
-                                if (clean && clean.length > 5) return { title: clean, source: 'MediaFusion' };
-                            }
-                        }
-
-                        // 3. SCRAPER TITLE (Origin)
+                    // ✅ BEST TITLE: pack.title is already cleaned by batchInsertTorrents (first line, no emoji, no ┈➤)
+                    // At this point options.streams are already formatted, so Torrentio/MediaFusion markers are gone.
+                    // We just compare the existing DB title (pack.title) vs RD/TB filename (rdName).
+                    const getBestTitle = (rdName) => {
                         const scraperTitle = pack.title || '';
-                        if (scraperTitle && scraperTitle.length > 5 && !scraperTitle.startsWith('📂')) {
-                            const clean = stripEmoji(scraperTitle).trim();
-                            if (!/^Season \d+$/i.test(clean) && !/^Stagione \d+$/i.test(clean)) {
-                                return { title: clean, source: 'Scraper' };
-                            }
+                        const cleanScraperTitle = stripEmoji(scraperTitle).trim();
+
+                        // 1. Scraper title (from DB, already cleaned) - prefer if valid
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
+                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                            !/^Stagione \d+$/i.test(cleanScraperTitle)) {
+                            return { title: cleanScraperTitle, source: 'Scraper' };
                         }
 
-                        // 4. Fallback to RD/TB
+                        // 2. RD/TB filename fallback
                         if (rdName && rdName.length > 5) {
                             return { title: rdName, source: 'Debrid' };
                         }
 
-                        return { title: scraperTitle || 'Unknown Pack', source: 'Fallback' };
+                        return { title: cleanScraperTitle || 'Unknown Pack', source: 'Fallback' };
                     };
 
-                    const bestTitleData = getBestPackTitle(pack.hash, realPackName);
+                    const bestTitleData = getBestTitle(realPackName);
                     const finalTitle = bestTitleData.title;
 
                     if (finalTitle && finalTitle !== pack.title) {
@@ -546,7 +525,6 @@ const runSequentialBackgroundJobs = async (options) => {
                             else {
                                 if (type === 'movie') {
                                     // Movie: Update if missing Year (conservative)
-                                    // User wants to keep "The Naked Gun (2025)..."
                                     if (!/\b(19|20)\d{2}\b/.test(curr)) shouldUpdate = true;
                                 } else {
                                     // Series: Update if missing Season Info (unless generic RD pattern)
@@ -670,51 +648,26 @@ const runSequentialBackgroundJobs = async (options) => {
                         return str.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
                     };
 
-                    // ✅ HELPER: Get best pack title using Provider Priority
-                    const getBestPackTitle = (currentHash, rdName) => {
-                        const allStreams = options.streams || [];
-                        const streams = allStreams.filter(t => t.infoHash?.toLowerCase() === currentHash.toLowerCase());
-
-                        // 1. TORRENTIO (Look for "📁")
-                        const torrentioStream = streams.find(s => (s.name || '').includes('Torrentio') && (s.title || '').includes('📁'));
-                        if (torrentioStream) {
-                            try {
-                                const lines = torrentioStream.title.split('\n');
-                                const firstLine = lines[0] || '';
-                                const clean = stripEmoji(firstLine).trim();
-                                if (clean && clean.length > 5) return { title: clean, source: 'Torrentio' };
-                            } catch (e) { /* ignore */ }
-                        }
-
-                        // 2. MEDIAFUSION (Look for "┈➤")
-                        const mediafusionStream = streams.find(s => (s.name || '').includes('MediaFusion') && (s.title || '').includes('┈➤'));
-                        if (mediafusionStream) {
-                            const parts = mediafusionStream.title.split('┈➤');
-                            if (parts.length > 1) {
-                                const packPart = parts[0].replace('📂', '').trim();
-                                const clean = stripEmoji(packPart).trim();
-                                if (clean && clean.length > 5) return { title: clean, source: 'MediaFusion' };
-                            }
-                        }
-
-                        // 3. SCRAPER TITLE (Origin)
+                    // ✅ BEST TITLE: pack.title is already cleaned by batchInsertTorrents
+                    // At this point options.streams are already formatted, so Torrentio/MediaFusion markers are gone.
+                    const getBestTitle = (rdName) => {
                         const scraperTitle = pack.title || '';
-                        if (scraperTitle && scraperTitle.length > 5 && !scraperTitle.startsWith('📂')) {
-                            const clean = stripEmoji(scraperTitle).trim();
-                            if (!/^Season \d+$/i.test(clean) && !/^Stagione \d+$/i.test(clean)) {
-                                return { title: clean, source: 'Scraper' };
-                            }
+                        const cleanScraperTitle = stripEmoji(scraperTitle).trim();
+
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
+                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                            !/^Stagione \d+$/i.test(cleanScraperTitle)) {
+                            return { title: cleanScraperTitle, source: 'Scraper' };
                         }
 
-                        // 4. Fallback to RD/TB
                         if (rdName && rdName.length > 5) {
                             return { title: rdName, source: 'Debrid' };
                         }
 
-                        return { title: scraperTitle || 'Unknown Pack', source: 'Fallback' };
+                        return { title: cleanScraperTitle || 'Unknown Pack', source: 'Fallback' };
                     };
 
-                    const bestTitleData = getBestPackTitle(pack.hash, realPackName);
+                    const bestTitleData = getBestTitle(realPackName);
                     const finalTitle = bestTitleData.title;
 
                     if (finalTitle && finalTitle !== pack.title) {
@@ -979,8 +932,6 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             templates = customFormatter.PRESET_TEMPLATES[preset];
             console.log(`🎨 [Formatter] Using preset: ${preset}`);
         }
-
-        if (!templates) return stream;
 
         if (!templates) return stream;
 
@@ -8152,20 +8103,9 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (newLangInfo.isItalian && !existingLangInfo.isItalian) {
                         isNewBetter = true;
                     } else if (newLangInfo.isItalian === existingLangInfo.isItalian) {
-                        // ✅ PROVIDER PRIORITY: torrentio(1) > mediafusion(2) > corsaro(3) > comet(4) > others(10)
-                        const getProviderPriority = (src) => {
-                            if (!src) return 10;
-                            const ls = src.toLowerCase();
-                            if (ls.includes('torrentio')) return 1;
-                            if (ls.includes('mediafusion')) return 2;
-                            if (ls.includes('corsaro')) return 3;
-                            if (ls.includes('comet')) return 4;
-                            if (ls === 'rd_cache' || ls === 'tb_cache') return 99;
-                            return 10;
-                        };
-
-                        const existingPriority = getProviderPriority(existing.source || existing.externalAddon);
-                        const newPriority = getProviderPriority(result.source || result.externalAddon);
+                        // ✅ PROVIDER PRIORITY (uses shared dbHelper.getProviderPriority)
+                        const existingPriority = dbHelper.getProviderPriority(existing.source || existing.externalAddon);
+                        const newPriority = dbHelper.getProviderPriority(result.source || result.externalAddon);
 
                         if (newPriority < existingPriority) {
                             isNewBetter = true;

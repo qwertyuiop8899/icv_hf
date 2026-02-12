@@ -14,6 +14,12 @@
 const axios = require('axios');
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
+// ✅ ANTI-LOOP: In-memory cache to prevent repeated external lookups for multi-season packs
+// Key: "hash_SxEy" → Value: timestamp of last external lookup
+// After first external lookup fails to find the episode, skip for 30 minutes
+const _multiSeasonLookupCache = new Map();
+const MULTI_SEASON_LOOKUP_TTL = 30 * 60 * 1000; // 30 minutes
+
 // Video file extensions
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mpg|mpeg)$/i;
 
@@ -605,6 +611,15 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
                     const isMultiSeason = /s\d+[-–]s?\d+|complete|series|stagione\s*\d+[-–]\d+/i.test(packTitle);
 
                     if (isMultiSeason) {
+                        // ✅ ANTI-LOOP: Check if we already did an external lookup recently
+                        // After the first lookup, processSeriesPackFiles saves ALL files to DB.
+                        // If the episode still isn't found next time, it truly doesn't exist.
+                        const lookupKey = `${infoHash}_S${season}E${episode}`;
+                        const lastLookup = _multiSeasonLookupCache.get(lookupKey);
+                        if (lastLookup && (Date.now() - lastLookup) < MULTI_SEASON_LOOKUP_TTL) {
+                            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss for S${season}E${episode} in MULTI-SEASON pack ("${packTitle}"). Already looked up ${Math.round((Date.now() - lastLookup) / 60000)}min ago. Skipping.`);
+                            return null;
+                        }
                         if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache Miss for S${season}E${episode} but pack seems MULTI-SEASON/COMPLETE ("${packTitle}"). Forcing external lookup!`);
                         // Return nothing here so execution continues to step 2 (External Provider)
                     } else {
@@ -679,6 +694,8 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
 
     if (!targetFile) {
         if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes)`);
+        // ✅ ANTI-LOOP: Record that we did an external lookup and episode wasn't found
+        _multiSeasonLookupCache.set(`${infoHash}_S${season}E${episode}`, Date.now());
         return null;  // ❌ Episodio non esiste nel pack - NESSUN FALLBACK
     }
 

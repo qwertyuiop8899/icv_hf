@@ -9256,7 +9256,7 @@ async function handleStream(type, id, config, workerOrigin) {
         // ═══════════════════════════════════════════════════════════════════════════════
 
         // 🛡️ ADVANCED FILTERS (User Preferences: Quality & Size)
-        const hasAdvancedFilters = config.exclude_4k || config.exclude_1080p || config.exclude_720p || config.exclude_sd || config.exclude_remux || config.exclude_unknown || config.max_size;
+        const hasAdvancedFilters = config.exclude_4k || config.exclude_1080p || config.exclude_720p || config.exclude_sd || config.exclude_remux || config.exclude_unknown || config.exclude_dv || config.max_size;
 
         if (hasAdvancedFilters && filteredResults.length > 0) {
             const beforeCount = filteredResults.length;
@@ -9283,6 +9283,9 @@ async function handleStream(type, id, config, workerOrigin) {
                 }
                 if (config.exclude_remux) {
                     if (/\b(remux)\b/i.test(title) || /\b(remux)\b/i.test(filename)) return false;
+                }
+                if (config.exclude_dv) {
+                    if (/\b(DV|dovi)\b|dolby.?vision/i.test(title) || /\b(DV|dovi)\b|dolby.?vision/i.test(filename)) return false;
                 }
                 if (config.exclude_unknown) {
                     // Check if ANY known quality tag is present

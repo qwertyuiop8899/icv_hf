@@ -72,9 +72,9 @@ function initDatabase(config = {}) {
 
   pool = new Pool({
     ...poolConfig,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000, // Vercel timeout-friendly
+    max: 10,                        // ✅ Reduced from 20 to 10 (multiple addons share this DB)
+    idleTimeoutMillis: 15000,       // ✅ Reduced from 30s to 15s (free connections faster)
+    connectionTimeoutMillis: 5000,  // Vercel timeout-friendly
   });
 
   pool.on('error', (err) => {
@@ -385,49 +385,61 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
     let updated = 0;
     let skipped = 0;
 
+    // ✅ PRE-FILTER: Skip uncached items not in DB in a single batch query
+    const allHashes = cacheResults.filter(r => r.hash).map(r => r.hash.toLowerCase());
+    const existsResult = await pool.query(
+      `SELECT info_hash FROM torrents WHERE info_hash = ANY($1)`,
+      [allHashes]
+    );
+    const existingHashes = new Set(existsResult.rows.map(r => r.info_hash));
+
+    // ✅ Filter items to process
+    const itemsToProcess = [];
     for (const result of cacheResults) {
       if (!result.hash) continue;
-
       const hashLower = result.hash.toLowerCase();
-
-      // ✅ Get real title (not placeholder)
-      const realTitle = result.torrent_title || result.file_title || null;
       const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
-      const torrentSize = result.size || result.file_size || null;
 
-      // ✅ SMART SAVE: Check if hash already exists in DB
-      const existsCheck = await pool.query(
-        'SELECT info_hash, provider FROM torrents WHERE info_hash = $1',
-        [hashLower]
-      );
-      const existsInDb = existsCheck.rows.length > 0;
-      const existingProvider = existsInDb ? existsCheck.rows[0].provider : null;
-
-      // ✅ SKIP useless placeholders:
-      // - Hash NOT in DB (orphan from user's RD library)
-      // - cached = false (not useful)
-      // - No real title or file_title
-      if (!existsInDb && cachedValue === false) {
+      // Skip uncached items not in DB
+      if (!existingHashes.has(hashLower) && cachedValue === false) {
         skipped++;
-        continue; // Don't create garbage record
+        continue;
       }
 
-      // ✅ FIX: Allow placeholders (we have size, will fix later)
-      // if (!existsInDb && !realTitle) {
-      //   skipped++;
-      //   continue; 
-      // }
+      itemsToProcess.push(result);
+    }
 
-      // Use real title (required for new records, optional for updates)
-      const titleToSave = realTitle || null;
+    // ✅ BATCHED UPSERT: Process all items in a single query
+    if (itemsToProcess.length > 0) {
+      const values = [];
+      const params = [];
+      let paramIndex = 1;
 
-      // ✅ UPSERT: Insert if not exists, then update cache status and size
+      for (const result of itemsToProcess) {
+        const hashLower = result.hash.toLowerCase();
+        const realTitle = result.torrent_title || result.file_title || null;
+        const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+        const torrentSize = result.size || result.file_size || null;
+        const titleToSave = realTitle || 'PLACEHOLDER';
+
+        values.push(`($${paramIndex}, 'rd_cache', $${paramIndex + 1}, $${paramIndex + 2}, NOW(), $${paramIndex + 3}, NOW(), $${paramIndex + 4}, $${paramIndex + 5})`);
+        params.push(
+          hashLower,                           // info_hash
+          titleToSave,                         // title
+          mediaType || 'unknown',              // type
+          cachedValue,                         // cached_rd
+          result.file_title || null,           // file_title
+          torrentSize                          // size
+        );
+        paramIndex += 6;
+      }
+
       const upsertQuery = `
         INSERT INTO torrents (
-          info_hash, provider, title, type, upload_date, 
+          info_hash, provider, title, type, upload_date,
           cached_rd, last_cached_check, file_title, size
         )
-        VALUES ($1, 'rd_cache', $2, $6, NOW(), $3, NOW(), $4, $5)
+        VALUES ${values.join(', ')}
         ON CONFLICT (info_hash) DO UPDATE SET
           cached_rd = EXCLUDED.cached_rd,
           last_cached_check = NOW(),
@@ -437,18 +449,8 @@ async function updateRdCacheStatus(cacheResults, mediaType = null) {
           type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
-      // For updates without a title, keep existing title in DB
-      const params = [
-        hashLower,                           // $1 info_hash
-        titleToSave || 'PLACEHOLDER',        // $2 title (will be replaced by existing on UPDATE)
-        cachedValue,                         // $3 cached_rd
-        result.file_title || null,           // $4 file_title
-        torrentSize,                         // $5 size
-        mediaType || 'unknown'               // $6 type
-      ];
-
       const res = await pool.query(upsertQuery, params);
-      updated += res.rowCount;
+      updated = res.rowCount;
     }
 
     if (skipped > 0) {
@@ -476,39 +478,60 @@ async function updateTbCacheStatus(cacheResults, mediaType = null) {
     let updated = 0;
     let skipped = 0;
 
+    // ✅ PRE-FILTER: Batch check which hashes exist in DB
+    const allHashes = cacheResults.filter(r => r.hash).map(r => r.hash.toLowerCase());
+    const existsResult = await pool.query(
+      `SELECT info_hash FROM torrents WHERE info_hash = ANY($1)`,
+      [allHashes]
+    );
+    const existingHashes = new Set(existsResult.rows.map(r => r.info_hash));
+
+    // ✅ Filter items to process
+    const itemsToProcess = [];
     for (const result of cacheResults) {
       if (!result.hash) continue;
-
       const hashLower = result.hash.toLowerCase();
-
-      const realTitle = result.torrent_title || result.file_title || null;
       const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
-      const torrentSize = result.size || result.file_size || null;
 
-      const existsCheck = await pool.query(
-        'SELECT info_hash, provider FROM torrents WHERE info_hash = $1',
-        [hashLower]
-      );
-      const existsInDb = existsCheck.rows.length > 0;
-
-      if (!existsInDb && cachedValue === false) {
+      if (!existingHashes.has(hashLower) && cachedValue === false) {
         skipped++;
         continue;
       }
 
-      // if (!existsInDb && !realTitle) {
-      //   skipped++;
-      //   continue;
-      // }
+      itemsToProcess.push(result);
+    }
 
-      const titleToSave = realTitle || null;
+    // ✅ BATCHED UPSERT
+    if (itemsToProcess.length > 0) {
+      const values = [];
+      const params = [];
+      let paramIndex = 1;
+
+      for (const result of itemsToProcess) {
+        const hashLower = result.hash.toLowerCase();
+        const realTitle = result.torrent_title || result.file_title || null;
+        const cachedValue = result.cached === true ? true : (result.cached === false ? false : true);
+        const torrentSize = result.size || result.file_size || null;
+        const titleToSave = realTitle || 'PLACEHOLDER';
+
+        values.push(`($${paramIndex}, 'tb_cache', $${paramIndex + 1}, $${paramIndex + 2}, NOW(), $${paramIndex + 3}, NOW(), $${paramIndex + 4}, $${paramIndex + 5})`);
+        params.push(
+          hashLower,                           // info_hash
+          titleToSave,                         // title
+          mediaType || 'unknown',              // type
+          cachedValue,                         // cached_tb
+          result.file_title || null,           // file_title
+          torrentSize                          // size
+        );
+        paramIndex += 6;
+      }
 
       const upsertQuery = `
         INSERT INTO torrents (
-          info_hash, provider, title, type, upload_date, 
+          info_hash, provider, title, type, upload_date,
           cached_tb, last_cached_check_tb, file_title, size
         )
-        VALUES ($1, 'tb_cache', $2, $6, NOW(), $3, NOW(), $4, $5)
+        VALUES ${values.join(', ')}
         ON CONFLICT (info_hash) DO UPDATE SET
           cached_tb = EXCLUDED.cached_tb,
           last_cached_check_tb = NOW(),
@@ -518,17 +541,8 @@ async function updateTbCacheStatus(cacheResults, mediaType = null) {
           type = CASE WHEN torrents.type = 'unknown' THEN COALESCE(EXCLUDED.type, torrents.type) ELSE torrents.type END
       `;
 
-      const params = [
-        hashLower,                           // $1
-        titleToSave || 'PLACEHOLDER',        // $2
-        cachedValue,                         // $3 cached_tb
-        result.file_title || null,           // $4
-        torrentSize,                         // $5
-        mediaType || 'unknown'               // $6
-      ];
-
       const res = await pool.query(upsertQuery, params);
-      updated += res.rowCount;
+      updated = res.rowCount;
     }
 
     if (DEBUG_MODE) console.log(`✅ [DB] Updated TB cache status for ${updated} torrents`);
@@ -1073,6 +1087,31 @@ async function getIsTorrentPack(infoHash) {
   } catch (error) {
     console.error(`❌ [DB] Error getting is_torrent_pack:`, error.message);
     return null;
+  }
+}
+
+/**
+ * Batch check is_torrent_pack for multiple hashes in a single query
+ * @param {Array<string>} infoHashes - Array of info hashes
+ * @returns {Promise<Map<string, boolean|null>>} Map of hash -> is_torrent_pack value
+ */
+async function batchGetIsTorrentPack(infoHashes) {
+  if (!pool) return new Map();
+  if (!infoHashes || infoHashes.length === 0) return new Map();
+
+  try {
+    const lowerHashes = infoHashes.map(h => h.toLowerCase());
+    const query = 'SELECT info_hash, is_torrent_pack FROM torrents WHERE info_hash = ANY($1)';
+    const result = await pool.query(query, [lowerHashes]);
+
+    const map = new Map();
+    for (const row of result.rows) {
+      map.set(row.info_hash, row.is_torrent_pack);
+    }
+    return map;
+  } catch (error) {
+    console.error(`❌ [DB] Error batch getting is_torrent_pack:`, error.message);
+    return new Map();
   }
 }
 
@@ -1644,22 +1683,32 @@ async function insertEpisodeFiles(episodeFiles) {
   if (!episodeFiles || episodeFiles.length === 0) return 0;
 
   try {
-    let inserted = 0;
+    // ✅ SKIP CHECK: if files already exist for this hash with same count, skip entirely
+    // Torrent file lists are immutable (defined by info_hash), so count match = all files present
+    const infoHash = episodeFiles[0].info_hash.toLowerCase();
+    const countResult = await pool.query(
+      'SELECT COUNT(*)::int AS cnt FROM files WHERE info_hash = $1',
+      [infoHash]
+    );
+    const existingCount = countResult.rows[0]?.cnt || 0;
+    if (existingCount === episodeFiles.length) {
+      if (DEBUG_MODE) console.log(`⏩ [DB] Skip insertEpisodeFiles for ${infoHash.substring(0,8)}… — ${existingCount} files already in DB`);
+      return 0; // nothing to do
+    }
 
-    for (const file of episodeFiles) {
-      try {
-        const query = `
-          INSERT INTO files (info_hash, file_index, title, size, imdb_id, imdb_season, imdb_episode)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-          ON CONFLICT (info_hash, file_index) DO UPDATE SET
-            title = EXCLUDED.title,
-            size = EXCLUDED.size,
-            imdb_id = EXCLUDED.imdb_id,
-            imdb_season = EXCLUDED.imdb_season,
-            imdb_episode = EXCLUDED.imdb_episode
-        `;
+    // ✅ BATCHED INSERT: Build single multi-value INSERT instead of 1 query per file
+    const BATCH_SIZE = 100; // PostgreSQL parameter limit safety
+    let totalInserted = 0;
 
-        const res = await pool.query(query, [
+    for (let batchStart = 0; batchStart < episodeFiles.length; batchStart += BATCH_SIZE) {
+      const batch = episodeFiles.slice(batchStart, batchStart + BATCH_SIZE);
+      const values = [];
+      const params = [];
+      let paramIndex = 1;
+
+      for (const file of batch) {
+        values.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6})`);
+        params.push(
           file.info_hash.toLowerCase(),
           file.file_index,
           file.title,
@@ -1667,17 +1716,45 @@ async function insertEpisodeFiles(episodeFiles) {
           file.imdb_id,
           file.imdb_season,
           file.imdb_episode
-        ]);
+        );
+        paramIndex += 7;
+      }
 
-        if (res.rowCount > 0) inserted++;
+      const query = `
+        INSERT INTO files (info_hash, file_index, title, size, imdb_id, imdb_season, imdb_episode)
+        VALUES ${values.join(', ')}
+        ON CONFLICT (info_hash, file_index) DO UPDATE SET
+          title = EXCLUDED.title,
+          size = EXCLUDED.size,
+          imdb_id = EXCLUDED.imdb_id,
+          imdb_season = EXCLUDED.imdb_season,
+          imdb_episode = EXCLUDED.imdb_episode
+      `;
 
-      } catch (error) {
-        console.warn(`⚠️ [DB] Failed to insert episode file: ${error.message}`);
+      try {
+        const res = await pool.query(query, params);
+        totalInserted += res.rowCount;
+      } catch (batchErr) {
+        console.warn(`⚠️ [DB] Batch insert failed (${batch.length} files), falling back to individual: ${batchErr.message}`);
+        // Fallback: individual inserts for this batch only
+        for (const file of batch) {
+          try {
+            const res = await pool.query(
+              `INSERT INTO files (info_hash, file_index, title, size, imdb_id, imdb_season, imdb_episode)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (info_hash, file_index) DO UPDATE SET
+                 title = EXCLUDED.title, size = EXCLUDED.size, imdb_id = EXCLUDED.imdb_id,
+                 imdb_season = EXCLUDED.imdb_season, imdb_episode = EXCLUDED.imdb_episode`,
+              [file.info_hash.toLowerCase(), file.file_index, file.title, file.size, file.imdb_id, file.imdb_season, file.imdb_episode]
+            );
+            if (res.rowCount > 0) totalInserted++;
+          } catch (e) { /* skip individual errors */ }
+        }
       }
     }
 
-    if (DEBUG_MODE) console.log(`✅ [DB] Inserted ${inserted}/${episodeFiles.length} episode files`);
-    return inserted;
+    if (DEBUG_MODE) console.log(`✅ [DB] Inserted ${totalInserted}/${episodeFiles.length} episode files`);
+    return totalInserted;
 
   } catch (error) {
     console.error(`❌ [DB] Batch insert episode files error:`, error.message);
@@ -2115,6 +2192,7 @@ module.exports = {
   deletePackFilesCache,
   // 🚀 Pack optimization
   getIsTorrentPack,
+  batchGetIsTorrentPack,
   updateIsTorrentPack,
   // 🌐 Global Torrent Search Cache
   getTorrentSearchCache,

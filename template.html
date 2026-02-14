@@ -866,6 +866,10 @@
                         </label>
                         <label
                             style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="exclude_dv" style="margin-right: 8px;"> <span>Dolby Vision</span>
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; padding: 8px; background: rgba(10, 10, 26, 0.4); border-radius: 6px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
                             <input type="checkbox" id="exclude_unknown" style="margin-right: 8px;"> <span>Unknown
                                 (No Tags)</span>
                         </label>
@@ -1314,6 +1318,7 @@
                 if (document.getElementById('exclude_720p').checked) config.exclude_720p = true;
                 if (document.getElementById('exclude_sd').checked) config.exclude_sd = true;
                 if (document.getElementById('exclude_unknown').checked) config.exclude_unknown = true;
+                if (document.getElementById('exclude_dv').checked) config.exclude_dv = true;
 
                 const maxSizeVal = document.getElementById('max_size').value;
                 if (maxSizeVal && parseFloat(maxSizeVal) > 0) {
@@ -1610,6 +1615,7 @@
                     if (cfg.exclude_720p) document.getElementById('exclude_720p').checked = true;
                     if (cfg.exclude_sd) document.getElementById('exclude_sd').checked = true;
                     if (cfg.exclude_unknown) document.getElementById('exclude_unknown').checked = true;
+                    if (cfg.exclude_dv) document.getElementById('exclude_dv').checked = true;
                     if (cfg.max_size) document.getElementById('max_size').value = cfg.max_size;
 
                     // Custom Formatter settings
@@ -1693,6 +1699,7 @@
             document.getElementById('exclude_720p').addEventListener('change', updateInstallLink);
             document.getElementById('exclude_sd').addEventListener('change', updateInstallLink);
             document.getElementById('exclude_unknown').addEventListener('change', updateInstallLink);
+            document.getElementById('exclude_dv').addEventListener('change', updateInstallLink);
             document.getElementById('max_size').addEventListener('input', updateInstallLink);
 
             // Advanced Filters Loading

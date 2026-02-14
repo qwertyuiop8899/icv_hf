@@ -275,13 +275,51 @@ const resolvePackNamesInBackground = async (torrents, config, mediaDetails, seas
     }
 };
 
+// 🔄 GLOBAL BG JOB SEMAPHORE
+// Prevents unlimited parallel background jobs from saturating the DB
+const MAX_CONCURRENT_BG_JOBS = 2;
+let activeBgJobs = 0;
+const bgJobQueue = [];
+
+/**
+ * Enqueue a background job with global concurrency limit.
+ * - Max 2 concurrent jobs
+ * - Unlimited queue (all jobs will be processed eventually)
+ * - Individual jobs skip unnecessary DB writes internally (e.g. insertEpisodeFiles skip-check)
+ */
+const enqueueBgJob = (options) => {
+    if (activeBgJobs < MAX_CONCURRENT_BG_JOBS) {
+        _startBgJob(options);
+    } else {
+        bgJobQueue.push(options);
+        console.log(`⏳ [BG Queue] Job queued (${activeBgJobs}/${MAX_CONCURRENT_BG_JOBS} active, ${bgJobQueue.length} queued)`);
+    }
+};
+
+const _startBgJob = (options) => {
+    activeBgJobs++;
+    console.log(`🔄 [BG Queue] Starting job (${activeBgJobs}/${MAX_CONCURRENT_BG_JOBS} active, ${bgJobQueue.length} queued)`);
+    _runSequentialBackgroundJobs(options)
+        .catch(err => console.error(`❌ [BG Queue] Job failed: ${err.message}`))
+        .finally(() => {
+            activeBgJobs--;
+            if (bgJobQueue.length > 0) {
+                const next = bgJobQueue.shift();
+                console.log(`🔄 [BG Queue] Dequeuing next job (${bgJobQueue.length} remaining)`);
+                _startBgJob(next);
+            } else {
+                console.log(`🔄 [BG Queue] No more jobs (${activeBgJobs}/${MAX_CONCURRENT_BG_JOBS} active)`);
+            }
+        });
+};
+
 // 🔄 SEQUENTIAL BACKGROUND PROCESSOR
 // Runs all background jobs in sequence to avoid rate limiting:
 // 1. Cache check (1s delay between calls)
 // 2. Pack check (2s delay between calls)
 // 2C. Rejected potential packs verification (for year-filtered movie packs)
 // 3. Save to DB (at the end)
-const runSequentialBackgroundJobs = async (options) => {
+const _runSequentialBackgroundJobs = async (options) => {
     const {
         itemsForCacheCheck,   // Array of { hash, magnet } for cache checking
         itemsForPackCheck,    // Array of { hash, title } for pack resolution
@@ -436,17 +474,21 @@ const runSequentialBackgroundJobs = async (options) => {
         const itaCount = packsToProcess.filter(p => /ita/i.test(p.title || '')).length;
         console.log(`\n📦 [Sequential BG] Phase 2: Pack resolution for SERIES (${packsToProcess.length}/${allPacksToResolve.length} packs, ${itaCount} ITA${skippedPacks > 0 ? `, ${skippedPacks} deferred to next search` : ''})`);
 
-        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs
+        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs (batched query)
         const seriesPacksToVerify = [];
-        for (const pack of packsToProcess) {
-            if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
-                const isPack = await dbHelper.getIsTorrentPack(pack.hash);
+        if (dbHelper && typeof dbHelper.batchGetIsTorrentPack === 'function') {
+            const packHashes = packsToProcess.map(p => p.hash);
+            const packStatusMap = await dbHelper.batchGetIsTorrentPack(packHashes);
+            for (const pack of packsToProcess) {
+                const isPack = packStatusMap.get(pack.hash.toLowerCase());
                 if (isPack === false) {
                     if (DEBUG_MODE) console.log(`   ⏭️ Skip ${pack.hash.substring(0, 8)}: already verified as NOT a pack`);
                     continue;
                 }
+                seriesPacksToVerify.push(pack);
             }
-            seriesPacksToVerify.push(pack);
+        } else {
+            seriesPacksToVerify.push(...packsToProcess);
         }
 
         if (seriesPacksToVerify.length < packsToProcess.length) {
@@ -788,20 +830,25 @@ const runSequentialBackgroundJobs = async (options) => {
     if (rejectedPotentialPacks && rejectedPotentialPacks.length > 0 && type === 'movie') {
         console.log(`\n🔍 [Sequential BG] Phase 2C: Verifying ${rejectedPotentialPacks.length} potential packs rejected by year filter`);
 
-        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs
+        // 🚀 OPTIMIZATION: Skip torrents already verified as NOT packs (batched query)
         const packsToVerify = [];
-        for (const rejected of rejectedPotentialPacks) {
-            const hash = rejected.infoHash || rejected.hash;
-            if (!hash) continue;
-
-            if (dbHelper && typeof dbHelper.getIsTorrentPack === 'function') {
-                const isPack = await dbHelper.getIsTorrentPack(hash);
+        const rejectedHashes = rejectedPotentialPacks.map(r => r.infoHash || r.hash).filter(Boolean);
+        if (dbHelper && typeof dbHelper.batchGetIsTorrentPack === 'function' && rejectedHashes.length > 0) {
+            const packStatusMap = await dbHelper.batchGetIsTorrentPack(rejectedHashes);
+            for (const rejected of rejectedPotentialPacks) {
+                const hash = rejected.infoHash || rejected.hash;
+                if (!hash) continue;
+                const isPack = packStatusMap.get(hash.toLowerCase());
                 if (isPack === false) {
                     if (DEBUG_MODE) console.log(`   ⏭️ Skip ${hash.substring(0, 8)}: already verified as NOT a pack`);
                     continue;
                 }
+                packsToVerify.push(rejected);
             }
-            packsToVerify.push(rejected);
+        } else {
+            for (const rejected of rejectedPotentialPacks) {
+                if (rejected.infoHash || rejected.hash) packsToVerify.push(rejected);
+            }
         }
 
         if (packsToVerify.length < rejectedPotentialPacks.length) {
@@ -10798,13 +10845,13 @@ async function handleStream(type, id, config, workerOrigin) {
             if (DEBUG_MODE) console.log(`⏭️  [Background] Enrichment skipped (dbEnabled=${dbEnabled}, hasMediaDetails=${!!mediaDetails}, hasIds=${!!(mediaDetails?.tmdbId || mediaDetails?.imdbId || mediaDetails?.kitsuId)})`);
         }
 
-        // 🔄 LAUNCH SEQUENTIAL BACKGROUND JOBS (fire-and-forget)
-        // This replaces the old parallel enrichCacheBackground and resolvePackNamesInBackground calls
+        // 🔄 LAUNCH SEQUENTIAL BACKGROUND JOBS (fire-and-forget with global semaphore)
+        // Uses enqueueBgJob to limit concurrent background jobs to MAX_CONCURRENT_BG_JOBS
         if ((backgroundCacheItems.length > 0 || backgroundPackItems.length > 0 || backgroundRejectedPacks.length > 0) && dbHelper) {
-            console.log(`\n🔄 [Sequential BG] Launching background jobs: ${backgroundCacheItems.length} cache items, ${backgroundPackItems.length} pack items, ${backgroundRejectedPacks.length} rejected packs`);
+            console.log(`\n🔄 [Sequential BG] Enqueueing background jobs: ${backgroundCacheItems.length} cache items, ${backgroundPackItems.length} pack items, ${backgroundRejectedPacks.length} rejected packs`);
 
-            // Fire-and-forget: Don't await, don't block response
-            runSequentialBackgroundJobs({
+            // Fire-and-forget: enqueueBgJob handles concurrency limit
+            enqueueBgJob({
                 itemsForCacheCheck: backgroundCacheItems,
                 itemsForPackCheck: backgroundPackItems,
                 rejectedPotentialPacks: backgroundRejectedPacks,
@@ -10815,10 +10862,6 @@ async function handleStream(type, id, config, workerOrigin) {
                 mediaDetails,
                 season,
                 episode
-            }).then(result => {
-                console.log(`✅ [Sequential BG] Completed: ${result?.cacheResults?.length || 0} cache, ${result?.packResults?.length || 0} packs, ${result?.rejectedPacksResults?.length || 0} verified from rejected`);
-            }).catch(err => {
-                console.error(`❌ [Sequential BG] Error: ${err.message}`);
             });
         }
 

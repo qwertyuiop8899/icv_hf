@@ -949,6 +949,26 @@
                             </div>
                         </label>
 
+                        <!-- Anime -->
+                        <label
+                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="anime_enabled" style="margin-right: 10px;">
+                            <div>
+                                <div style="font-size: 0.95em; font-weight: bold;">⛩️ Anime</div>
+                                <small style="color: #9ca3af; font-size: 0.75em;">Catalogo ricerca Kitsu + stream anime</small>
+                            </div>
+                        </label>
+
+                        <!-- StreamingCommunity -->
+                        <label
+                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
+                            <input type="checkbox" id="streamingcommunity_enabled" style="margin-right: 10px;">
+                            <div>
+                                <div style="font-size: 0.95em; font-weight: bold;">📺 StreamingCommunity</div>
+                                <small style="color: #9ca3af; font-size: 0.75em;">Stream diretti per film e serie</small>
+                            </div>
+                        </label>
+
                         <!-- Only Cached (Moved Here) -->
                         <label
                             style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer; margin-top: 10px;">
@@ -1096,6 +1116,8 @@
             // Feature toggles
             const aioStreamsModeCheckbox = document.getElementById("aiostreams_mode");
             const introSkipEnabledCheckbox = document.getElementById("introskip_enabled");
+            const animeEnabledCheckbox = document.getElementById("anime_enabled");
+            const streamingCommunityCheckbox = document.getElementById("streamingcommunity_enabled");
 
 
             // Buttons
@@ -1332,6 +1354,12 @@
                 if (introSkipEnabledCheckbox.checked) {
                     config.introskip_enabled = true;
                 }
+                if (animeEnabledCheckbox.checked) {
+                    config.anime_enabled = true;
+                }
+                if (streamingCommunityCheckbox.checked) {
+                    config.streamingcommunity_enabled = true;
+                }
 
                 // Custom Formatter
                 const formatterPreset = document.getElementById('formatter_preset').value;
@@ -1375,7 +1403,12 @@
                     function toSolidBytes(match, p1) {
                         return String.fromCharCode('0x' + p1);
                     }));
-                const installUrl = `stremio://${window.location.host}/${encodedConfig}/manifest.json`;
+                // Base64url to keep path safe (no '/' or '+')
+                const encodedConfigUrl = encodedConfig
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=+$/g, '');
+                const installUrl = `stremio://${window.location.host}/${encodedConfigUrl}/manifest.json`;
 
                 installLinkDisplay.value = installUrl;
                 linkContainer.classList.add('show');
@@ -1393,6 +1426,7 @@
                 if (config.db_only) featureEmojis += '⚡';
                 if (config.full_ita) featureEmojis += '🇮🇹';
                 if (config.introskip_enabled) featureEmojis += '⏩';
+                if (config.anime_enabled) featureEmojis += '⛩️';
 
                 // Build status emoji string
                 let statusEmojis = '';
@@ -1607,6 +1641,20 @@
                             console.log('✅ Loaded introskip_enabled');
                         }
                     }
+                    if (cfg.anime_enabled) {
+                        const el = document.getElementById('anime_enabled');
+                        if (el) {
+                            el.checked = true;
+                            console.log('✅ Loaded anime_enabled');
+                        }
+                    }
+                    if (cfg.streamingcommunity_enabled) {
+                        const el = document.getElementById('streamingcommunity_enabled');
+                        if (el) {
+                            el.checked = true;
+                            console.log('✅ Loaded streamingcommunity_enabled');
+                        }
+                    }
 
                     // Advanced Filters Loading
                     if (cfg.exclude_remux) document.getElementById('exclude_remux').checked = true;
@@ -1717,6 +1765,8 @@
             // Event listeners for feature toggles
             aioStreamsModeCheckbox.addEventListener('change', updateInstallLink);
             introSkipEnabledCheckbox.addEventListener('change', updateInstallLink);
+            animeEnabledCheckbox.addEventListener('change', updateInstallLink);
+            streamingCommunityCheckbox.addEventListener('change', updateInstallLink);
 
             // Formatter dropdown handler (inline - no popup needed)
             const formatterPresetSelect = document.getElementById('formatter_preset');

@@ -1238,8 +1238,22 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             return res; // Return as-is if not recognized
         };
 
-        const languages = result.languages?.length ? result.languages :
+        let languages = result.languages?.length ? result.languages :
             extractMultiple(filename, { Italian: /\bita(lian)?\b/i, English: /\beng(lish)?\b/i, French: /\bfre(nch)?\b/i, German: /\bger(man)?\b|deu(tsch)?\b/i, Spanish: /\bspa(nish)?\b/i, Multi: /\bmulti\b/i });
+
+        // ✅ TRUSTED SOURCE ITA: If source is trusted (torrentio, corsaro, manual_add) and
+        // no Italian detected in filename → force Italian (these providers are always ITA)
+        if (!languages.includes('Italian') && isTrustedSource(result.source, result.provider)) {
+            languages = ['Italian', ...languages];
+        }
+        // 📦 PACK ITA INHERITANCE: If file_title was used but pack title has ITA → inherit
+        if (!languages.includes('Italian') && result.fileIndex !== undefined && result.file_title) {
+            const packTitle = (result.title || '');
+            if (/\bita(lian)?\b/i.test(packTitle)) {
+                languages = ['Italian', ...languages];
+            }
+        }
+
         const languageEmojis = result.languageEmojis?.length ? result.languageEmojis :
             languages.map(l => languageMap[l] || l);
         const languageCodes = languages.map(l => langCodeMap[l] || l.substring(0, 2).toUpperCase());
@@ -1401,7 +1415,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             },
             addon: {
                 name: 'IlCorsaroViola',
-                version: '7.3.3',
+                version: '7.2.3',
                 presetId: preset,
                 manifestUrl: null
             },
@@ -9893,7 +9907,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 const qualityDisplay = result.quality ? result.quality.toUpperCase() : 'Unknown';
                 const qualitySymbol = getQualitySymbol(qualityDisplay);
-                const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle);
+                const { icon: languageIcon } = getLanguageInfo(result.title, italianTitle, result.source);
                 const packIcon = isSeasonPack(result.title) ? '📦 ' : ''; // Season pack indicator
                 const encodedConfig = btoa(JSON.stringify(config));
                 const infoHashLower = result.infoHash.toLowerCase();
@@ -11452,7 +11466,7 @@ export default async function handler(req, res) {
 
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '7.3.3',
+                version: '7.2.3',
                 name: addonName,
                 description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
@@ -13870,7 +13884,7 @@ export default async function handler(req, res) {
             const health = {
                 status: 'OK',
                 addon: 'IlCorsaroViola',
-                version: '7.3.3',
+                version: '7.2.3',
                 uptime: Date.now(),
                 cache: {
                     entries: cache.size,

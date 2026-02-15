@@ -22,6 +22,10 @@ const customFormatter = require('../formatter.cjs');
 
 // ✅ External Addon Integration (Torrentio, MediaFusion, Comet)
 import { fetchExternalAddonsFlat, EXTERNAL_ADDONS } from './external-addons.js';
+// ⛩️ Kitsu Plus catalog integration
+import { fetchKitsuPlusCatalog, isKitsuPlusSearchCatalog } from './kitsu-plus.js';
+// 📺 StreamingCommunity integration
+import { fetchStreamingCommunityStreams } from './streaming-community.js';
 
 // 🚀 SEEDER UPDATE WEBHOOK HELPER
 const TRIGGER_SEEDER_UPDATE_URL = process.env.SEEDER_UPDATE_URL; // e.g. 'http://my-vps-ip:3005/update'
@@ -981,6 +985,15 @@ const TORRENTIO_VIDEO_BASE = 'https://torrentio.strem.fun';
 const atob = (str) => Buffer.from(str, 'base64').toString('utf-8');
 const btoa = (str) => Buffer.from(str, 'utf-8').toString('base64');
 
+// Base64url-safe decode (handles '-' '_' and missing padding)
+const decodeBase64Url = (input) => {
+    if (!input) return '';
+    const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = normalized.length % 4 === 0 ? 0 : (4 - (normalized.length % 4));
+    const padded = normalized + '='.repeat(padLength);
+    return atob(padded);
+};
+
 const _k = new Map();
 
 // ✅ Improved HTML Entity Decoder
@@ -1613,6 +1626,28 @@ function isItalian(title, italianMovieTitle = null) {
     return false;
 }
 
+// ✅ HELPER: Check if a source/provider is trusted (corsaro, torrentio, manual_add)
+// Torrentio (Rutor), Torrentio (anything) → trusted
+// comet (torrentio), mediafusion (torrentio) → NOT trusted
+// Handles DB prefix emoji: "💾 Torrentio (Rutor)" → strips emoji first
+function isTrustedSource(source, provider) {
+    // Strip emoji/symbols prefix (e.g. "💾 Torrentio (Rutor)" → "Torrentio (Rutor)")
+    const stripPrefix = (str) => (str || '').replace(/^[^a-zA-Z0-9]+/, '').trim().toLowerCase();
+    const s = stripPrefix(source);
+    const p = stripPrefix(provider);
+    // manual_add
+    if (/manual_add/i.test(s) || /manual_add/i.test(p)) return true;
+    // corsaronero / corsaro
+    if (/corsaro/i.test(s) || /corsaro/i.test(p)) return true;
+    // torrentio as MAIN addon (not sub-provider)
+    // "torrentio" or "Torrentio (Rutor)" → main part before '(' is torrentio → trusted
+    // "comet (torrentio)" → main part is comet → NOT trusted
+    const mainSource = s.split('(')[0].trim();
+    const mainProvider = p.split('(')[0].trim();
+    if (/^torrentio$/i.test(mainSource) || /^torrentio$/i.test(mainProvider)) return true;
+    return false;
+}
+
 // ✅ NUOVA FUNZIONE: Icona lingua (usando i regex AIOStreams)
 function getLanguageInfo(title, italianMovieTitle = null, source = null, parsedInfo = null) {
     if (!title) return { icon: '', isItalian: false, isMulti: false, displayLabel: '', detectedLanguages: [] };
@@ -1649,8 +1684,8 @@ function getLanguageInfo(title, italianMovieTitle = null, source = null, parsedI
         hasIta = isItalian(title, italianMovieTitle);
     }
 
-    // Force Italian for CorsaroNero (matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.)
-    if (source && /corsaro/i.test(source)) {
+    // Force Italian for trusted sources (CorsaroNero, Torrentio, manual_add)
+    if (source && isTrustedSource(source, null)) {
         hasIta = true;
     }
 
@@ -6300,6 +6335,19 @@ async function handleStream(type, id, config, workerOrigin) {
         const backgroundPackItems = [];    // { hash, title } for pack resolution
         const backgroundRejectedPacks = []; // { hash, title, infoHash } for Phase 2C - potential movie packs rejected by year filter
 
+        // ⛩️ STREAMVIX: Launch fetch in parallel NOW (don't block torrent search)
+        // We'll await the result later, after all torrent streams are built
+        let streamVixPromise = null;
+        if (decodedId.startsWith('kitsu:')) {
+            const streamVixUrl = `https://streamvix.hayd.uk/stream/${type}/${decodedId}.json`;
+            console.log(`⛩️ [StreamVix] Launching parallel fetch: ${streamVixUrl}`);
+            streamVixPromise = fetch(streamVixUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                signal: AbortSignal.timeout(180000) // 3 min max
+            }).then(r => r.ok ? r.json() : null)
+              .catch(err => { console.warn(`⚠️ [StreamVix] Fetch error: ${err.message}`); return null; });
+        }
+
         // ✅ GLOBAL CACHE HIT: Load data from cache, skip search
         if (fromGlobalCache && cachedData) {
             if (DEBUG_MODE) console.log(`⚡ [GLOBAL CACHE] Loading ${cachedData.filteredResults?.length || 0} torrents from cache...`);
@@ -8292,21 +8340,26 @@ async function handleStream(type, id, config, workerOrigin) {
                             if (!r.infoHash) return false;
 
                             // ✅ STRICT LANGUAGE FILTER: Only save Italian/Multi to DB
-                            // 📦 For pack files with fileIndex, use file_title for language detection
+                            // 📦 For pack files with fileIndex, check BOTH file_title AND pack title
+                            // If pack name has ITA → all internal files inherit ITA
                             const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
                                 ? r.file_title
                                 : (r.title || r.websiteTitle || '');
                             const langInfo = getLanguageInfo(titleForLang, italianTitle, r.source); // ✅ FIX: Pass italianTitle
-                            const isItalian = langInfo.isItalian;
+                            let isItalian = langInfo.isItalian;
+
+                            // 📦 PACK ITA INHERITANCE: If file_title was used but pack title has ITA → inherit
+                            if (!isItalian && r.fileIndex !== undefined && r.fileIndex !== null && r.file_title) {
+                                const packTitle = (r.title || r.websiteTitle || '');
+                                const packLang = getLanguageInfo(packTitle, italianTitle, r.source);
+                                if (packLang.isItalian) isItalian = true;
+                            }
 
                             // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
-                            // Matches 'CorsaroNero', 'corsaro', '💾 corsaro', etc.
-                            // For Torrentio: only DIRECT addon, not sub-providers like 'comet (torrentio)'
-                            const mainAddon = (r.externalAddon || '').split('(')[0].trim().toLowerCase();
-                            const isManual = (r.source && /manual_add/i.test(r.source)) || (r.provider && /manual_add/i.test(r.provider));
-                            const isTrustedProvider = (r.source && /corsaro/i.test(r.source)) ||
-                                (mainAddon && /^torrentio$/i.test(mainAddon)) ||
-                                isManual; // ✅ Exempt Manual
+                            // manual_add, corsaro*, torrentio, Torrentio (Rutor/etc) → trusted
+                            // comet (torrentio), mediafusion (torrentio) → NOT trusted
+                            const isTrustedProvider = isTrustedSource(r.source, r.provider) ||
+                                isTrustedSource(r.externalAddon, null);
 
                             // 📦 Pack Files logic:
                             // If it's a Movie Pack File (has fileIndex and type is movie), we trust the search logic found it correctly
@@ -8322,16 +8375,20 @@ async function handleStream(type, id, config, workerOrigin) {
                         // ✅ FIX: Clean multiline titles to first line only, strip emojis
                         // External addons (Torrentio, MediaFusion) send multiline titles with
                         // size, seeders, flags info that should NOT be saved as the torrent title
+                        // ⚠️ MANUAL_ADD: Never clean/modify the title - keep it exactly as imported
+                        const isManualAdd = isTrustedSource(r.source, r.provider) && /manual_add/i.test((r.source || '') + (r.provider || ''));
                         let cleanTitle = (r.title || r.websiteTitle || 'Unknown');
-                        cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
-                        cleanTitle = cleanTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim(); // Strip emojis
-                        // Strip MediaFusion separator: take only part before ┈➤
-                        if (cleanTitle.includes('┈➤')) {
-                            cleanTitle = cleanTitle.split('┈➤')[0].trim();
-                        }
-                        // If title looks like a path (contains / with extension), take folder name
-                        if (/\/[^/]+\.\w{2,4}$/.test(cleanTitle)) {
-                            cleanTitle = cleanTitle.split('/')[0].trim();
+                        if (!isManualAdd) {
+                            cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
+                            cleanTitle = cleanTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim(); // Strip emojis
+                            // Strip MediaFusion separator: take only part before ┈➤
+                            if (cleanTitle.includes('┈➤')) {
+                                cleanTitle = cleanTitle.split('┈➤')[0].trim();
+                            }
+                            // If title looks like a path (contains / with extension), take folder name
+                            if (/\/[^/]+\.\w{2,4}$/.test(cleanTitle)) {
+                                cleanTitle = cleanTitle.split('/')[0].trim();
+                            }
                         }
                         if (!cleanTitle || cleanTitle.length < 3) cleanTitle = r.title || r.websiteTitle || 'Unknown';
                         return ({
@@ -8409,8 +8466,13 @@ async function handleStream(type, id, config, workerOrigin) {
             }
 
             if (!results || results.length === 0) {
-                if (DEBUG_MODE) console.log('❌ No results found from any source after all fallbacks');
-                return { streams: [] };
+                const hasFallbackStreams = !!streamVixPromise || config.streamingcommunity_enabled === true;
+                if (!hasFallbackStreams) {
+                    if (DEBUG_MODE) console.log('❌ No results found from any source after all fallbacks');
+                    return { streams: [] };
+                }
+                if (DEBUG_MODE) console.log('⚠️ No torrent results; proceeding with fallback streams only');
+                results = [];
             }
 
             if (DEBUG_MODE) console.log(`📡 Found ${results.length} total torrents from all sources after fallbacks`);
@@ -9097,12 +9159,18 @@ async function handleStream(type, id, config, workerOrigin) {
             // This ensures we don't discard English S02 just because we found Italian S01.
             if (filteredResults.length > 0) {
                 const hasItalianResults = filteredResults.some(r => {
-                    // 📦 For pack files with fileIndex, use file_title for language detection
+                    // 📦 For pack files with fileIndex, check file_title AND pack title
                     const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
                         ? r.file_title
                         : r.title;
                     const lang = getLanguageInfo(titleForLang, italianTitle, r.source);
-                    return lang.isItalian || lang.isMulti;
+                    if (lang.isItalian || lang.isMulti) return true;
+                    // 📦 PACK ITA INHERITANCE: pack title has ITA → file inherits
+                    if (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title) {
+                        const packLang = getLanguageInfo(r.title || '', italianTitle, r.source);
+                        if (packLang.isItalian || packLang.isMulti) return true;
+                    }
+                    return false;
                 });
 
                 if (hasItalianResults) {
@@ -9112,14 +9180,20 @@ async function handleStream(type, id, config, workerOrigin) {
                             ? r.file_title
                             : r.title;
 
-                        // ✅ EXEMPTIONS: Manual add & Movie Packs
-                        const isManual = (r.source && /manual_add/i.test(r.source)) || (r.provider && /manual_add/i.test(r.provider));
+                        // ✅ EXEMPTIONS: Trusted sources (manual_add, corsaro, torrentio) & Movie Packs
                         const isMoviePackFile = (type === 'movie' && r.fileIndex !== undefined && r.fileIndex !== null);
 
-                        if (isManual || isMoviePackFile) return true;
+                        if (isTrustedSource(r.source, r.provider) || isMoviePackFile) return true;
 
                         const lang = getLanguageInfo(titleForLang, italianTitle, r.source);
-                        return lang.isItalian || lang.isMulti;
+                        if (lang.isItalian || lang.isMulti) return true;
+
+                        // 📦 PACK ITA INHERITANCE: pack title has ITA → file inherits
+                        if (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title) {
+                            const packLang = getLanguageInfo(r.title || '', italianTitle, r.source);
+                            if (packLang.isItalian || packLang.isMulti) return true;
+                        }
+                        return false;
                     });
 
                     // Only apply if we actually filter something out
@@ -9331,17 +9405,13 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         }
 
-        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except CorsaroNero and Torrentio DIRECT addon)
+        // ✅ FULL ITA MODE: Only show results with "ITA" in title (except trusted sources)
         if (config.full_ita) {
-            const exemptProviders = ['corsaro', 'ilcorsaronero', 'corsaronero', 'torrentio'];
             const beforeCount = filteredResults.length;
 
             filteredResults = filteredResults.filter(result => {
-                const provider = (result.source || result.externalAddon || '').toLowerCase();
-
-                // ✅ EXEMPT MANUAL from Full ITA Strict Mode (user added it manually)
-                const isManual = provider.includes('manual_add');
-                if (isManual) return true;
+                // ✅ EXEMPT all trusted sources (manual_add, corsaro, torrentio/Torrentio(X))
+                if (isTrustedSource(result.source, result.provider) || isTrustedSource(result.externalAddon, null)) return true;
 
                 // 🔧 FIX: ALL packs (movie AND series) must have ITA in title or file_title
                 const isPackLink = (result.fileIndex !== undefined && result.fileIndex !== null);
@@ -9354,21 +9424,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     // If no ITA found, continue with normal checks below (will be filtered)
                 }
 
-                // Extract MAIN provider only (before parentheses) to avoid false positives
-                // e.g., "comet (torrentio)" → "comet" (NOT exempt)
-                // e.g., "torrentio" → "torrentio" (exempt)
-                const mainProvider = provider.split('(')[0].trim();
-
-                // Exempt providers: Only DIRECT CorsaroNero and Torrentio addons
-                const isExempt = exemptProviders.some(exempt => mainProvider.includes(exempt));
-                if (isExempt) return true;
-
                 // For all other providers, check for strict ITA in title
                 const title = (result.title || result.websiteTitle || '').toLowerCase();
                 const hasIta = /\bita\b|italian|italiano/i.test(title);
 
                 if (!hasIta) {
-                    console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${provider})`);
+                    console.log(`🇮🇹 [FULL ITA] Filtered out: "${(result.title || '').substring(0, 50)}..." (${result.source || result.externalAddon || 'unknown'})`);
                 }
 
                 return hasIta;
@@ -9388,10 +9449,15 @@ async function handleStream(type, id, config, workerOrigin) {
 
         console.log(`🔄 Checking debrid services for ${filteredResults.length} results... (User: ${configHashForLog})`);
         const hashes = filteredResults.map(t => t.infoHash.toLowerCase()).filter(h => h && h.length >= 32);
+        const skipDebridChecks = hashes.length === 0;
 
-        if (hashes.length === 0) {
-            console.log('❌ No valid info hashes found');
-            return { streams: [] };
+        if (skipDebridChecks) {
+            const hasFallbackStreams = !!streamVixPromise || config.streamingcommunity_enabled === true;
+            if (!hasFallbackStreams) {
+                console.log('❌ No valid info hashes found and no fallback streams enabled');
+                return { streams: [] };
+            }
+            console.log('⚠️ No valid info hashes found. Skipping debrid cache checks, proceeding with fallback streams.');
         }
 
         // ✅ Check cache for enabled services in parallel
@@ -9403,7 +9469,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
         const cacheChecks = [];
 
-        if (useRealDebrid) {
+        if (!skipDebridChecks && useRealDebrid) {
             console.log('👑 Checking Real-Debrid cache...');
             cacheChecks.push(
                 (async () => {
@@ -9604,7 +9670,7 @@ async function handleStream(type, id, config, workerOrigin) {
             );
         }
 
-        if (useTorbox) {
+        if (!skipDebridChecks && useTorbox) {
             console.log('📦 Checking Torbox cache...');
             cacheChecks.push(
                 (async () => {
@@ -9757,7 +9823,7 @@ async function handleStream(type, id, config, workerOrigin) {
             );
         }
 
-        if (useAllDebrid) {
+        if (!skipDebridChecks && useAllDebrid) {
             console.log('🅰️ Checking AllDebrid cache...');
             cacheChecks.push(
                 adService.checkCache(hashes).then(cache => {
@@ -10779,6 +10845,69 @@ async function handleStream(type, id, config, workerOrigin) {
             }
         }
 
+        // ⛩️ STREAMVIX: Collect parallel results and prepend anime streams
+        if (streamVixPromise) {
+            try {
+                const svData = await streamVixPromise;
+                const svStreams = svData?.streams || [];
+
+                if (svStreams.length > 0) {
+                    console.log(`⛩️ [StreamVix] Got ${svStreams.length} anime streams`);
+
+                    const animeStreams = [];
+                    for (const sv of svStreams) {
+                        const sourceName = sv.name || 'StreamVix';
+                        const langMatch = sv.title?.match(/🗣\s*\[([^\]]+)\]/);
+                        const lang = langMatch ? langMatch[1] : '';
+                        const titleLine = sv.title?.split('\n')[0] || '';
+
+                        animeStreams.push({
+                            name: `⛩️ ${sourceName}`,
+                            title: `${titleLine}\n🗣 ${lang}\n🎌 Anime Stream`,
+                            url: sv.url,
+                            behaviorHints: {
+                                ...(sv.behaviorHints || {}),
+                                bingeGroup: sv.behaviorHints?.bingeGroup || `streamvix-${lang.toLowerCase()}`
+                            }
+                        });
+                    }
+                    // Prepend anime streams BEFORE torrent streams
+                    streams = [...animeStreams, ...streams];
+                } else {
+                    console.log(`⛩️ [StreamVix] No streams found`);
+                }
+            } catch (svErr) {
+                console.warn(`⚠️ [StreamVix] Error: ${svErr.message}`);
+            }
+        }
+
+        // 📺 StreamingCommunity: fetch direct streams for movie/series
+        if (config.streamingcommunity_enabled && (type === 'movie' || type === 'series')) {
+            try {
+                const scStreams = await fetchStreamingCommunityStreams({
+                    type,
+                    imdbId: mediaDetails?.imdbId || imdbId,
+                    tmdbId: mediaDetails?.tmdbId || tmdbId,
+                    season,
+                    episode
+                });
+
+                if (scStreams.length > 0) {
+                    const formatted = scStreams.map((stream) => ({
+                        name: `📺 ${stream.name || 'StreamingCommunity'}`,
+                        title: stream.title || 'StreamingCommunity',
+                        url: stream.url,
+                        behaviorHints: stream.behaviorHints || {}
+                    }));
+
+                    // Prepend StreamingCommunity streams before torrents
+                    streams = [...formatted, ...streams];
+                }
+            } catch (scErr) {
+                console.warn(`⚠️ [StreamingCommunity] Error: ${scErr.message}`);
+            }
+        }
+
         const cachedCount = streams.filter(s => s.name.includes('⚡')).length;
         const totalTime = Date.now() - startTime;
 
@@ -11240,16 +11369,16 @@ export default async function handler(req, res) {
 
                     // Try multiple decode strategies for complex configs with emoji/special chars
                     try {
-                        config = JSON.parse(atob(encodedConfigStr));
+                        config = JSON.parse(decodeBase64Url(encodedConfigStr));
                     } catch (e1) {
                         // Fallback 1: URI decode for double-encoded or legacy formats
                         try {
-                            const decoded = atob(encodedConfigStr);
+                            const decoded = decodeBase64Url(encodedConfigStr);
                             config = JSON.parse(decodeURIComponent(escape(decoded)));
                         } catch (e2) {
                             // Fallback 2: Try with TextDecoder for UTF-8
                             try {
-                                const bytes = Uint8Array.from(atob(encodedConfigStr), c => c.charCodeAt(0));
+                                const bytes = Uint8Array.from(decodeBase64Url(encodedConfigStr), c => c.charCodeAt(0));
                                 const decoded = new TextDecoder('utf-8').decode(bytes);
                                 config = JSON.parse(decoded);
                             } catch (e3) {
@@ -11283,12 +11412,20 @@ export default async function handler(req, res) {
                     const hasFullIta = config.full_ita === true;
                     const hasSkipIntro = config.introskip_enabled === true;
                     const hasDbOnly = config.db_only === true;
+                    const hasAnime = config.anime_enabled === true;
 
                     // Build feature suffix: ⚡ for DB Only, 🇮🇹 for FULL ITA, ⏩ for Skip Intro
                     let featureSuffix = '';
                     if (hasDbOnly) featureSuffix += '⚡';
                     if (hasFullIta) featureSuffix += '🇮🇹';
                     if (hasSkipIntro) featureSuffix += '⏩';
+                    if (hasAnime && config.streamingcommunity_enabled === true) {
+                        featureSuffix += '⛩️🤌';
+                    } else if (hasAnime) {
+                        featureSuffix += '⛩️';
+                    } else if (config.streamingcommunity_enabled === true) {
+                        featureSuffix += '🤌';
+                    }
 
                     if (services.length > 0) {
                         // Add proxy indicator only if RD is enabled
@@ -11305,6 +11442,14 @@ export default async function handler(req, res) {
                 }
             }
 
+            const KITSU_PLUS_CATALOGS = [
+                { id: 'kitsu-anime-search-tv', name: '🔍 ICV Kitsu Shows' },
+                { id: 'kitsu-anime-search-movie', name: '🔍 ICV Kitsu Movies' },
+                { id: 'kitsu-anime-search-ova', name: '🔍 ICV Kitsu OVA' },
+                { id: 'kitsu-anime-search-ona', name: '🔍 ICV Kitsu ONA' },
+                { id: 'kitsu-anime-search-special', name: '🔍 ICV Kitsu Specials' }
+            ];
+
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
                 version: '7.2.3',
@@ -11317,9 +11462,9 @@ export default async function handler(req, res) {
                 catalogs: [],
                 behaviorHints: {
                     adult: false,
-                    p2p: true, // Indica che può restituire link magnet
-                    configurable: true, // ✅ Abilita pulsante "Configure" in Stremio
-                    configurationRequired: false // ✅ Non obbligatorio, ma disponibile
+                    p2p: true,
+                    configurable: true,
+                    configurationRequired: false
                 },
                 stremioAddonsConfig: {
                     issuer: "https://stremio-addons.net",
@@ -11327,8 +11472,60 @@ export default async function handler(req, res) {
                 }
             };
 
+            // ⛩️ ANIME: Add Kitsu search catalog if anime_enabled
+            try {
+                let manifestConfig = null;
+                if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
+                    try { manifestConfig = JSON.parse(atob(pathParts[1])); } catch(e) {}
+                }
+                if (manifestConfig?.anime_enabled) {
+                    for (const catalog of KITSU_PLUS_CATALOGS) {
+                        manifest.catalogs.push({
+                            type: 'anime',
+                            id: catalog.id,
+                            name: catalog.name,
+                            extra: [{ name: 'search', isRequired: true }]
+                        });
+                    }
+                    // Add 'catalog' to resources so Stremio sends catalog requests
+                    if (!manifest.resources.includes('catalog')) {
+                        manifest.resources.push('catalog');
+                    }
+                }
+            } catch(e) { /* ignore */ }
+
             res.setHeader('Content-Type', 'application/json');
             return res.status(200).send(JSON.stringify(manifest, null, 2));
+        }
+
+        // ⛩️ CATALOG ENDPOINT: Kitsu anime search
+        // Handles /{config}/catalog/{type}/{id}/search={query}.json
+        if (url.pathname.includes('/catalog/')) {
+            const pathParts = url.pathname.split('/');
+            // e.g. ['', '{config}', 'catalog', 'anime', 'icv_kitsu_search', 'search=naruto.json']
+            const catalogType = pathParts[3];
+            const catalogId = pathParts[4];
+            const extraRaw = (pathParts[5] || '').replace(/\.json$/, '');
+
+            if (isKitsuPlusSearchCatalog(catalogId) && extraRaw.startsWith('search=')) {
+                const searchQuery = decodeURIComponent(extraRaw.replace('search=', ''));
+                console.log(`\n🔍 [Kitsu Catalog] Searching via kitsu-plus (${catalogId}): "${searchQuery}"`);
+
+                try {
+                    const metas = await fetchKitsuPlusCatalog(catalogId, searchQuery);
+                    console.log(`✅ [Kitsu Catalog] Found ${metas.length} results for "${searchQuery}"`);
+                    res.setHeader('Content-Type', 'application/json');
+                    return res.status(200).send(JSON.stringify({ metas }));
+                } catch (err) {
+                    console.error(`❌ [Kitsu Catalog] Error: ${err.message}`);
+                    res.setHeader('Content-Type', 'application/json');
+                    return res.status(200).send(JSON.stringify({ metas: [] }));
+                }
+            }
+
+            // Unknown catalog
+            res.setHeader('Content-Type', 'application/json');
+            return res.status(200).send(JSON.stringify({ metas: [] }));
         }
 
         // Stream endpoint (main functionality)
@@ -11341,7 +11538,7 @@ export default async function handler(req, res) {
             let config = {};
             if (encodedConfigStr && encodedConfigStr !== 'stream') {
                 try {
-                    config = JSON.parse(atob(encodedConfigStr));
+                    config = JSON.parse(decodeBase64Url(encodedConfigStr));
                 } catch (e) {
                     console.error("Errore nel parsing della configurazione (segmento 1) dall'URL:", e);
                 }
@@ -11476,7 +11673,7 @@ export default async function handler(req, res) {
             res.setHeader('Content-Type', 'text/html');
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
             }
@@ -12589,7 +12786,7 @@ export default async function handler(req, res) {
             res.setHeader('Content-Type', 'text/html');
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
             }
@@ -12843,7 +13040,7 @@ export default async function handler(req, res) {
             let userConfig = {};
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
             }
@@ -12936,7 +13133,7 @@ export default async function handler(req, res) {
             let userConfig = {};
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(JSON.stringify({ status: 'error', message: `Configurazione non valida: ${e.message}` }));
             }
@@ -13031,7 +13228,7 @@ export default async function handler(req, res) {
             res.setHeader('Content-Type', 'text/html');
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(htmlResponse('Errore di Configurazione', `Impossibile leggere la configurazione dall'URL: ${e.message}`, true));
             }
@@ -13149,7 +13346,7 @@ export default async function handler(req, res) {
             let userConfig = {};
             res.setHeader('Content-Type', 'text/html');
             try {
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(htmlResponse('Errore Config', e.message, true));
             }
@@ -13487,7 +13684,7 @@ export default async function handler(req, res) {
             let userConfig = {};
             try {
                 if (!encodedConfigStr) throw new Error("Configurazione mancante nell'URL.");
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 console.error(`[AllDebrid] Config error: ${e.message}`);
                 return res.redirect(302, `${TORRENTIO_VIDEO_BASE}/videos/download_failed_v2.mp4`);
@@ -13619,7 +13816,7 @@ export default async function handler(req, res) {
             let userConfig = {};
             res.setHeader('Content-Type', 'text/html');
             try {
-                userConfig = JSON.parse(atob(encodedConfigStr));
+                userConfig = JSON.parse(decodeBase64Url(encodedConfigStr));
             } catch (e) {
                 return res.status(400).send(`<h1>Errore Config</h1><p>${e.message}</p>`);
             }

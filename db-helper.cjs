@@ -8,6 +8,7 @@ const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 // Lower number = higher priority
 // =====================================================
 const PROVIDER_PRIORITY_MAP = {
+  manual_add: 0,  // ✅ Never overwrite manual imports
   torrentio: 1,
   mediafusion: 2,
   corsaro: 3,
@@ -39,6 +40,7 @@ function getProviderPriority(provider) {
  */
 function providerPrioritySQL(columnRef) {
   return `CASE
+                WHEN ${columnRef} ILIKE '%manual_add%' THEN 0
                 WHEN ${columnRef} ILIKE '%torrentio%' THEN 1
                 WHEN ${columnRef} ILIKE '%mediafusion%' THEN 2
                 WHEN ${columnRef} ILIKE '%corsaro%' THEN 3

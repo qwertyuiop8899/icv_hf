@@ -1415,7 +1415,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             },
             addon: {
                 name: 'IlCorsaroViola',
-                version: '7.2.3',
+                version: '7.3.3',
                 presetId: preset,
                 manifestUrl: null
             },

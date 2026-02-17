@@ -1479,7 +1479,7 @@ router.post('/add', upload.any(), async (req, res) => {
 
         const torrentEntry = {
             info_hash: infoHash,  // snake_case required for batchInsertTorrents
-            provider: 'manual_add',
+            provider: 'Custom',
             title: torrentTitle,
             size: totalSize,
             type: type,

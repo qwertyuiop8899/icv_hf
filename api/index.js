@@ -1241,7 +1241,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
         let languages = result.languages?.length ? result.languages :
             extractMultiple(filename, { Italian: /\bita(lian)?\b/i, English: /\beng(lish)?\b/i, French: /\bfre(nch)?\b/i, German: /\bger(man)?\b|deu(tsch)?\b/i, Spanish: /\bspa(nish)?\b/i, Multi: /\bmulti\b/i });
 
-        // ✅ TRUSTED SOURCE ITA: If source is trusted (torrentio, corsaro, manual_add) and
+        // ✅ TRUSTED SOURCE ITA: If source is trusted (torrentio, corsaro, Custom) and
         // no Italian detected in filename → force Italian (these providers are always ITA)
         if (!languages.includes('Italian') && isTrustedSource(result.source, result.provider)) {
             languages = ['Italian', ...languages];
@@ -1640,7 +1640,7 @@ function isItalian(title, italianMovieTitle = null) {
     return false;
 }
 
-// ✅ HELPER: Check if a source/provider is trusted (corsaro, torrentio, manual_add)
+// ✅ HELPER: Check if a source/provider is trusted (corsaro, torrentio, Custom)
 // Torrentio (Rutor), Torrentio (anything) → trusted
 // comet (torrentio), mediafusion (torrentio) → NOT trusted
 // Handles DB prefix emoji: "💾 Torrentio (Rutor)" → strips emoji first
@@ -1649,8 +1649,8 @@ function isTrustedSource(source, provider) {
     const stripPrefix = (str) => (str || '').replace(/^[^a-zA-Z0-9]+/, '').trim().toLowerCase();
     const s = stripPrefix(source);
     const p = stripPrefix(provider);
-    // manual_add
-    if (/manual_add/i.test(s) || /manual_add/i.test(p)) return true;
+    // Custom (manually imported torrents)
+    if (/\bCustom\b/i.test(s) || /\bCustom\b/i.test(p)) return true;
     // corsaronero / corsaro
     if (/corsaro/i.test(s) || /corsaro/i.test(p)) return true;
     // torrentio as MAIN addon (not sub-provider)
@@ -1698,7 +1698,7 @@ function getLanguageInfo(title, italianMovieTitle = null, source = null, parsedI
         hasIta = isItalian(title, italianMovieTitle);
     }
 
-    // Force Italian for trusted sources (CorsaroNero, Torrentio, manual_add)
+    // Force Italian for trusted sources (CorsaroNero, Torrentio, Custom)
     if (source && isTrustedSource(source, null)) {
         hasIta = true;
     }
@@ -6611,7 +6611,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
             // 💾 DB Only Mode: Query ALL providers in DB (ignore config selections)
             if (config.db_only) {
-                selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'manual_add', 'torrentio', 'mediafusion', 'comet'];
+                selectedProviders = ['corsaro', 'knaben', 'torrentgalaxy', 'uindex', 'rarbg', 'rd_cache', 'pack-handler', 'Custom', 'torrentio', 'mediafusion', 'comet'];
                 if (DEBUG_MODE) console.log(`💾 [DB Only] Querying ALL providers in database`);
             } else {
                 if (config.use_corsaronero !== false) selectedProviders.push('corsaro');  // Matches CorsaroNero, ilcorsaronero
@@ -6619,8 +6619,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
                 if (config.use_uindex !== false) selectedProviders.push('uindex');
                 if (config.use_rarbg === true) selectedProviders.push('rarbg');
-                // Always include rd_cache (personal torrents), pack-handler, and manual_add (manually imported)
-                selectedProviders.push('rd_cache', 'pack-handler', 'manual_add');
+                // Always include rd_cache (personal torrents), pack-handler, and Custom (manually imported)
+                selectedProviders.push('rd_cache', 'pack-handler', 'Custom');
                 // External addons: Check individual toggles
                 if (config.use_external_addons !== false) {
                     if (config.use_torrentio !== false) selectedProviders.push('torrentio');
@@ -7765,7 +7765,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                     seriesImdbId,
                                     seasonNum,
                                     episodeNum,
-                                    dbHelper
+                                    dbHelper,
+                                    dbResult.provider  // ✅ Preserve original provider
                                 );
 
                                 if (fileInfo) {
@@ -7811,7 +7812,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 seriesImdbId,
                                 seasonNum,
                                 episodeNum,
-                                dbHelper
+                                dbHelper,
+                                dbResult.provider  // ✅ Preserve original provider
                             );
 
                             if (fileInfo) {
@@ -8370,7 +8372,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
 
                             // ✅ Trusted Italian providers (save even if "ITA" tag is missing)
-                            // manual_add, corsaro*, torrentio, Torrentio (Rutor/etc) → trusted
+                            // Custom, corsaro*, torrentio, Torrentio (Rutor/etc) → trusted
                             // comet (torrentio), mediafusion (torrentio) → NOT trusted
                             const isTrustedProvider = isTrustedSource(r.source, r.provider) ||
                                 isTrustedSource(r.externalAddon, null);
@@ -8389,8 +8391,8 @@ async function handleStream(type, id, config, workerOrigin) {
                         // ✅ FIX: Clean multiline titles to first line only, strip emojis
                         // External addons (Torrentio, MediaFusion) send multiline titles with
                         // size, seeders, flags info that should NOT be saved as the torrent title
-                        // ⚠️ MANUAL_ADD: Never clean/modify the title - keep it exactly as imported
-                        const isManualAdd = isTrustedSource(r.source, r.provider) && /manual_add/i.test((r.source || '') + (r.provider || ''));
+                        // ⚠️ CUSTOM: Never clean/modify the title - keep it exactly as imported
+                        const isManualAdd = isTrustedSource(r.source, r.provider) && /\bCustom\b/i.test((r.source || '') + (r.provider || ''));
                         let cleanTitle = (r.title || r.websiteTitle || 'Unknown');
                         if (!isManualAdd) {
                             cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
@@ -8405,10 +8407,12 @@ async function handleStream(type, id, config, workerOrigin) {
                             }
                         }
                         if (!cleanTitle || cleanTitle.length < 3) cleanTitle = r.title || r.websiteTitle || 'Unknown';
+                        const providerCandidate = r.provider || r.source || r.externalAddon || 'unknown';
+                        const cleanProvider = providerCandidate.replace(/^[^a-zA-Z0-9]+/, '').trim();
                         return ({
                             info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
                             title: cleanTitle,
-                            provider: r.source || r.externalAddon || 'unknown',
+                            provider: cleanProvider,
                             size: r.sizeInBytes || null,
                             type: type,
                             seeders: r.seeders || 0,
@@ -8622,7 +8626,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                     seriesImdbId,
                                     seasonNum,
                                     episodeNum,
-                                    dbHelper
+                                    dbHelper,
+                                    result.source || result.externalAddon  // ✅ Preserve original provider
                                 );
 
                                 if (fileInfo) {
@@ -8672,7 +8677,8 @@ async function handleStream(type, id, config, workerOrigin) {
                                 seriesImdbId,
                                 seasonNum,
                                 episodeNum,
-                                dbHelper
+                                dbHelper,
+                                result.source || result.externalAddon  // ✅ Preserve original provider
                             );
 
                             if (fileInfo) {
@@ -9194,7 +9200,7 @@ async function handleStream(type, id, config, workerOrigin) {
                             ? r.file_title
                             : r.title;
 
-                        // ✅ EXEMPTIONS: Trusted sources (manual_add, corsaro, torrentio) & Movie Packs
+                        // ✅ EXEMPTIONS: Trusted sources (Custom, corsaro, torrentio) & Movie Packs
                         const isMoviePackFile = (type === 'movie' && r.fileIndex !== undefined && r.fileIndex !== null);
 
                         if (isTrustedSource(r.source, r.provider) || isMoviePackFile) return true;
@@ -9424,7 +9430,7 @@ async function handleStream(type, id, config, workerOrigin) {
             const beforeCount = filteredResults.length;
 
             filteredResults = filteredResults.filter(result => {
-                // ✅ EXEMPT all trusted sources (manual_add, corsaro, torrentio/Torrentio(X))
+                // ✅ EXEMPT all trusted sources (Custom, corsaro, torrentio/Torrentio(X))
                 if (isTrustedSource(result.source, result.provider) || isTrustedSource(result.externalAddon, null)) return true;
 
                 // 🔧 FIX: ALL packs (movie AND series) must have ITA in title or file_title

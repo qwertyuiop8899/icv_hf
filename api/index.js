@@ -11439,6 +11439,7 @@ export default async function handler(req, res) {
                     if (hasDbOnly) featureSuffix += '⚡';
                     if (hasFullIta) featureSuffix += '🇮🇹';
                     if (hasSkipIntro) featureSuffix += '⏩';
+                    if (config.only_debrid_cache === true) featureSuffix += '⚡';
                     if (hasAnime && config.streamingcommunity_enabled === true) {
                         featureSuffix += '⛩️🍿';
                     } else if (hasAnime) {

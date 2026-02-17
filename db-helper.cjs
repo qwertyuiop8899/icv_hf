@@ -8,11 +8,12 @@ const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 // Lower number = higher priority
 // =====================================================
 const PROVIDER_PRIORITY_MAP = {
-  manual_add: 0,  // ✅ Never overwrite manual imports
+  custom: 0,  // ✅ Never overwrite manual imports (Custom)
   torrentio: 1,
   mediafusion: 2,
   corsaro: 3,
   comet: 4,
+  'pack-handler': 50,  // ✅ Very low priority - any real provider should overwrite
   rd_cache: 99,
   tb_cache: 99
 };
@@ -40,11 +41,12 @@ function getProviderPriority(provider) {
  */
 function providerPrioritySQL(columnRef) {
   return `CASE
-                WHEN ${columnRef} ILIKE '%manual_add%' THEN 0
+                WHEN ${columnRef} ILIKE '%Custom%' THEN 0
                 WHEN ${columnRef} ILIKE '%torrentio%' THEN 1
                 WHEN ${columnRef} ILIKE '%mediafusion%' THEN 2
                 WHEN ${columnRef} ILIKE '%corsaro%' THEN 3
                 WHEN ${columnRef} ILIKE '%comet%' THEN 4
+                WHEN ${columnRef} = 'pack-handler' THEN 50
                 WHEN ${columnRef} IN ('rd_cache', 'tb_cache') THEN 99
                 ELSE 10
               END`;
@@ -135,8 +137,8 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'manual_add' OR provider = 'vip')`;
+      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
       // Add % wildcards for partial matching (e.g., 'knaben' matches 'Knaben (1337x)')
       params.push(...providers.map(p => `%${p}%`));
     }
@@ -199,8 +201,8 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'manual_add' OR provider = 'vip')`;
+      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 
@@ -260,8 +262,8 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `t.provider ILIKE $${4 + i}`).join(' OR ');
-      // 🚀 MANUAl IMPORT & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR t.provider = 'manual_add' OR t.provider = 'vip')`;
+      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR t.provider = 'Custom' OR t.provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 

@@ -11440,11 +11440,11 @@ export default async function handler(req, res) {
                     if (hasFullIta) featureSuffix += '🇮🇹';
                     if (hasSkipIntro) featureSuffix += '⏩';
                     if (hasAnime && config.streamingcommunity_enabled === true) {
-                        featureSuffix += '⛩️🤌';
+                        featureSuffix += '⛩️🍿';
                     } else if (hasAnime) {
                         featureSuffix += '⛩️';
                     } else if (config.streamingcommunity_enabled === true) {
-                        featureSuffix += '🤌';
+                        featureSuffix += '🍿';
                     }
 
                     if (services.length > 0) {

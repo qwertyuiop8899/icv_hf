@@ -705,20 +705,20 @@
             <div class="service-card area-search">
                 <!-- ⚡ HYBRID MODE DEFAULT: Simple View -->
                 <div id="hybrid_simple_view">
-                    <div style="text-align: center; padding: 20px;">
-                        <div style="font-size: 4em; margin-bottom: 10px;">⚡</div>
-                        <div style="font-size: 1.2em; font-weight: bold; color: #c084fc; margin-bottom: 5px;">Modalità
+                    <div style="text-align: center; padding: 10px;">
+                        <div style="font-size: 2.5em; margin-bottom: 5px;">⚡</div>
+                        <div style="font-size: 1.1em; font-weight: bold; color: #c084fc; margin-bottom: 2px;">Modalità
                             Hybrid</div>
-                        <div style="font-size: 0.85em; color: #9ca3af; margin-bottom: 20px;">Risposta istantanea +
+                        <div style="font-size: 0.8em; color: #9ca3af; margin-bottom: 15px;">Risposta istantanea +
                             scraping in background</div>
 
                         <!-- Full ITA Toggle -->
                         <label
-                            style="display: flex; align-items: center; justify-content: center; padding: 15px 25px; background: rgba(0, 128, 0, 0.15); border: 2px solid rgba(0, 200, 83, 0.4); border-radius: 12px; cursor: pointer; max-width: 350px; margin: 0 auto;">
-                            <input type="checkbox" id="full_ita" style="width: 24px; height: 24px; margin-right: 12px;">
-                            <span style="font-size: 1.1em; font-weight: 600;">🇮🇹 FULL ITA</span>
+                            style="display: flex; align-items: center; justify-content: center; padding: 12px 20px; background: rgba(0, 128, 0, 0.15); border: 2px solid rgba(0, 200, 83, 0.4); border-radius: 12px; cursor: pointer; max-width: 320px; margin: 0 auto;">
+                            <input type="checkbox" id="full_ita" style="width: 20px; height: 20px; margin-right: 10px;">
+                            <span style="font-size: 1em; font-weight: 600;">🇮🇹 FULL ITA</span>
                         </label>
-                        <small style="display: block; margin-top: 8px; color: #6b7280;">Solo risultati con "ITA" nel
+                        <small style="display: block; margin-top: 6px; color: #6b7280;">Solo risultati con "ITA" nel
                             nome</small>
                     </div>
                 </div>
@@ -729,6 +729,31 @@
                         style="cursor: pointer; font-size: 0.8em; color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 5px 12px; border-radius: 20px; background: rgba(127, 29, 29, 0.1); transition: all 0.2s ease; display: inline-block;">
                         <input type="checkbox" id="use_old_style" style="vertical-align: middle; margin-right: 5px;">
                         <span style="vertical-align: middle;">⚙️ Old Style</span>
+                    </label>
+                </div>
+
+                <!-- NEW: Extra Features (Anime & StreamingCommunity) -->
+                <div class="section-title" style="margin-bottom: 10px;">Flussi HTTP &lt;/&gt;</div>
+                <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px; padding: 0 10px;">
+                    <!-- Anime Card -->
+                    <label
+                        style="display: flex; align-items: center; padding: 15px; background: rgba(20, 20, 40, 0.4); border: 2px solid rgba(147, 51, 234, 0.3); border-radius: 12px; cursor: pointer; transition: all 0.3s ease;">
+                        <input type="checkbox" id="anime_enabled" style="width: 24px; height: 24px; margin-right: 15px;">
+                        <div style="flex-grow: 1;">
+                            <div style="font-size: 1.1em; font-weight: bold; color: #ffffff;">⛩️ Anime</div>
+                            <div style="font-size: 0.85em; color: #9ca3af;">Catalogo ricerca Kitsu + stream anime</div>
+                        </div>
+                    </label>
+
+                    <!-- StreamingCommunity Card -->
+                    <label
+                        style="display: flex; align-items: center; padding: 15px; background: rgba(20, 20, 40, 0.4); border: 2px solid rgba(147, 51, 234, 0.3); border-radius: 12px; cursor: pointer; transition: all 0.3s ease;">
+                        <input type="checkbox" id="streamingcommunity_enabled"
+                            style="width: 24px; height: 24px; margin-right: 15px;">
+                        <div style="flex-grow: 1;">
+                            <div style="font-size: 1.1em; font-weight: bold; color: #ffffff;">📺 StreamingCommunity</div>
+                            <div style="font-size: 0.85em; color: #9ca3af;">Stream diretti per film e serie</div>
+                        </div>
                     </label>
                 </div>
 
@@ -949,26 +974,6 @@
                             </div>
                         </label>
 
-                        <!-- Anime -->
-                        <label
-                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                            <input type="checkbox" id="anime_enabled" style="margin-right: 10px;">
-                            <div>
-                                <div style="font-size: 0.95em; font-weight: bold;">⛩️ Anime</div>
-                                <small style="color: #9ca3af; font-size: 0.75em;">Catalogo ricerca Kitsu + stream anime</small>
-                            </div>
-                        </label>
-
-                        <!-- StreamingCommunity -->
-                        <label
-                            style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer;">
-                            <input type="checkbox" id="streamingcommunity_enabled" style="margin-right: 10px;">
-                            <div>
-                                <div style="font-size: 0.95em; font-weight: bold;">📺 StreamingCommunity</div>
-                                <small style="color: #9ca3af; font-size: 0.75em;">Stream diretti per film e serie</small>
-                            </div>
-                        </label>
-
                         <!-- Only Cached (Moved Here) -->
                         <label
                             style="display: flex; align-items: center; padding: 10px; background: rgba(10, 10, 26, 0.4); border-radius: 8px; border: 1px solid rgba(147, 51, 234, 0.2); cursor: pointer; margin-top: 10px;">
@@ -1077,7 +1082,7 @@
 
             <div class="button-group">
                 <button id="install_button" disabled>Installa Addon</button>
-                <span style="flex: 1; min-width: 200px; display: flex; justify-content: center; align-items: center;">
+                <span style="flex: 1.5; min-width: 250px; display: flex; justify-content: center; align-items: center; transform: scale(1.15);">
                     <script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
                     <script type='text/javascript'>kofiwidget2.init('Un Grog per noi 🍻', '#00b521', 'G2G41MG3ZN'); kofiwidget2.draw();</script>
                 </span>

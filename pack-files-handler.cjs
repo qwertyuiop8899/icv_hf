@@ -479,9 +479,10 @@ async function fetchFilesFromAnySource(infoHash, config) {
  * @param {Object} dbHelper - Modulo db-helper
  * @param {string} torrentTitle - Titolo del torrent (per inserire nella tabella torrents)
  * @param {number} totalPackSize - Dimensione totale del pack
+ * @param {string} originalProvider - Provider originale del torrent (es. 'torrentio', 'Torrentio (1337x)')
  * @returns {Promise<Array>} File processati
  */
-async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeason, dbHelper, torrentTitle = null, totalPackSize = 0) {
+async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeason, dbHelper, torrentTitle = null, totalPackSize = 0, originalProvider = null) {
     const videoFiles = files.filter(f => isVideoFile(f.path));
     const processedFiles = [];
 
@@ -518,12 +519,14 @@ async function processSeriesPackFiles(files, infoHash, seriesImdbId, targetSeaso
     }
 
     // 🔧 FIX: Insert parent torrent FIRST to satisfy FK constraint
+    // ✅ Use originalProvider if available, fallback to 'pack-handler'
     if (processedFiles.length > 0 && dbHelper && typeof dbHelper.insertTorrent === 'function' && torrentTitle) {
+        const providerToUse = originalProvider || 'pack-handler';
         try {
             await dbHelper.insertTorrent({
                 infoHash: infoHash.toLowerCase(),
                 title: torrentTitle,
-                provider: 'pack-handler',
+                provider: providerToUse,
                 size: totalPackSize || null,
                 type: 'series',
                 seeders: 0,
@@ -568,9 +571,10 @@ function findEpisodeFile(files, targetEpisode) {
  * @param {number} season - Stagione richiesta
  * @param {number} episode - Episodio richiesto
  * @param {Object} dbHelper - Modulo db-helper
+ * @param {string} originalProvider - Provider originale del torrent (preservato nel DB)
  * @returns {Promise<{fileIndex: number, fileName: string, fileSize: number, source: string}|null>}
  */
-async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, episode, dbHelper) {
+async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, episode, dbHelper, originalProvider = null) {
     if (DEBUG_MODE) console.log(`🎬 [PACK-HANDLER] Resolving S${season}E${episode} from pack ${infoHash.substring(0, 8)}...`);
 
     // Variable to track total pack size
@@ -685,8 +689,9 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
         seriesImdbId,
         season,
         dbHelper,
-        generatedTitle,  // torrentTitle
-        totalPackSize    // totalPackSize
+        generatedTitle,    // torrentTitle
+        totalPackSize,     // totalPackSize
+        originalProvider   // ✅ Preserve original provider
     );
 
     // 4. Cerca l'episodio richiesto

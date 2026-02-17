@@ -133,6 +133,34 @@ function extractOriginalProvider(text) {
 }
 
 /**
+ * Normalizza i provider Comet usando solo l'ultimo elemento della catena.
+ * Esempio: "Comet|Comet|TorBox|EXT Torrents" -> "EXT Torrents".
+ */
+function normalizeCometProvider(provider) {
+    if (!provider) return provider;
+    const parts = provider.split('|').map(part => part.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : provider.trim();
+}
+
+/**
+ * Usa il provider Comet solo se inizia con lettera maiuscola (A-Z).
+ */
+function isCometProviderCapitalized(provider) {
+    if (!provider) return false;
+    return /^[A-Z]/.test(provider);
+}
+
+/**
+ * Normalizza il provider MediaFusion per i Contribution Stream.
+ * Esempio: "Contribution Stream 🧑‍💻 Affolly" -> "Contribution Stream".
+ */
+function normalizeMediaFusionProvider(provider) {
+    if (!provider) return provider;
+    if (/^Contribution Stream\b/i.test(provider)) return 'Contribution Stream';
+    return provider;
+}
+
+/**
  * Estrae il pack title dal campo 📁 nel title/description o da behaviorHints.folderName
  * Questo è il nome della cartella/pack, NON il singolo file
  * ✅ FIX: Ignora folderName se è un filename (contiene estensione video)
@@ -265,7 +293,13 @@ function normalizeExternalStream(stream, addonKey) {
     const quality = extractQuality(stream.name || filename || text);
     const sizeInfo = extractSize(text);
     const seeders = extractSeeders(text);
-    const originalProvider = extractOriginalProvider(text);
+    let originalProvider = extractOriginalProvider(text);
+    if (addonKey === 'comet') {
+        const cometProvider = normalizeCometProvider(originalProvider || '');
+        originalProvider = isCometProviderCapitalized(cometProvider) ? cometProvider : null;
+    } else if (addonKey === 'mediafusion') {
+        originalProvider = normalizeMediaFusionProvider(originalProvider || null);
+    }
 
     // Estrai dimensione da behaviorHints se disponibile
     let sizeBytes = sizeInfo.bytes;

@@ -1,6 +1,6 @@
 /**
  * PACK FILES HANDLER
- * Gestisce l'estrazione dei file da pack (stagioni serie, trilogie film)
+ * Gestisce l'estrazione dei file da pack (stagioni serie, trilogie film) 
  * usando le API Debrid per ottenere la lista file e salvarla nel DB
  * 
  * Flusso:

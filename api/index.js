@@ -1415,7 +1415,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             },
             addon: {
                 name: 'IlCorsaroViola',
-                version: '7.3.3',
+                version: '7.4.0',
                 presetId: preset,
                 manifestUrl: null
             },
@@ -7632,6 +7632,19 @@ async function handleStream(type, id, config, workerOrigin) {
                     const episodeNum = parseInt(episode);
 
                     filteredDbResults = dbResults.filter(dbResult => {
+                        const providerName = (dbResult.provider || '').toLowerCase();
+                        const isCustomManual = providerName.includes('custom manual');
+
+                        // 🐞 DEBUG: Log provider for ALL Custom torrents to diagnose bypass
+                        if (DEBUG_MODE && (providerName.includes('custom') || dbResult.info_hash.startsWith('9e89e8fb'))) {
+                            console.log(`  🐞 [DB DEBUG] hash=${dbResult.info_hash.substring(0, 8)} provider="${dbResult.provider}" providerName="${providerName}" isCustomManual=${isCustomManual}`);
+                        }
+
+                        if (isCustomManual) {
+                            if (DEBUG_MODE) console.log(`  ✅ [DB] Keeping Custom Manual: ${dbResult.info_hash.substring(0, 8)}`);
+                            return true;
+                        }
+
                         // Handle different result formats: searchEpisodeFiles uses torrent_title, others use title
                         const torrentTitle = dbResult.torrent_title || dbResult.title;
                         // TRUST ID MATCH: If torrent has correct IMDB ID, skip title check
@@ -7650,7 +7663,7 @@ async function handleStream(type, id, config, workerOrigin) {
 
                         // DEBUG: Log rejected torrents
                         if (!match) {
-                            if (DEBUG_MODE) console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}"`);
+                            if (DEBUG_MODE) console.log(`  ❌ REJECTED: ${dbResult.info_hash.substring(0, 8)} - "${torrentTitle.substring(0, 70)}" [provider: ${dbResult.provider || 'N/A'}]`);
                         }
 
                         return match;
@@ -7705,6 +7718,22 @@ async function handleStream(type, id, config, workerOrigin) {
                         const torrentTitle = dbResult.torrent_title || dbResult.title;
                         const hasFileIndex = dbResult.file_index !== null && dbResult.file_index !== undefined;
                         const isPack = packFilesHandler.isSeasonPack(torrentTitle);
+                        const providerName = (dbResult.provider || '').toLowerCase();
+                        const isCustomManual = providerName.includes('custom manual');
+
+                        // ✅ CUSTOM MANUAL: Skip pack verification entirely (manual mapping should not be filtered)
+                        if (isCustomManual) {
+                            nonPacks.push(dbResult);
+                            continue;
+                        }
+
+                        // ✅ NEGATIVE CACHE: If DB says is_torrent_pack === false, skip it entirely
+                        // This prevents perpetual re-verification of packs with unrecognizable files (DVD5, Kig64.mp4, etc.)
+                        if (dbResult.is_torrent_pack === false) {
+                            if (DEBUG_MODE) console.log(`⏭️ [PACK VERIFY] Skip ${dbResult.info_hash.substring(0, 8)}: DB says is_torrent_pack=false`);
+                            nonPacks.push(dbResult);
+                            continue;
+                        }
 
                         if (!isPack) {
                             nonPacks.push(dbResult);
@@ -7769,15 +7798,27 @@ async function handleStream(type, id, config, workerOrigin) {
                                     dbResult.provider  // ✅ Preserve original provider
                                 );
 
-                                if (fileInfo) {
+                                if (fileInfo && !fileInfo.emptyPack) {
                                     if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
                                     dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                                     dbResult.file_index = fileInfo.fileIndex;
                                     dbResult.file_title = fileInfo.fileName;
                                     dbResult.file_size = fileInfo.fileSize;
                                     newlyVerified.push(dbResult);
+                                } else if (fileInfo && fileInfo.emptyPack) {
+                                    // ✅ Pack con 0 episodi riconosciuti (DVD5, Kig64.mp4, etc.) → mark as NOT a pack permanently
+                                    if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but 0 recognized episodes - marking is_torrent_pack=false`);
+                                    try {
+                                        if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
+                                            await dbHelper.updateIsTorrentPack(dbResult.info_hash, false);
+                                        }
+                                    } catch (saveErr) {
+                                        console.warn(`⚠️ [PACK VERIFY] Failed to save negative cache: ${saveErr.message}`);
+                                    }
+                                    excluded.push(dbResult);
                                 } else {
-                                    if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING`);
+                                    // null = pack valido ma episodio non presente (potrebbe arrivare dopo)
+                                    if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] Cache HIT but E${episodeNum} NOT in pack - EXCLUDING (pack still valid)`);
                                     excluded.push(dbResult);
                                 }
                             } else {
@@ -7816,15 +7857,29 @@ async function handleStream(type, id, config, workerOrigin) {
                                 dbResult.provider  // ✅ Preserve original provider
                             );
 
-                            if (fileInfo) {
+                            if (fileInfo && !fileInfo.emptyPack) {
                                 if (DEBUG_MODE) console.log(`✅ [PACK VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 dbResult.packSize = fileInfo.totalPackSize || dbResult.torrent_size || dbResult.size;
                                 dbResult.file_index = fileInfo.fileIndex;
                                 dbResult.file_title = fileInfo.fileName;
                                 dbResult.file_size = fileInfo.fileSize;
                                 newlyVerified.push(dbResult);
+                            } else if (fileInfo && fileInfo.emptyPack) {
+                                // ✅ Pack con 0 episodi riconosciuti (DVD5, Kig64.mp4, VIDEO_TS, etc.)
+                                // Mark as NOT a pack permanently → won't be re-verified ever
+                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] 0 recognized episodes - marking is_torrent_pack=false for ${dbResult.info_hash.substring(0, 8)}`);
+                                try {
+                                    if (dbHelper && typeof dbHelper.updateIsTorrentPack === 'function') {
+                                        await dbHelper.updateIsTorrentPack(dbResult.info_hash, false);
+                                        if (DEBUG_MODE) console.log(`💾 [PACK VERIFY] Saved is_torrent_pack=false for ${dbResult.info_hash.substring(0, 8)}`);
+                                    }
+                                } catch (saveErr) {
+                                    console.warn(`⚠️ [PACK VERIFY] Failed to save negative cache: ${saveErr.message}`);
+                                }
+                                excluded.push(dbResult);
                             } else {
-                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING`);
+                                // null = pack valido con episodi, ma l'episodio richiesto non c'è (potrebbe arrivare dopo)
+                                if (DEBUG_MODE) console.log(`❌ [PACK VERIFY] E${episodeNum} NOT in pack - EXCLUDING (pack still valid, may get episode later)`);
                                 excluded.push(dbResult);
                             }
                         } catch (err) {
@@ -8236,10 +8291,15 @@ async function handleStream(type, id, config, workerOrigin) {
 
                 // 🎯 EPISODE FILTER: For series, filter out results that don't match the requested episode
                 if (type === 'series' && season && episode) {
+                    const sourceLabel = (result.source || result.provider || '').toLowerCase();
+                    if (sourceLabel.includes('custom manual')) {
+                        if (DEBUG_MODE) console.log(`✅ [Dedup] Custom Manual bypass: ${result.title}`);
+                    } else {
                     // Pass expected titles to also validate series name
                     const expectedTitles = mediaDetails.titles || [mediaDetails.title];
                     if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
                         continue; // Skip this result
+                    }
                     }
                 }
 
@@ -8508,6 +8568,11 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (DEBUG_MODE) console.log(`📺 [Episode Filtering] Starting with ${originalCount} results for ${displayEpisode}`);
 
                 filteredResults = filteredResults.filter(result => {
+                    const sourceLabel = (result.source || result.provider || '').toLowerCase();
+                    if (sourceLabel.includes('custom manual')) {
+                        if (DEBUG_MODE) console.log(`✅ [Episode Filtering] Custom Manual: "${result.title}"`);
+                        return true;
+                    }
                     // For Kitsu anime, we need to check BOTH:
                     // 1. Absolute episode number (141) - primary for anime with absolute numbering like One Piece
                     // 2. Season/Episode format (S03E01) - fallback for season-based packs
@@ -8630,7 +8695,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                     result.source || result.externalAddon  // ✅ Preserve original provider
                                 );
 
-                                if (fileInfo) {
+                                if (fileInfo && !fileInfo.emptyPack) {
                                     if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Cache HIT & Verified E${episodeNum}: ${fileInfo.fileName}`);
                                     result.packSize = fileInfo.totalPackSize || result.sizeInBytes || 0;
                                     result.file_size = fileInfo.fileSize;
@@ -8681,7 +8746,7 @@ async function handleStream(type, id, config, workerOrigin) {
                                 result.source || result.externalAddon  // ✅ Preserve original provider
                             );
 
-                            if (fileInfo) {
+                            if (fileInfo && !fileInfo.emptyPack) {
                                 if (DEBUG_MODE) console.log(`✅ [SCRAPE VERIFY] Verified E${episodeNum}: ${fileInfo.fileName}`);
                                 result.packSize = fileInfo.totalPackSize || originalPackSize;
                                 result.file_size = fileInfo.fileSize;
@@ -9179,6 +9244,8 @@ async function handleStream(type, id, config, workerOrigin) {
             // This ensures we don't discard English S02 just because we found Italian S01.
             if (filteredResults.length > 0) {
                 const hasItalianResults = filteredResults.some(r => {
+                    const sourceLabel = (r.source || r.provider || '').toLowerCase();
+                    if (sourceLabel.includes('custom manual')) return true;
                     // 📦 For pack files with fileIndex, check file_title AND pack title
                     const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
                         ? r.file_title
@@ -9196,6 +9263,8 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (hasItalianResults) {
                     const originalCount = filteredResults.length;
                     const italianOnly = filteredResults.filter(r => {
+                        const sourceLabel = (r.source || r.provider || '').toLowerCase();
+                        if (sourceLabel.includes('custom manual')) return true;
                         const titleForLang = (r.fileIndex !== undefined && r.fileIndex !== null && r.file_title)
                             ? r.file_title
                             : r.title;
@@ -9240,7 +9309,12 @@ async function handleStream(type, id, config, workerOrigin) {
                     // Given the explicit request "non metterli nel db", I will flag them 'doNotSave'.
 
                     console.log(`🌍 [Lang Filter] No Italian results. Marking ${filteredResults.length} results as 'skip_db_save'.`);
-                    filteredResults.forEach(r => r.skipDbSave = true);
+                    filteredResults.forEach(r => {
+                        const sourceLabel = (r.source || r.provider || '').toLowerCase();
+                        if (!sourceLabel.includes('custom manual')) {
+                            r.skipDbSave = true;
+                        }
+                    });
                 }
             }
 
@@ -11473,7 +11547,7 @@ export default async function handler(req, res) {
 
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '7.3.3',
+                version: '7.4.0',
                 name: addonName,
                 description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
@@ -13891,7 +13965,7 @@ export default async function handler(req, res) {
             const health = {
                 status: 'OK',
                 addon: 'IlCorsaroViola',
-                version: '7.3.3',
+                version: '7.4.0',
                 uptime: Date.now(),
                 cache: {
                     entries: cache.size,

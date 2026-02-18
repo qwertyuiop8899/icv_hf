@@ -1,6 +1,6 @@
 /**
  * PACK FILES HANDLER
- * Gestisce l'estrazione dei file da pack (stagioni serie, trilogie film) 
+ * Gestisce l'estrazione dei file da pack (stagioni serie, trilogie film)
  * usando le API Debrid per ottenere la lista file e salvarla nel DB
  * 
  * Flusso:
@@ -607,6 +607,29 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
                         totalPackSize
                     };
                 } else {
+                    // ✅ FALLBACK: if pattern parsing failed, use DB imdb_season/imdb_episode -> title
+                    // then exact filename match in cached file list
+                    if (typeof dbHelper.getEpisodeTitle === 'function') {
+                        try {
+                            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+                            if (dbTitle) {
+                                const exactCachedFile = cachedFiles.find(f => (f.path || '').split('/').pop() === dbTitle);
+                                if (exactCachedFile) {
+                                    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Cache DB fallback matched: ${dbTitle} (idx=${exactCachedFile.id})`);
+                                    return {
+                                        fileIndex: exactCachedFile.id,
+                                        fileName: dbTitle,
+                                        fileSize: exactCachedFile.bytes || 0,
+                                        source: "DB_CACHE_IMDB",
+                                        totalPackSize
+                                    };
+                                }
+                            }
+                        } catch (e) {
+                            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Cache DB fallback failed: ${e.message}`);
+                        }
+                    }
+
                     // Cache Miss: Pack is indexed but S${season}E${episode} not found.
                     // ✅ FIX: Check if it's a multi-season pack (e.g. S01-S10) or Complete Series
                     // If so, the DB cache might be partial/incomplete. We should TRY external lookup!
@@ -695,7 +718,28 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     );
 
     // 4. Cerca l'episodio richiesto
-    const targetFile = findEpisodeFile(processedFiles, episode);
+    let targetFile = findEpisodeFile(processedFiles, episode);
+
+    // ✅ FALLBACK: if filename parsing fails (e.g. HNK 001), use DB imdb_season/imdb_episode title
+    // and exact filename match against provider file list
+    if (!targetFile && dbHelper && typeof dbHelper.getEpisodeTitle === 'function') {
+        try {
+            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+            if (dbTitle) {
+                const exactFile = fetchedData.files.find(f => (f.path || '').split('/').pop() === dbTitle);
+                if (exactFile) {
+                    targetFile = {
+                        file_index: exactFile.id,
+                        title: dbTitle,
+                        size: exactFile.bytes || 0
+                    };
+                    if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Debrid DB fallback matched: ${dbTitle} (idx=${exactFile.id})`);
+                }
+            }
+        } catch (e) {
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] Debrid DB fallback failed: ${e.message}`);
+        }
+    }
 
     if (!targetFile) {
         if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes for S${season})`);

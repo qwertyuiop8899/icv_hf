@@ -698,10 +698,26 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
     const targetFile = findEpisodeFile(processedFiles, episode);
 
     if (!targetFile) {
-        if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes)`);
+        if (DEBUG_MODE) console.log(`❌ [PACK-HANDLER] Episode ${episode} NOT FOUND in pack (pack has ${processedFiles.length} episodes for S${season})`);
         // ✅ ANTI-LOOP: Record that we did an external lookup and episode wasn't found
         _multiSeasonLookupCache.set(`${infoHash}_S${season}E${episode}`, Date.now());
-        return null;  // ❌ Episodio non esiste nel pack - NESSUN FALLBACK
+        // ✅ Return special marker ONLY when pack is truly unreadable (no parseable episodes in ANY season)
+        // This allows the caller to mark is_torrent_pack=false ONLY for broken packs (DVD5, Kig64.mp4, etc.)
+        if (processedFiles.length === 0) {
+            // ✅ FIX: Before marking as unreadable, check if ANY file has parseable season/episode
+            // A pack with S02 episodes shouldn't be marked false just because user searched S01
+            const allVideoFiles = fetchedData.files.filter(f => isVideoFile(f.path) && f.bytes >= 25 * 1024 * 1024);
+            const anyParseable = allVideoFiles.some(f => {
+                const filename = f.path.split('/').pop();
+                return parseSeasonEpisode(filename) !== null;
+            });
+            if (!anyParseable) {
+                if (DEBUG_MODE) console.log(`🚫 [PACK-HANDLER] 0 parseable episodes in ANY season → truly unreadable pack`);
+                return { emptyPack: true, processedCount: 0 };  // ❌ Pack totalmente non interpretabile
+            }
+            if (DEBUG_MODE) console.log(`⚠️ [PACK-HANDLER] 0 episodes for S${season} but pack has parseable files for other seasons → pack still valid`);
+        }
+        return null;  // ❌ Episodio non presente ma pack valido (potrebbe arrivare dopo)
     }
 
     if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Found E${episode}: ${targetFile.title} (${(targetFile.size / 1024 / 1024 / 1024).toFixed(2)} GB), pack total: ${(totalPackSize / 1024 / 1024 / 1024).toFixed(2)} GB`);

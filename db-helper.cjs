@@ -2185,6 +2185,28 @@ async function updateTorrentProvider(infoHash, provider) {
   }
 }
 
+/**
+ * Get the title (filename) for a specific episode from the files table
+ * Used by rd-stream as fallback when pattern matching fails (e.g. "HNK 001...mkv" not recognized)
+ * The DB already has imdb_season/imdb_episode from manual imports, so we just look up the filename
+ * @param {string} infoHash
+ * @param {number} season
+ * @param {number} episode
+ * @returns {Promise<string|null>}
+ */
+async function getEpisodeTitle(infoHash, season, episode) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      'SELECT title FROM files WHERE info_hash = $1 AND imdb_season = $2 AND imdb_episode = $3 LIMIT 1',
+      [infoHash.toLowerCase(), season, episode]
+    );
+    return result.rows.length > 0 ? result.rows[0].title : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   initDatabase,
   getTorrent,
@@ -2214,6 +2236,7 @@ module.exports = {
   getPackFiles,
   getSeriesPackFiles,
   insertEpisodeFiles,
+  getEpisodeTitle,
   closeDatabase,
   searchFilesByTitle,
   deletePackFilesCache,

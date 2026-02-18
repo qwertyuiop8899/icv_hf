@@ -6,7 +6,7 @@
  * Flusso:
  * 1. Cerca file nel DB (tabella files per serie, pack_files per film)
  * 2. Se non trovato, chiama API Debrid per ottenere file list
- * 3. Parsa nomi file per estrarre stagione/episodio
+ * 3. Parsa nomi file per estrarre stagione/episodio 
  * 4. Salva nel DB per usi futuri
  * 5. Ritorna file specifico richiesto con dimensione singola
  */

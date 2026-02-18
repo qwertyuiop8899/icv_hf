@@ -1415,7 +1415,7 @@ function applyCustomFormatter(stream, result, userConfig, serviceName = 'RD', is
             },
             addon: {
                 name: 'IlCorsaroViola',
-                version: '7.4.0',
+                version: '7.3.3',
                 presetId: preset,
                 manifestUrl: null
             },
@@ -11547,7 +11547,7 @@ export default async function handler(req, res) {
 
             const manifest = {
                 id: 'community.ilcorsaroviola.ita',
-                version: '7.4.0',
+                version: '7.3.3',
                 name: addonName,
                 description: 'Streaming da UIndex, CorsaroNero DB local, Knaben e Jackettio con o senza Real-Debrid, Torbox e Alldebrid.',
                 logo: 'https://i.imgur.com/kZK4KKS.png',
@@ -11786,6 +11786,21 @@ export default async function handler(req, res) {
                 const infoHash = extractInfoHash(magnetLink);
                 if (!infoHash) throw new Error('Magnet link non valido o senza info hash.');
 
+                // Detect provider for this hash to customize episode selection order
+                // Custom Manual: DB fallback first (imdb season/episode) -> pattern
+                // Others: pattern first -> DB fallback
+                let isCustomManualProvider = false;
+                if (dbEnabled && typeof dbHelper.getTorrent === 'function') {
+                    try {
+                        const torrentMeta = await dbHelper.getTorrent(infoHash);
+                        const providerName = (torrentMeta?.provider || '').toLowerCase();
+                        isCustomManualProvider = providerName.includes('custom manual');
+                        if (isCustomManualProvider) {
+                            console.log(`[RealDebrid] 🧭 Provider=Custom Manual for ${infoHash.substring(0, 8)}... using DB-first episode selection`);
+                        }
+                    } catch (_) { /* ignore */ }
+                }
+
                 const realdebrid = new RealDebrid(userConfig.rd_key);
 
                 console.log(`[RealDebrid] Resolving ${infoHash}`);
@@ -11933,6 +11948,19 @@ export default async function handler(req, res) {
                     }
 
                     // ✅ PRIORITY 2: For series episodes, use pattern matching to find the correct file
+                    if (!targetFile && season && episode && isCustomManualProvider && dbEnabled) {
+                        try {
+                            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+                            if (dbTitle) {
+                                targetFile = videoFiles.find(f => f.path.split('/').pop() === dbTitle);
+                                if (targetFile) {
+                                    console.log(`[RealDebrid] ✅ Custom Manual DB-first matched: ${targetFile.path}`);
+                                }
+                            }
+                        } catch (e) { /* ignore */ }
+                    }
+
+                    // ✅ PRIORITY 2: For series episodes, use pattern matching to find the correct file
                     if (!targetFile && season && episode) {
                         const seasonStr = String(season).padStart(2, '0');
                         const episodeStr = String(episode).padStart(2, '0');
@@ -11988,6 +12016,21 @@ export default async function handler(req, res) {
                             console.log(`[RealDebrid] ❌ NO MATCH FOUND - Pattern matching failed for S${seasonStr}E${episodeStr}`);
                             console.log(`[RealDebrid] ⚠️ Falling back to largest file (this is probably wrong!)`);
                         }
+                    }
+
+                    // ✅ PRIORITY 2.5: DB title fallback (for manual imports with non-standard filenames)
+                    // e.g. "HNK 001...mkv" gets misidentified by the numeric fallback [^0-9]101[^0-9]
+                    // The DB already has imdb_season/imdb_episode from manual import → lookup exact filename
+                    if (!targetFile && dbEnabled && season && episode && !isCustomManualProvider) {
+                        try {
+                            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+                            if (dbTitle) {
+                                targetFile = videoFiles.find(f => f.path.split('/').pop() === dbTitle);
+                                if (targetFile) {
+                                    console.log(`[RealDebrid] ✅ DB filename fallback matched: ${targetFile.path}`);
+                                }
+                            }
+                        } catch (e) { /* ignore */ }
                     }
 
                     // ✅ PRIORITY 3: Fallback - use largest file
@@ -12116,6 +12159,18 @@ export default async function handler(req, res) {
                         } else {
                             console.log(`[RealDebrid] ❌ No file found with id=${packFileIdx}! Available ids: ${allVideoFilesForPack.map(f => f.id).join(', ')}`);
                         }
+                    }
+
+                    if (!targetFile && season && episode && isCustomManualProvider && dbEnabled) {
+                        try {
+                            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+                            if (dbTitle) {
+                                targetFile = videos.find(f => f.path.split('/').pop() === dbTitle);
+                                if (targetFile) {
+                                    console.log(`[RealDebrid] ✅ Custom Manual DB-first matched: ${targetFile.path}`);
+                                }
+                            }
+                        } catch (e) { /* ignore */ }
                     }
 
                     // ✅ PRIORITY 2: For series episodes, use pattern matching to find the correct file
@@ -12289,6 +12344,21 @@ export default async function handler(req, res) {
                                 }
                             }
                         }
+                    }
+
+                    // ✅ PRIORITY 2.5: DB title fallback (for manual imports with non-standard filenames)
+                    // e.g. "HNK 001...mkv" gets misidentified by the numeric fallback [^0-9]101[^0-9]
+                    // The DB already has imdb_season/imdb_episode from manual import → lookup exact filename
+                    if (!targetFile && dbEnabled && season && episode && !isCustomManualProvider) {
+                        try {
+                            const dbTitle = await dbHelper.getEpisodeTitle(infoHash, season, episode);
+                            if (dbTitle) {
+                                targetFile = videos.find(f => f.path.split('/').pop() === dbTitle);
+                                if (targetFile) {
+                                    console.log(`[RealDebrid] ✅ DB filename fallback matched: ${targetFile.path}`);
+                                }
+                            }
+                        } catch (e) { /* ignore */ }
                     }
 
                     // ✅ PRIORITY 3: Fallback - use largest file
@@ -13965,7 +14035,7 @@ export default async function handler(req, res) {
             const health = {
                 status: 'OK',
                 addon: 'IlCorsaroViola',
-                version: '7.4.0',
+                version: '7.3.3',
                 uptime: Date.now(),
                 cache: {
                     entries: cache.size,

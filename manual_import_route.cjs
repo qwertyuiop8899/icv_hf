@@ -527,7 +527,7 @@ router.get('/', (req, res) => {
 
         .container {
             width: 100%;
-            max-width: 580px;
+            max-width: 960px;
             margin: 20px;
             padding: 50px;
             background: var(--card-bg);
@@ -753,6 +753,103 @@ router.get('/', (req, res) => {
             transition: all 0.2s;
         }
         .check-btn:hover { background: rgba(168, 85, 247, 0.4); }
+
+        .mapping-section {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 18px;
+            border: 1px solid rgba(6, 182, 212, 0.25);
+            background: rgba(2, 6, 23, 0.6);
+            box-shadow: 0 0 25px rgba(6, 182, 212, 0.08);
+        }
+
+        .mapping-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.5px;
+            margin-bottom: 14px;
+            color: #e2e8f0;
+        }
+
+        .mapping-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .mapping-controls select {
+            flex: 1;
+            min-width: 140px;
+        }
+
+        .mapping-status {
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+
+        .mapping-table {
+            width: 100%;
+            display: grid;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .mapping-row {
+            display: grid;
+            grid-template-columns: 70px 1fr 1.2fr;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .mapping-row strong {
+            color: #f8fafc;
+            font-size: 0.9rem;
+        }
+
+        .mapping-row span {
+            color: #cbd5e1;
+            font-size: 0.85rem;
+        }
+
+        .mapping-select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(2, 6, 23, 0.6);
+            color: #f8fafc;
+            font-size: 0.85rem;
+        }
+
+        .btn-small {
+            width: auto;
+            padding: 12px 16px;
+            font-size: 0.85rem;
+            border-radius: 12px;
+        }
+
+        /* Responsive: schermi piccoli */
+        @media (max-width: 640px) {
+            .container {
+                margin: 10px;
+                padding: 24px;
+                border-radius: 20px;
+            }
+            h1 { font-size: 2rem; }
+        }
+
+        @media (min-width: 641px) and (max-width: 1024px) {
+            .container {
+                max-width: 90%;
+                padding: 36px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -853,8 +950,24 @@ router.get('/', (req, res) => {
             <input type="number" id="seeders" placeholder="Lascia vuoto per auto-check">
         </div>
 
-        <button id="submitBtn" class="btn-glow pulse-active" disabled style="opacity: 0.5; cursor: not-allowed;">Avvia Importazione</button>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <button id="submitBtn" class="btn-glow pulse-active" disabled style="opacity: 0.5; cursor: not-allowed;">Avvia Importazione</button>
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0; font-size: 0.75rem; letter-spacing: 0.5px; text-transform: uppercase; color: #cbd5e1;">
+                <input type="checkbox" id="manualMapToggle" style="width: 18px; height: 18px;"> Mappatura Manuale Serie
+            </label>
+        </div>
         <div id="result"></div>
+        <div id="mappingSection" class="mapping-section" style="display: none;">
+            <div class="mapping-title">Mappatura Episodi (TMDB)</div>
+            <div class="mapping-controls">
+                <button id="autoMatchBtn" type="button" class="btn-glow btn-small">AutoMatch</button>
+                <select id="seasonSelect"></select>
+                <select id="episodeSelect"></select>
+                <div id="mappingStatus" class="mapping-status">Seleziona una stagione per iniziare.</div>
+            </div>
+            <div id="episodesTable" class="mapping-table"></div>
+            <button id="saveMappingBtn" class="btn-glow" disabled>Salva Mappatura</button>
+        </div>
         <div id="debug">In attesa...</div>
     </div>
 
@@ -937,10 +1050,31 @@ router.get('/', (req, res) => {
         const previewDiv = document.getElementById('metaPreview');
         const submitBtn = document.getElementById('submitBtn');
         const checkBtn = document.getElementById('checkBtn');
+        const mappingSection = document.getElementById('mappingSection');
+        const seasonSelect = document.getElementById('seasonSelect');
+        const episodeSelect = document.getElementById('episodeSelect');
+        const episodesTable = document.getElementById('episodesTable');
+        const mappingStatus = document.getElementById('mappingStatus');
+        const autoMatchBtn = document.getElementById('autoMatchBtn');
+        const saveMappingBtn = document.getElementById('saveMappingBtn');
+        const manualMapToggle = document.getElementById('manualMapToggle');
 
         // Initial validation state
         let isValidated = false;
         let currentTmdbId = null; // Store detected TMDB ID
+        let lastImport = null;
+        let currentEpisodes = [];
+        let pendingPreview = null; // ✅ Stores preview data when manual mapping (torrent NOT yet imported)
+        let mappingSelections = new Map(); // key: "season-episode" -> fileId
+
+        // ✅ Update button text based on manual mapping toggle
+        function updateSubmitButtonText() {
+            if (manualMapToggle.checked && typeSelect.value === 'series') {
+                submitBtn.innerText = 'Inizia Collegamento Puntate';
+            } else {
+                submitBtn.innerText = 'Avvia Importazione';
+            }
+        }
 
         // Reset validation on input change
         imdbInput.addEventListener('input', () => {
@@ -1087,6 +1221,7 @@ router.get('/', (req, res) => {
              }
              checkPackMode();
              validateDebridKeys(); // Validate keys on type change too
+             updateSubmitButtonText();
         });
 
         // Validation for Debrid Keys
@@ -1116,10 +1251,342 @@ router.get('/', (req, res) => {
             return true;
         }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+            const value = bytes / Math.pow(1024, index);
+            return \`\${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} \${units[index]}\`;
+        }
+
+        function setMappingStatus(text, isError = false) {
+            mappingStatus.textContent = text;
+            mappingStatus.style.color = isError ? '#fca5a5' : '#94a3b8';
+        }
+
+        function updateSaveButtonState() {
+            const hasSelection = [...mappingSelections.values()].some(value => value);
+            saveMappingBtn.disabled = !hasSelection;
+            saveMappingBtn.style.opacity = hasSelection ? '1' : '0.5';
+            saveMappingBtn.style.cursor = hasSelection ? 'pointer' : 'not-allowed';
+        }
+
+        function getMappingKey(seasonNumber, episodeNumber) {
+            return \`\${seasonNumber}-\${episodeNumber}\`;
+        }
+
+        function buildFileOptions(selectedId) {
+            const files = lastImport?.videoFiles || [];
+            const sorted = [...files].sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
+            const options = ['<option value="">-- Non assegnato --</option>'];
+            const usedFileIds = new Set(
+                [...mappingSelections.values()]
+                    .filter(value => value !== null && value !== undefined && value !== '')
+                    .map(value => String(value))
+            );
+
+            for (const file of sorted) {
+                const label = \`\${file.filename} (\${formatBytes(file.bytes || 0)})\`;
+                const fileId = String(file.id);
+                if (usedFileIds.has(fileId) && String(selectedId) !== fileId) continue;
+                const selected = fileId === String(selectedId) ? ' selected' : '';
+                options.push(\`<option value="\${file.id}"\${selected}>\${escapeHtml(label)}<\/option>\`);
+            }
+
+            return options.join('');
+        }
+
+        function renderEpisodes(episodes, seasonNumber) {
+            if (!episodes || episodes.length === 0) {
+                episodesTable.innerHTML = '<div style="color:#94a3b8; padding:10px 0;">Nessun episodio trovato.</div>';
+                updateSaveButtonState();
+                return;
+            }
+
+            const parsedMap = new Map();
+            for (const file of lastImport?.videoFiles || []) {
+                if (file.parsedSeason && file.parsedEpisode) {
+                    const key = \`\${file.parsedSeason}-\${file.parsedEpisode}\`;
+                    if (!parsedMap.has(key)) parsedMap.set(key, file.id);
+                }
+            }
+
+            const sNum = String(seasonNumber).padStart(2, '0');
+            episodesTable.innerHTML = episodes.map(ep => {
+                const key = getMappingKey(seasonNumber, ep.episode_number);
+                let preselected = mappingSelections.get(key);
+                if (!preselected) {
+                    preselected = parsedMap.get(key) || '';
+                    if (preselected) {
+                        mappingSelections.set(key, String(preselected));
+                    }
+                }
+                return \`
+                    <div class="mapping-row" data-episode="\${ep.episode_number}">
+                        <strong>S\${sNum}E\${String(ep.episode_number).padStart(2, '0')}</strong>
+                        <span>\${escapeHtml(ep.name || '')}</span>
+                        <select class="mapping-select">\${buildFileOptions(preselected)}</select>
+                    </div>
+                \`;
+            }).join('');
+
+            updateSaveButtonState();
+        }
+
+        function updateEpisodeSelect() {
+            const sNum = String(seasonSelect.value).padStart(2, '0');
+            const options = ['<option value="">Tutti gli episodi</option>'];
+            for (const ep of currentEpisodes) {
+                options.push(\`<option value="\${ep.episode_number}">S\${sNum}E\${String(ep.episode_number).padStart(2, '0')}</option>\`);
+            }
+            episodeSelect.innerHTML = options.join('');
+        }
+
+        async function loadSeasons(tmdbId) {
+            seasonSelect.innerHTML = '<option>Caricamento stagioni...</option>';
+            try {
+                const res = await fetch(\`/scrape/tmdb/seasons?tmdbId=\${tmdbId}\`);
+                const data = await res.json();
+                const seasons = (data.seasons || []).filter(s => s.season_number !== null && s.season_number !== undefined);
+
+                if (!seasons.length) {
+                    seasonSelect.innerHTML = '<option>Nessuna stagione</option>';
+                    setMappingStatus('Nessuna stagione disponibile su TMDB.', true);
+                    return;
+                }
+
+                seasonSelect.innerHTML = seasons.map(s =>
+                    \`<option value="\${s.season_number}">Stagione \${s.season_number} \u2014 \${escapeHtml(s.name)} (\${s.episode_count || 0} ep)</option>\`
+                ).join('');
+
+                await loadSeasonEpisodes(seasonSelect.value, tmdbId);
+            } catch (e) {
+                seasonSelect.innerHTML = '<option>Errore TMDB</option>';
+                setMappingStatus('Errore durante il caricamento stagioni.', true);
+            }
+        }
+
+        async function loadSeasonEpisodes(seasonNumber, tmdbId) {
+            setMappingStatus('Caricamento episodi...');
+            episodesTable.innerHTML = '';
+            try {
+                const res = await fetch(\`/scrape/tmdb/season?tmdbId=\${tmdbId}&season=\${seasonNumber}\`);
+                const data = await res.json();
+                currentEpisodes = data.episodes || [];
+                renderEpisodes(currentEpisodes, parseInt(seasonNumber, 10));
+                updateEpisodeSelect();
+                setMappingStatus(\`Stagione \${seasonNumber} caricata. Seleziona i file.\`);
+            } catch (e) {
+                setMappingStatus('Errore durante il caricamento episodi.', true);
+            }
+        }
+
+        async function initMappingUI(payload) {
+            if (!payload || !payload.infoHash || !payload.videoFiles) return;
+
+            const tmdbId = payload.tmdbId;
+            if (!tmdbId) {
+                mappingSection.style.display = 'block';
+                setMappingStatus('TMDB ID non disponibile. Verifica la scheda metadata.', true);
+                return;
+            }
+
+            lastImport = payload;
+            mappingSection.style.display = 'block';
+            await loadSeasons(tmdbId);
+        }
+
         // Add listeners for keys
         document.getElementById('rdKey').addEventListener('input', validateDebridKeys);
         document.getElementById('tbKey').addEventListener('input', validateDebridKeys);
         modeSelector.addEventListener('change', validateDebridKeys);
+
+        episodesTable.addEventListener('change', (event) => {
+            if (event.target && event.target.classList.contains('mapping-select')) {
+                const row = event.target.closest('.mapping-row');
+                const episodeNumber = parseInt(row?.dataset?.episode, 10);
+                const seasonNumber = parseInt(seasonSelect.value, 10);
+                if (!Number.isNaN(seasonNumber) && !Number.isNaN(episodeNumber)) {
+                    const key = getMappingKey(seasonNumber, episodeNumber);
+                    if (event.target.value) {
+                        mappingSelections.set(key, String(event.target.value));
+                    } else {
+                        mappingSelections.delete(key);
+                    }
+                    renderEpisodes(currentEpisodes, seasonNumber);
+                }
+                updateSaveButtonState();
+            }
+        });
+
+        manualMapToggle.addEventListener('change', () => {
+            if (!manualMapToggle.checked) {
+                mappingSection.style.display = 'none';
+                lastImport = null;
+                pendingPreview = null;
+                mappingSelections = new Map();
+            }
+            updateSubmitButtonText();
+        });
+
+        seasonSelect.addEventListener('change', async () => {
+            if (!lastImport || !lastImport.tmdbId) return;
+            await loadSeasonEpisodes(seasonSelect.value, lastImport.tmdbId);
+        });
+
+        episodeSelect.addEventListener('change', () => {
+            const targetEpisode = episodeSelect.value;
+            if (!targetEpisode) return;
+            const row = episodesTable.querySelector(\`[data-episode="\${targetEpisode}"]\`);
+            if (row) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                row.style.boxShadow = '0 0 0 2px rgba(168, 85, 247, 0.5)';
+                setTimeout(() => { row.style.boxShadow = ''; }, 1200);
+            }
+        });
+
+        autoMatchBtn.addEventListener('click', async () => {
+            if (!lastImport) return;
+            autoMatchBtn.disabled = true;
+            setMappingStatus('AutoMatch in corso...');
+
+            try {
+                const res = await fetch('/scrape/automatch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        infoHash: lastImport.infoHash,
+                        imdbId: lastImport.imdbId,
+                        type: 'series',
+                        files: lastImport.videoFiles,
+                        manualMapping: manualMapToggle.checked
+                    })
+                });
+
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'AutoMatch fallito');
+
+                setMappingStatus(\`AutoMatch completato: \${data.matched} trovati, \${data.unmatched} da mappare.\`);
+            } catch (e) {
+                setMappingStatus(e.message, true);
+            } finally {
+                autoMatchBtn.disabled = false;
+            }
+        });
+
+        saveMappingBtn.addEventListener('click', async () => {
+            if (!lastImport) return;
+
+            const mappings = [];
+            for (const [key, fileId] of mappingSelections.entries()) {
+                if (!fileId) continue;
+                const [seasonStr, episodeStr] = key.split('-');
+                const seasonNumber = parseInt(seasonStr, 10);
+                const episodeNumber = parseInt(episodeStr, 10);
+                if (Number.isNaN(seasonNumber) || Number.isNaN(episodeNumber)) continue;
+
+                const file = lastImport.videoFiles.find(f => String(f.id) === String(fileId));
+                if (!file) continue;
+
+                mappings.push({
+                    season: seasonNumber,
+                    episode: episodeNumber,
+                    file_index: file.id,
+                    file_path: file.path,
+                    file_size: file.bytes || 0
+                });
+            }
+
+            if (mappings.length === 0) {
+                setMappingStatus('Seleziona almeno un file per salvare.', true);
+                return;
+            }
+
+            saveMappingBtn.disabled = true;
+            const resDiv = document.getElementById('result');
+            const dbg = document.getElementById('debug');
+
+            try {
+                // ✅ If pendingPreview exists, import torrent FIRST, then save mappings
+                if (pendingPreview) {
+                    setMappingStatus('Importazione torrent in corso...');
+                    dbg.innerText = 'Importazione torrent + mappatura...';
+
+                    const formData = new FormData();
+                    formData.append('method', pendingPreview.mode);
+                    formData.append('imdbId', pendingPreview.imdbId);
+                    if (pendingPreview.tmdbId) formData.append('tmdbId', pendingPreview.tmdbId);
+                    formData.append('type', pendingPreview.typeVal);
+                    formData.append('manualMapping', 'true');
+                    if (pendingPreview.seedersVal) formData.append('seeders', pendingPreview.seedersVal);
+                    if (pendingPreview.rdKey) formData.append('rdKey', pendingPreview.rdKey);
+                    if (pendingPreview.tbKey) formData.append('tbKey', pendingPreview.tbKey);
+
+                    if (pendingPreview.torrentBase64) {
+                        formData.append('torrentFileBase64', pendingPreview.torrentBase64);
+                    } else {
+                        formData.append('magnetLink', pendingPreview.magnetLink);
+                    }
+
+                    const importRes = await fetch('/scrape/add', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const importData = await importRes.json();
+                    if (!importRes.ok) {
+                        throw new Error(importData.error || 'Importazione torrent fallita');
+                    }
+
+                    setMappingStatus('Torrent importato. Salvataggio mappatura...');
+                }
+
+                // Save mappings
+                setMappingStatus('Salvataggio mappatura...');
+                const mapRes = await fetch('/scrape/map', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        infoHash: lastImport.infoHash,
+                        imdbId: lastImport.imdbId,
+                        mappings
+                    })
+                });
+
+                const mapData = await mapRes.json();
+                if (!mapRes.ok) throw new Error(mapData.error || 'Salvataggio fallito');
+
+                if (pendingPreview) {
+                    resDiv.style.display = 'block';
+                    resDiv.className = 'success';
+                    resDiv.innerHTML = \`⚡ <b>Importazione + Mappatura Completata</b><br><small>\${mapData.updated} episodi collegati con successo.</small>\`;
+                    dbg.innerText = 'Operazione completata.';
+                    pendingPreview = null;
+                }
+
+                setMappingStatus(\`✅ Mappatura salvata: \${mapData.updated} collegati, \${mapData.failed} falliti.\`);
+            } catch (e) {
+                setMappingStatus('❌ ' + e.message, true);
+                if (pendingPreview) {
+                    resDiv.style.display = 'block';
+                    resDiv.className = 'error';
+                    resDiv.innerText = 'Errore: ' + e.message;
+                    dbg.innerText = 'Problema riscontrato.';
+                }
+            } finally {
+                saveMappingBtn.disabled = false;
+                updateSaveButtonState();
+            }
+        });
 
         // Add listeners to Inputs to trigger Pack check (to enable button)
         document.getElementById('magnetLink').addEventListener('input', checkPackMode);
@@ -1207,10 +1674,16 @@ router.get('/', (req, res) => {
             const resDiv = document.getElementById('result');
             const dbg = document.getElementById('debug');
 
+            const isManualMappingMode = manualMapToggle.checked && typeSelect.value === 'series';
+
             dbg.innerText = 'Inizializzazione in corso...';
             btn.disabled = true;
             btn.innerText = 'Elaborazione...';
             resDiv.style.display = 'none';
+            mappingSection.style.display = 'none';
+            lastImport = null;
+            pendingPreview = null;
+            mappingSelections = new Map();
 
             const magnetLink = document.getElementById('magnetLink').value.trim();
             const torrentFile = document.getElementById('torrentFile').files[0];
@@ -1220,56 +1693,115 @@ router.get('/', (req, res) => {
             const rdKey = document.getElementById('rdKey').value.trim();
             const tbKey = document.getElementById('tbKey').value.trim();
             const mode = modeSelector.value;
-            // Removed forcePackMode checkbox reference
 
-            if (!imdbId && typeVal !== 'pack') { alert('Inserisci un ID IMDb valido'); btn.disabled = false; btn.innerText = 'Avvia Importazione'; return; }
-            if (!torrentFile && !magnetLink) { alert('Inserisci un Magnet Link o carica un file .torrent'); btn.disabled = false; btn.innerText = 'Avvia Importazione'; return; }
+            const btnLabel = isManualMappingMode ? 'Inizia Collegamento Puntate' : 'Avvia Importazione';
+
+            if (!imdbId && typeVal !== 'pack') { alert('Inserisci un ID IMDb valido'); btn.disabled = false; btn.innerText = btnLabel; return; }
+            if (!torrentFile && !magnetLink) { alert('Inserisci un Magnet Link o carica un file .torrent'); btn.disabled = false; btn.innerText = btnLabel; return; }
+
+            // ✅ Prepare base64 once (used by both preview and import paths)
+            let torrentBase64 = null;
+            if (torrentFile) {
+                dbg.innerText = 'Caricamento file torrent...';
+                torrentBase64 = await new Promise((res, rej) => {
+                    const r = new FileReader();
+                    r.onload = () => res(r.result.split(',')[1]);
+                    r.onerror = rej;
+                    r.readAsDataURL(torrentFile);
+                });
+            }
 
             try {
-                // Send to backend
-                const formData = new FormData();
-                formData.append('method', mode);
-                formData.append('imdbId', imdbId);
-                if (currentTmdbId) formData.append('tmdbId', currentTmdbId); // ✅ Send TMDB ID
-                formData.append('type', typeVal);
-                if (seedersVal) formData.append('seeders', seedersVal);
-                
-                if (rdKey) formData.append('rdKey', rdKey);
-                if (tbKey) formData.append('tbKey', tbKey);
-                
-                // Set forcePackMode if type is 'pack'
-                if (typeVal === 'pack') formData.append('forcePackMode', 'true');
+                if (isManualMappingMode) {
+                    // ✅ MANUAL MAPPING: Preview files only (NO DB import)
+                    dbg.innerText = 'Recupero file dal torrent...';
+                    const formData = new FormData();
+                    formData.append('method', mode);
+                    if (rdKey) formData.append('rdKey', rdKey);
+                    if (tbKey) formData.append('tbKey', tbKey);
+                    if (torrentBase64) {
+                        formData.append('torrentFileBase64', torrentBase64);
+                    } else {
+                        formData.append('magnetLink', magnetLink);
+                    }
 
-                if (torrentFile) {
-                    dbg.innerText = 'Caricamento file torrent...';
-                    const base64 = await new Promise((res, rej) => {
-                        const r = new FileReader();
-                        r.onload = () => res(r.result.split(',')[1]);
-                        r.onerror = rej;
-                        r.readAsDataURL(torrentFile);
+                    const response = await fetch('/scrape/preview-files', {
+                        method: 'POST',
+                        body: formData
                     });
-                    formData.append('torrentFileBase64', base64);
+
+                    const data = await response.json();
+                    resDiv.style.display = 'block';
+
+                    if (response.ok && data.videoFiles && data.videoFiles.length > 0) {
+                        resDiv.className = 'success';
+                        resDiv.innerHTML = \`📁 <b>Trovati \${data.videoFiles.length} file video</b><br><small>\${data.torrentName} — Seleziona la stagione e collega le puntate, poi clicca <b>Salva Mappatura</b> per importare.</small>\`;
+                        dbg.innerText = 'File recuperati. Collega le puntate e salva.';
+
+                        // ✅ Store preview for later import by saveMappingBtn
+                        pendingPreview = {
+                            infoHash: data.infoHash,
+                            torrentName: data.torrentName,
+                            totalSize: data.totalSize,
+                            magnetLink,
+                            torrentBase64,
+                            imdbId,
+                            tmdbId: currentTmdbId,
+                            typeVal,
+                            seedersVal,
+                            rdKey,
+                            tbKey,
+                            mode
+                        };
+
+                        await initMappingUI({
+                            infoHash: data.infoHash,
+                            imdbId: imdbId,
+                            tmdbId: currentTmdbId,
+                            videoFiles: data.videoFiles
+                        });
+                    } else {
+                        resDiv.className = 'error';
+                        resDiv.innerText = 'Errore: ' + (data.error || 'Nessun file video trovato nel torrent');
+                        dbg.innerText = 'Problema riscontrato.';
+                    }
                 } else {
-                    formData.append('magnetLink', magnetLink);
-                }
+                    // ✅ NORMAL FLOW: Import directly
+                    const formData = new FormData();
+                    formData.append('method', mode);
+                    formData.append('imdbId', imdbId);
+                    if (currentTmdbId) formData.append('tmdbId', currentTmdbId);
+                    formData.append('type', typeVal);
+                    formData.append('manualMapping', 'false');
+                    if (seedersVal) formData.append('seeders', seedersVal);
+                    if (rdKey) formData.append('rdKey', rdKey);
+                    if (tbKey) formData.append('tbKey', tbKey);
+                    if (typeVal === 'pack') formData.append('forcePackMode', 'true');
 
-                dbg.innerText = 'Invio dati al server...';
-                const response = await fetch('/scrape/add', {
-                    method: 'POST',
-                    body: formData
-                });
+                    if (torrentBase64) {
+                        formData.append('torrentFileBase64', torrentBase64);
+                    } else {
+                        formData.append('magnetLink', magnetLink);
+                    }
 
-                const data = await response.json();
-                resDiv.style.display = 'block';
+                    dbg.innerText = 'Invio dati al server...';
+                    const response = await fetch('/scrape/add', {
+                        method: 'POST',
+                        body: formData
+                    });
 
-                if (response.ok) {
-                    resDiv.className = 'success';
-                    resDiv.innerHTML = '⚡ <b>Importazione Completata</b><br><small>' + data.torrent.title + ' è stato aggiunto con successo.</small>';
-                    dbg.innerText = 'Operazione terminata.';
-                } else {
-                    resDiv.className = 'error';
-                    resDiv.innerText = 'Errore: ' + (data.error || 'Si è verificato un errore imprevisto');
-                    dbg.innerText = 'Problema riscontrato.';
+                    const data = await response.json();
+                    resDiv.style.display = 'block';
+
+                    if (response.ok) {
+                        resDiv.className = 'success';
+                        resDiv.innerHTML = '⚡ <b>Importazione Completata</b><br><small>' + data.torrent.title + ' è stato aggiunto con successo.</small>';
+                        dbg.innerText = 'Operazione terminata.';
+                    } else {
+                        resDiv.className = 'error';
+                        resDiv.innerText = 'Errore: ' + (data.error || 'Si è verificato un errore imprevisto');
+                        dbg.innerText = 'Problema riscontrato.';
+                    }
                 }
             } catch (err) {
                 resDiv.style.display = 'block';
@@ -1278,7 +1810,7 @@ router.get('/', (req, res) => {
                 dbg.innerText = 'Connessione fallita.';
             } finally {
                 btn.disabled = false;
-                btn.innerText = 'Avvia Importazione';
+                updateSubmitButtonText();
             }
         });
     </script>
@@ -1288,6 +1820,35 @@ router.get('/', (req, res) => {
 
 // GET /manual/search (TMDB Proxy)
 const TMDB_SEARCH_KEY = '5462f78469f3d80bf5201645294c16e4'; // User provided / code context
+
+async function fetchTmdbSeasons(tmdbId) {
+    const url = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_SEARCH_KEY}&language=it-IT`;
+    const resp = await axios.get(url, { timeout: 5000 });
+    const seasons = resp.data?.seasons || [];
+    return seasons
+        .filter(s => typeof s.season_number === 'number')
+        .map(s => ({
+            season_number: s.season_number,
+            name: s.name || `Stagione ${s.season_number}`,
+            episode_count: s.episode_count || 0
+        }))
+        .sort((a, b) => a.season_number - b.season_number);
+}
+
+async function fetchTmdbSeasonEpisodes(tmdbId, seasonNumber) {
+    const url = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}?api_key=${TMDB_SEARCH_KEY}&language=it-IT`;
+    const resp = await axios.get(url, { timeout: 5000 });
+    const episodes = resp.data?.episodes || [];
+    return episodes
+        .filter(e => typeof e.episode_number === 'number')
+        .map(e => ({
+            episode_number: e.episode_number,
+            name: e.name || `Episodio ${e.episode_number}`,
+            overview: e.overview || '',
+            air_date: e.air_date || null
+        }))
+        .sort((a, b) => a.episode_number - b.episode_number);
+}
 
 router.get('/search', async (req, res) => {
     const { q, type } = req.query;
@@ -1321,6 +1882,292 @@ router.get('/search', async (req, res) => {
     }
 });
 
+// GET /scrape/tmdb/seasons - TMDB seasons list
+router.get('/tmdb/seasons', async (req, res) => {
+    const { tmdbId } = req.query;
+    if (!tmdbId) return res.status(400).json({ error: 'Missing tmdbId' });
+
+    try {
+        const seasons = await fetchTmdbSeasons(tmdbId);
+        return res.json({ seasons });
+    } catch (e) {
+        console.error('❌ [MANUAL] TMDB seasons error:', e.message);
+        return res.status(500).json({ error: 'TMDB seasons fetch failed' });
+    }
+});
+
+// GET /scrape/tmdb/season - TMDB episode list for a season
+router.get('/tmdb/season', async (req, res) => {
+    const { tmdbId, season } = req.query;
+    if (!tmdbId || season === undefined) return res.status(400).json({ error: 'Missing tmdbId or season' });
+
+    const seasonNumber = parseInt(season, 10);
+    if (Number.isNaN(seasonNumber)) return res.status(400).json({ error: 'Invalid season number' });
+
+    try {
+        const episodes = await fetchTmdbSeasonEpisodes(tmdbId, seasonNumber);
+        return res.json({ episodes });
+    } catch (e) {
+        console.error('❌ [MANUAL] TMDB season error:', e.message);
+        return res.status(500).json({ error: 'TMDB season fetch failed' });
+    }
+});
+
+// POST /scrape/automatch - Try existing logic to auto-map episodes
+router.post('/automatch', async (req, res) => {
+    try {
+        const { infoHash, imdbId, type, files, manualMapping } = req.body || {};
+
+        if (!infoHash || !imdbId || type !== 'series' || !Array.isArray(files)) {
+            return res.status(400).json({ error: 'Missing or invalid infoHash, imdbId, type, or files' });
+        }
+
+        const filesToInsert = [];
+        const unmatchedFiles = [];
+        const processed = [];
+
+        for (const file of files) {
+            if (!file || !file.path) continue;
+            if (!packFilesHandler.isVideoFile(file.path) || (file.bytes || 0) < 50 * 1024 * 1024) continue;
+
+            const filename = file.path.split('/').pop();
+            let parsed = packFilesHandler.parseSeasonEpisode(filename);
+            const folderSeason = parseSeasonFromPath(file.path);
+
+            if (folderSeason) {
+                parsed = packFilesHandler.parseSeasonEpisode(filename, folderSeason);
+            }
+
+            let season = null;
+            let episode = null;
+
+            if (parsed) {
+                season = parsed.season;
+                episode = parsed.episode;
+            } else {
+                const simpleEpMatch = filename.match(/(?:\s-\s|Ep[\s.]*|E)(\d{1,3})(?![0-9])/i);
+                if (simpleEpMatch && folderSeason) {
+                    season = folderSeason;
+                    episode = parseInt(simpleEpMatch[1], 10);
+                }
+            }
+
+            if (!season || !episode) {
+                unmatchedFiles.push({
+                    id: file.id,
+                    path: file.path,
+                    bytes: file.bytes || 0,
+                    filename
+                });
+                continue;
+            }
+
+            filesToInsert.push({
+                info_hash: infoHash.toLowerCase(),
+                file_index: file.id,
+                title: filename,
+                size: file.bytes || 0,
+                imdb_id: imdbId,
+                imdb_season: season,
+                imdb_episode: episode
+            });
+
+            processed.push(filename);
+        }
+
+        if (filesToInsert.length > 0) {
+            await dbHelper.insertEpisodeFiles(filesToInsert);
+        }
+
+        if (String(manualMapping).toLowerCase() === 'true') {
+            await dbHelper.updateTorrentProvider(infoHash, 'Custom Manual');
+        }
+
+        return res.json({
+            status: 'ok',
+            matched: filesToInsert.length,
+            unmatched: unmatchedFiles.length,
+            unmatchedFiles,
+            processed
+        });
+    } catch (err) {
+        console.error('❌ [MANUAL] AutoMatch error:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /scrape/preview-files - Fetch file list WITHOUT importing to DB
+// Used by "Inizia Collegamento Puntate" to show files before actual import
+router.post('/preview-files', upload.any(), async (req, res) => {
+    console.log("📥 [MANUAL] POST /preview-files called");
+    try {
+        let {
+            magnetLink,
+            torrentFileBase64,
+            rdKey: bodyRdKey,
+            tbKey: bodyTbKey,
+            method
+        } = req.body;
+
+        const userRdKey = bodyRdKey || DEFAULT_RD_KEY;
+        const userTbKey = bodyTbKey || DEFAULT_TB_KEY;
+
+        if (!magnetLink && !torrentFileBase64) {
+            return res.status(400).json({ error: "Inserisci un Magnet Link o carica un file .torrent" });
+        }
+
+        let infoHash = null;
+        let localFiles = null;
+        let torrentName = null;
+
+        // 1. Extract InfoHash
+        if (torrentFileBase64) {
+            try {
+                const parsed = parseTorrentFile(torrentFileBase64);
+                infoHash = parsed.infoHash.toLowerCase();
+                localFiles = parsed.files;
+                torrentName = parsed.filename;
+            } catch (parseErr) {
+                return res.status(400).json({ error: "File torrent corrotto: " + parseErr.message });
+            }
+        } else {
+            const match = magnetLink.match(/xt=urn:btih:([a-zA-Z0-9]+)/);
+            infoHash = match ? match[1].toLowerCase() : magnetLink.toLowerCase();
+        }
+
+        if (!infoHash || infoHash.length < 40) {
+            return res.status(400).json({ error: "Hash non valido" });
+        }
+
+        // 2. Check if already in DB
+        const existingTorrent = await dbHelper.getTorrent(infoHash);
+        if (existingTorrent) {
+            return res.status(409).json({
+                error: 'Torrent già presente nel database!',
+                detail: `Questo torrent (${infoHash}) è già stato importato.`
+            });
+        }
+
+        // 3. Fetch files (NO DB save)
+        let data = null;
+        let providerUsed = "";
+
+        if (localFiles && localFiles.length > 0) {
+            data = { files: localFiles, filename: torrentName };
+            providerUsed = "Local .torrent";
+        } else {
+            if (!userRdKey && !userTbKey) {
+                const cachedTorrent = await fetchTorrentFromCaches(infoHash);
+                if (cachedTorrent) {
+                    data = { files: cachedTorrent.files, filename: cachedTorrent.filename };
+                    providerUsed = "Torrent Cache";
+                }
+            }
+            if (!data && userRdKey) {
+                try {
+                    data = await fetchFilesFromRealDebrid(infoHash, userRdKey);
+                    providerUsed = "Real-Debrid";
+                } catch (e) { console.warn("RD preview failed:", e.message); }
+            }
+            if (!data && userTbKey) {
+                try {
+                    data = await fetchFilesFromTorbox(infoHash, userTbKey);
+                    providerUsed = "Torbox";
+                } catch (e) { console.warn("TB preview failed:", e.message); }
+            }
+        }
+
+        if (!data || !data.files || data.files.length === 0) {
+            return res.status(400).json({ error: "Impossibile recuperare la lista file. Verifica il magnet/torrent e le chiavi API." });
+        }
+
+        // 4. Filter video files (same logic as /add)
+        const videoFiles = [];
+        for (const file of data.files) {
+            if (!packFilesHandler.isVideoFile(file.path) || file.bytes < 50 * 1024 * 1024) continue;
+            const filename = file.path.split('/').pop();
+            let parsed = packFilesHandler.parseSeasonEpisode(filename);
+            const folderSeason = parseSeasonFromPath(file.path);
+            if (folderSeason) {
+                parsed = packFilesHandler.parseSeasonEpisode(filename, folderSeason);
+            }
+            videoFiles.push({
+                id: file.id,
+                path: file.path,
+                bytes: file.bytes || 0,
+                filename,
+                parsedSeason: parsed?.season || null,
+                parsedEpisode: parsed?.episode || null
+            });
+        }
+
+        if (videoFiles.length === 0) {
+            return res.status(400).json({ error: "Nessun file video trovato nel torrent. Non è possibile procedere con il collegamento puntate." });
+        }
+
+        console.log(`✅ [MANUAL] Preview: ${videoFiles.length} video files found via ${providerUsed}`);
+
+        return res.json({
+            status: 'preview',
+            infoHash,
+            torrentName: data.filename || torrentName || `Torrent-${infoHash.substr(0, 8)}`,
+            videoFiles,
+            totalSize: data.files.reduce((acc, f) => acc + (f.bytes || 0), 0),
+            provider: providerUsed
+        });
+
+    } catch (err) {
+        console.error("❌ [MANUAL] Preview error:", err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /scrape/map - Save manual episode mapping
+router.post('/map', async (req, res) => {
+    try {
+        const { infoHash, imdbId, mappings } = req.body || {};
+        if (!infoHash || !imdbId || !Array.isArray(mappings)) {
+            return res.status(400).json({ error: 'Missing infoHash, imdbId, or mappings' });
+        }
+
+        let updated = 0;
+        let failed = 0;
+
+        for (const mapping of mappings) {
+            const season = parseInt(mapping.season, 10);
+            const episode = parseInt(mapping.episode, 10);
+            const fileIndex = parseInt(mapping.file_index, 10);
+            const filePath = mapping.file_path || '';
+            const fileSize = mapping.file_size || null;
+
+            if (!season || !episode || isNaN(fileIndex) || fileIndex < 0 || !filePath) {
+                failed++;
+                continue;
+            }
+
+            const ok = await dbHelper.updateTorrentFileInfo(
+                infoHash,
+                fileIndex,
+                filePath,
+                fileSize,
+                { imdbId, season, episode }
+            );
+
+            if (ok) updated++;
+            else failed++;
+        }
+
+        if (updated > 0) {
+            await dbHelper.updateTorrentProvider(infoHash, 'Custom Manual');
+        }
+
+        return res.json({ status: 'ok', updated, failed });
+    } catch (err) {
+        console.error('❌ [MANUAL] Mapping error:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /scrape/add
 router.post('/add', upload.any(), async (req, res) => {
     console.log("📥 [MANUAL] POST /add called");
@@ -1335,7 +2182,8 @@ router.post('/add', upload.any(), async (req, res) => {
             rdKey: bodyRdKey,
             tbKey: bodyTbKey,
             seeders: bodySeeders,
-            forcePackMode
+            forcePackMode,
+            manualMapping
         } = req.body;
 
         // ✅ HANDLE PACK MODE:
@@ -1345,6 +2193,18 @@ router.post('/add', upload.any(), async (req, res) => {
             type = 'movie';
             forcePackMode = true;
             if (!imdbId) imdbId = null; // Normalize empty to null
+        }
+
+        // Ensure TMDB ID for catalog mapping when possible
+        if (!tmdbId && imdbId && idConverter && typeof idConverter.imdbToTmdb === 'function') {
+            try {
+                const resolved = await idConverter.imdbToTmdb(imdbId);
+                if (resolved && resolved.tmdbId) {
+                    tmdbId = resolved.tmdbId;
+                }
+            } catch (e) {
+                console.warn('⚠️ [MANUAL] TMDB resolve failed:', e.message);
+            }
         }
 
         const userRdKey = bodyRdKey || DEFAULT_RD_KEY;
@@ -1477,9 +2337,12 @@ router.post('/add', upload.any(), async (req, res) => {
             }
         }
 
+        const isManualMapping = String(manualMapping).toLowerCase() === 'true';
+        const providerLabel = isManualMapping ? 'Custom Manual' : 'Custom';
+
         const torrentEntry = {
             info_hash: infoHash,  // snake_case required for batchInsertTorrents
-            provider: 'Custom',
+            provider: providerLabel,
             title: torrentTitle,
             size: totalSize,
             type: type,
@@ -1498,11 +2361,22 @@ router.post('/add', upload.any(), async (req, res) => {
         // 5. Process Files & Episodes
         let processedFiles = [];
         let filesToInsert = [];
+        let unmatchedFiles = [];
+        let videoFiles = [];
 
         for (const file of data.files) {
             if (!packFilesHandler.isVideoFile(file.path) || file.bytes < 50 * 1024 * 1024) continue;
 
             const filename = file.path.split('/').pop();
+            const videoMeta = {
+                id: file.id,
+                path: file.path,
+                bytes: file.bytes || 0,
+                filename,
+                parsedSeason: null,
+                parsedEpisode: null
+            };
+            videoFiles.push(videoMeta);
 
             // Try to parse S/E from FILENAME first
             let parsed = packFilesHandler.parseSeasonEpisode(filename);
@@ -1533,10 +2407,14 @@ router.post('/add', upload.any(), async (req, res) => {
                     } else {
                         // Skip unparsable files for series
                         console.log(`⚠️[MANUAL] Skipping series file (no S/E found): ${file.path}`);
+                        unmatchedFiles.push(videoMeta);
                         continue;
                     }
                 }
             }
+
+            videoMeta.parsedSeason = season;
+            videoMeta.parsedEpisode = episode;
 
             // 📦 For movie packs: imdb_id will be null, matching happens later
             // For series: imdbId is the series ID, applied to all episodes
@@ -1584,7 +2462,10 @@ router.post('/add', upload.any(), async (req, res) => {
             status: "success",
             message: `Imported ${filesToInsert.length} files for ${imdbId || 'pack'}`,
             torrent: torrentEntry,
-            files: processedFiles
+            files: processedFiles,
+            infoHash: infoHash,
+            videoFiles,
+            unmatchedFiles
         });
 
     } catch (err) {

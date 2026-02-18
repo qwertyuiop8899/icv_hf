@@ -118,7 +118,8 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
         cached_tb,
         last_cached_check_tb,
         file_index,
-        file_title
+        file_title,
+        is_torrent_pack
       FROM torrents 
       WHERE imdb_id = $1
     `;
@@ -137,8 +138,8 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
+      // 🚀 CUSTOM, CUSTOM MANUAL & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'Custom Manual' OR provider = 'vip')`;
       // Add % wildcards for partial matching (e.g., 'knaben' matches 'Knaben (1337x)')
       params.push(...providers.map(p => `%${p}%`));
     }
@@ -183,7 +184,8 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
         cached_tb,
         last_cached_check_tb,
         file_index,
-        file_title
+        file_title,
+        is_torrent_pack
       FROM torrents 
       WHERE tmdb_id = $1
     `;
@@ -201,8 +203,8 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
+      // 🚀 CUSTOM, CUSTOM MANUAL & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'Custom Manual' OR provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 
@@ -248,7 +250,8 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
         t.cached_rd,
         t.last_cached_check,
         t.cached_tb,
-        t.last_cached_check_tb
+        t.last_cached_check_tb,
+        t.is_torrent_pack
       FROM files f
       JOIN torrents t ON f.info_hash = t.info_hash
       WHERE f.imdb_id = $1 
@@ -262,8 +265,8 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `t.provider ILIKE $${4 + i}`).join(' OR ');
-      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR t.provider = 'Custom' OR t.provider = 'vip')`;
+      // 🚀 CUSTOM, CUSTOM MANUAL & VIP: Always include these providers regardless of filter
+      query += ` AND (${patterns} OR t.provider = 'Custom' OR t.provider = 'Custom Manual' OR t.provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 
@@ -2163,10 +2166,30 @@ async function updateTorrentTitle(infoHash, newTitle) {
   }
 }
 
+/**
+ * Update the provider label of a torrent in the database.
+ * @param {string} infoHash - Torrent info hash
+ * @param {string} provider - Provider label to set
+ * @returns {Promise<boolean>} True if updated, false otherwise
+ */
+async function updateTorrentProvider(infoHash, provider) {
+  if (!pool) throw new Error('Database not initialized');
+
+  try {
+    const query = 'UPDATE torrents SET provider = $1 WHERE info_hash = $2';
+    const result = await pool.query(query, [provider, infoHash.toLowerCase()]);
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error(`❌ [DB] Error updating provider:`, error.message);
+    return false;
+  }
+}
+
 module.exports = {
   initDatabase,
   getTorrent,
   updateTorrentTitle,
+  updateTorrentProvider,
   searchByImdbId,
   searchByTmdbId,
   searchEpisodeFiles,

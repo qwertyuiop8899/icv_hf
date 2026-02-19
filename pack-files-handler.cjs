@@ -6,7 +6,7 @@
  * Flusso:
  * 1. Cerca file nel DB (tabella files per serie, pack_files per film)
  * 2. Se non trovato, chiama API Debrid per ottenere file list
- * 3. Parsa nomi file per estrarre stagione/episodio 
+ * 3. Parsa nomi file per estrarre stagione/episodio
  * 4. Salva nel DB per usi futuri
  * 5. Ritorna file specifico richiesto con dimensione singola
  */
@@ -660,18 +660,18 @@ async function resolveSeriesPackFile(infoHash, config, seriesImdbId, season, epi
         }
     }
 
-    // 2️⃣ EXTERNAL PROVIDER (Slow, Expensive)
+    // 2️⃣ EXTERNAL PROVIDER: Use full fallback chain (RD → TB → Public Cache)
+    // Public caches give us file names/sizes even without debrid (for pack structure resolution)
     let fetchedData = null;
 
     try {
-        if (config.rd_key) {
-            fetchedData = await fetchFilesFromRealDebrid(infoHash, config.rd_key);
-        } else if (config.torbox_key) {
-            fetchedData = await fetchFilesFromTorbox(infoHash, config.torbox_key);
+        fetchedData = await fetchFilesFromAnySource(infoHash, config);
+        if (fetchedData) {
+            if (DEBUG_MODE) console.log(`✅ [PACK-HANDLER] Got ${fetchedData.files?.length || 0} files from ${fetchedData.source} for ${infoHash.substring(0, 8)}`);
         }
     } catch (e) {
-        if (DEBUG_MODE) console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from provider: ${e.message}`);
-        // ✅ FIX: If rate limited (429), rethrow so caller keeps the pack instead of excluding
+        if (DEBUG_MODE) console.warn(`⚠️ [PACK-HANDLER] Failed to fetch files from any source: ${e.message}`);
+        // ✅ FIX: If rate limited (429) on ALL sources, rethrow so caller keeps the pack instead of excluding
         if (e.message?.includes('429') || e.response?.status === 429) {
             throw new Error(`RATE_LIMITED: ${e.message}`);
         }

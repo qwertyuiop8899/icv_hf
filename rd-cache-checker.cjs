@@ -1,5 +1,5 @@
 // =====================================================
-// RD CACHE CHECKER - Leviathan Style v2
+// RD CACHE CHECKER
 // =====================================================
 // Verifica proattiva della cache RealDebrid usando il metodo
 // Add → Status → Delete. Funziona anche con instantAvailability disabilitata.
@@ -7,6 +7,7 @@
 
 const RD_BASE_URL = 'https://api.real-debrid.com/rest/1.0';
 const RD_TIMEOUT = 30000;
+const RD_FAST_TIMEOUT = 5000; // 5 seconds for foreground fast check (no retry)
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
 // Video extensions for filtering
@@ -145,6 +146,45 @@ async function rdRequest(method, url, token, data = null) {
 }
 
 /**
+ * Fast RD API request - single attempt, no retry, low timeout.
+ * Used for foreground checks where speed is critical.
+ * Returns { _deferred: true, _reason } on 429/5xx/timeout instead of retrying.
+ */
+async function rdRequestFast(method, url, token, data = null) {
+    try {
+        const config = {
+            method,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        };
+        if (data) config.body = data;
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), RD_FAST_TIMEOUT);
+        config.signal = controller.signal;
+
+        const response = await fetch(url, config);
+        clearTimeout(timeoutId);
+
+        if (response.status === 204) return { success: true };
+        if (response.status === 429) return { _deferred: true, _reason: '429' };
+        if (!response.ok) {
+            if (response.status === 403) return null;
+            if (response.status >= 500) return { _deferred: true, _reason: `${response.status}` };
+            return null;
+        }
+        return await response.json();
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            return { _deferred: true, _reason: 'timeout' };
+        }
+        return { _deferred: true, _reason: error.message };
+    }
+}
+
+/**
  * Delete a torrent from RD account
  */
 async function deleteTorrent(token, torrentId) {
@@ -278,8 +318,143 @@ async function checkSingleHash(infoHash, magnet, token) {
 }
 
 /**
+ * Fast check if a single hash is cached in RealDebrid.
+ * No retry, low timeout (5s per API call). Returns deferred:true on 429/timeout/error.
+ * Delete is fire-and-forget to avoid blocking foreground.
+ */
+async function checkSingleHashFast(infoHash, magnet, token) {
+    let torrentId = null;
+    try {
+        // 1. Add Magnet
+        const addBody = new URLSearchParams();
+        addBody.append('magnet', magnet);
+        const addRes = await rdRequestFast('POST', `${RD_BASE_URL}/torrents/addMagnet`, token, addBody);
+        if (!addRes) return { hash: infoHash, cached: false, error: 'Failed to add magnet' };
+        if (addRes._deferred) return { hash: infoHash, cached: false, deferred: true, error: addRes._reason };
+        if (!addRes.id) return { hash: infoHash, cached: false, error: 'No torrent ID' };
+        torrentId = addRes.id;
+
+        // 2. Get Torrent Info
+        let info = await rdRequestFast('GET', `${RD_BASE_URL}/torrents/info/${torrentId}`, token);
+        if (!info || info._deferred) {
+            deleteTorrent(token, torrentId).catch(() => {});
+            if (info?._deferred) return { hash: infoHash, cached: false, deferred: true, error: info._reason };
+            return { hash: infoHash, cached: false, error: 'Failed to get torrent info' };
+        }
+
+        // 3. If waiting for file selection, select all files
+        if (info.status === 'waiting_files_selection') {
+            const selBody = new URLSearchParams();
+            selBody.append('files', 'all');
+            const selRes = await rdRequestFast('POST', `${RD_BASE_URL}/torrents/selectFiles/${torrentId}`, token, selBody);
+            if (selRes?._deferred) {
+                deleteTorrent(token, torrentId).catch(() => {});
+                return { hash: infoHash, cached: false, deferred: true, error: selRes._reason };
+            }
+            info = await rdRequestFast('GET', `${RD_BASE_URL}/torrents/info/${torrentId}`, token);
+            if (!info || info._deferred) {
+                deleteTorrent(token, torrentId).catch(() => {});
+                if (info?._deferred) return { hash: infoHash, cached: false, deferred: true, error: info._reason };
+                return { hash: infoHash, cached: false, error: 'Failed to re-fetch info' };
+            }
+        }
+
+        // 4. Check status
+        const isCached = info?.status === 'downloaded';
+
+        // 5. Extract file info (same logic as checkSingleHash)
+        let mainFileName = '';
+        let mainFileSize = 0;
+        let torrentTitle = info.filename || '';
+        let torrentSize = info.bytes || 0;
+        let allVideoFiles = [];
+
+        if (info?.files && Array.isArray(info.files)) {
+            const videoFiles = info.files
+                .filter(f => VIDEO_EXTENSIONS.test(f.path))
+                .sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+            allVideoFiles = info.files
+                .filter(f => VIDEO_EXTENSIONS.test(f.path) && f.bytes > 25 * 1024 * 1024)
+                .map(f => ({ id: f.id, path: f.path, bytes: f.bytes }));
+            if (videoFiles.length > 0) {
+                const fullPath = videoFiles[0].path;
+                mainFileName = fullPath.split('/').pop() || fullPath;
+                mainFileSize = videoFiles[0].bytes || 0;
+            }
+        }
+
+        // 6. Clean up - fire-and-forget (don't block foreground with delete retry)
+        deleteTorrent(token, torrentId).catch(() => {});
+
+        const packName = info.original_filename || info.filename || '';
+        const isPack = allVideoFiles.length > 1;
+        const validPackName = isValidPackName(packName) ? packName : null;
+
+        if (DEBUG_MODE) console.log(`⚡ [RD Fast] ${infoHash.substring(0, 8)}... → ${isCached ? '⚡ CACHED' : '⏬ NOT CACHED'}`);
+
+        return {
+            hash: infoHash,
+            cached: isCached,
+            torrent_title: torrentTitle,
+            original_filename: info.original_filename || '',
+            pack_name: validPackName,
+            is_pack: isPack,
+            size: torrentSize,
+            file_title: mainFileName || null,
+            file_size: mainFileSize || null,
+            files: allVideoFiles
+        };
+    } catch (error) {
+        if (torrentId) deleteTorrent(token, torrentId).catch(() => {});
+        return { hash: infoHash, cached: false, deferred: true, error: error.message };
+    }
+}
+
+/**
+ * Fast synchronous cache check for foreground - no retry, low timeout.
+ * Returns { results, deferred } where deferred is array of items that need background retry.
+ */
+async function checkCacheSyncFast(items, token, limit = 5) {
+    const results = {};
+    const deferred = [];
+    const toCheck = items.slice(0, limit);
+
+    if (DEBUG_MODE) console.log(`⚡ [RD Fast] Checking ${toCheck.length} hashes (no retry, ${RD_FAST_TIMEOUT}ms timeout)...`);
+
+    for (let i = 0; i < toCheck.length; i++) {
+        const item = toCheck[i];
+        const result = await checkSingleHashFast(item.hash, item.magnet, token);
+
+        if (result.deferred) {
+            deferred.push(item);
+            console.log(`⏳ [RD Fast] ${item.hash.substring(0, 8)} deferred to background (${result.error})`);
+        } else {
+            results[result.hash.toLowerCase()] = {
+                cached: result.cached,
+                file_title: result.file_title,
+                file_size: result.file_size,
+                torrent_title: result.torrent_title,
+                size: result.size,
+                is_pack: result.is_pack,
+                pack_name: result.pack_name,
+                files: result.files,
+                fromLiveCheck: true
+            };
+        }
+
+        // Small delay between checks
+        if (i < toCheck.length - 1) {
+            await sleep(200);
+        }
+    }
+
+    console.log(`⚡ [RD Fast] Done: ${Object.values(results).filter(r => r.cached).length} cached, ${deferred.length} deferred`);
+    return { results, deferred };
+}
+
+/**
  * Check cache status for multiple hashes synchronously (blocks until complete)
- * Used for the top N torrents that the user will see immediately
+ * Used for background checks with full retry logic
  * 
  * @param {Array<{hash: string, magnet: string}>} items - Array of {hash, magnet} objects
  * @param {string} token - RealDebrid API token
@@ -426,7 +601,9 @@ async function enrichCacheBackground(items, token, dbHelper) {
 // Export for Node.js
 module.exports = {
     checkSingleHash,
+    checkSingleHashFast,
     checkCacheSync,
+    checkCacheSyncFast,
     enrichCacheBackground,
     isValidPackName  // Export for use in api/index.js
 };

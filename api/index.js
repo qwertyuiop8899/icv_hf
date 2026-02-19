@@ -279,7 +279,61 @@ const resolvePackNamesInBackground = async (torrents, config, mediaDetails, seas
     }
 };
 
-// 🔄 GLOBAL BG JOB SEMAPHORE
+// � GLOBAL RD BACKGROUND QUEUE
+// Serializes ALL background RD API calls (concurrency=1, 2s minimum gap)
+// Prevents 429 rate limits when multiple background jobs run simultaneously.
+// FOREGROUND NEVER uses this queue — foreground uses fast check (no retry, low timeout).
+const _rdQueue = [];
+let _rdQueueRunning = false;
+let _lastRdCallTime = 0;
+const RD_QUEUE_DELAY = 2000; // 2s minimum gap between background RD calls
+
+/**
+ * Enqueue an async function that makes RD API calls.
+ * Returns a promise that resolves with the function's result.
+ * Background-only — never call from foreground path.
+ */
+const enqueueRdCall = (asyncFn) => {
+    return new Promise((resolve, reject) => {
+        _rdQueue.push({ fn: asyncFn, resolve, reject });
+        console.log(`🔒 [RD Queue] Enqueued call (${_rdQueue.length} pending, running=${_rdQueueRunning})`);
+        if (!_rdQueueRunning) {
+            _processRdQueue();
+        }
+    });
+};
+
+async function _processRdQueue() {
+    if (_rdQueueRunning) return;
+    _rdQueueRunning = true;
+    console.log(`🔒 [RD Queue] Processing started (${_rdQueue.length} items)`);
+
+    while (_rdQueue.length > 0) {
+        const { fn, resolve, reject } = _rdQueue.shift();
+
+        // Enforce minimum delay since last RD call
+        const elapsed = Date.now() - _lastRdCallTime;
+        if (elapsed < RD_QUEUE_DELAY) {
+            const waitMs = RD_QUEUE_DELAY - elapsed;
+            console.log(`🔒 [RD Queue] Throttling: waiting ${waitMs}ms before next call (${_rdQueue.length} remaining)`);
+            await new Promise(r => setTimeout(r, waitMs));
+        }
+
+        try {
+            _lastRdCallTime = Date.now();
+            const result = await fn();
+            resolve(result);
+        } catch (err) {
+            console.warn(`🔒 [RD Queue] Call failed: ${err.message}`);
+            reject(err);
+        }
+    }
+
+    _rdQueueRunning = false;
+    console.log(`🔒 [RD Queue] Processing complete (idle)`);
+}
+
+// �🔄 GLOBAL BG JOB SEMAPHORE
 // Prevents unlimited parallel background jobs from saturating the DB
 const MAX_CONCURRENT_BG_JOBS = 2;
 let activeBgJobs = 0;
@@ -348,7 +402,7 @@ const _runSequentialBackgroundJobs = async (options) => {
     const packResults = [];
 
     // ═══════════════════════════════════════════════════════════
-    // PHASE 1: SEQUENTIAL CACHE CHECK (1s delay between calls)
+    // PHASE 1: SEQUENTIAL CACHE CHECK (via global RD queue)
     // ═══════════════════════════════════════════════════════════
     if (itemsForCacheCheck && itemsForCacheCheck.length > 0) {
         console.log(`\n📦 [Sequential BG] Phase 1: Cache check (${itemsForCacheCheck.length} items)`);
@@ -359,9 +413,9 @@ const _runSequentialBackgroundJobs = async (options) => {
             try {
                 let result = null;
 
-                // Try RD first
+                // Try RD first (through global RD queue to prevent 429)
                 if (rdKey) {
-                    result = await rdCacheChecker.checkSingleHash(item.hash, item.magnet, rdKey);
+                    result = await enqueueRdCall(() => rdCacheChecker.checkSingleHash(item.hash, item.magnet, rdKey));
                     if (DEBUG_MODE) console.log(`   [${i + 1}/${itemsForCacheCheck.length}] RD cache: ${result?.cached ? '✅' : '❌'} ${item.hash.substring(0, 8)}`);
                 }
                 // Fallback to TB (only if RD not available or not cached)
@@ -388,8 +442,9 @@ const _runSequentialBackgroundJobs = async (options) => {
                     });
                 }
 
-                // ⏱️ 1 second delay between cache checks
-                if (i < itemsForCacheCheck.length - 1) {
+                // ⏱️ Delay handled by global RD queue (2s min gap) — no extra sleep needed for RD
+                // Only add delay for TB (which doesn't use the queue)
+                if (!rdKey && tbKey && i < itemsForCacheCheck.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
 
@@ -505,16 +560,15 @@ const _runSequentialBackgroundJobs = async (options) => {
             try {
                 let packData = null;
 
-                // Try RD first
-                if (rdKey && typeof packFilesHandler.fetchFilesFromRealDebrid === 'function') {
-                    packData = await packFilesHandler.fetchFilesFromRealDebrid(pack.hash, rdKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${seriesPacksToVerify.length}] RD pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
-                }
-
-                // Fallback to TB
-                if (!packData && tbKey && typeof packFilesHandler.fetchFilesFromTorbox === 'function') {
-                    packData = await packFilesHandler.fetchFilesFromTorbox(pack.hash, tbKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${seriesPacksToVerify.length}] TB pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
+                // ✅ Use full fallback chain: RD (via queue) → TB → Public Cache
+                // This ensures we get file list even if RD is rate limited
+                if (typeof packFilesHandler.fetchFilesFromAnySource === 'function') {
+                    if (rdKey) {
+                        packData = await enqueueRdCall(() => packFilesHandler.fetchFilesFromAnySource(pack.hash, { rd_key: rdKey, torbox_key: tbKey }));
+                    } else {
+                        packData = await packFilesHandler.fetchFilesFromAnySource(pack.hash, { rd_key: rdKey, torbox_key: tbKey });
+                    }
+                    if (DEBUG_MODE) console.log(`   [${i + 1}/${seriesPacksToVerify.length}] Pack files: ${packData?.files?.length || 0} from ${packData?.source || 'none'} for ${pack.hash.substring(0, 8)}`);
                 }
 
                 if (packData) {
@@ -653,18 +707,14 @@ const _runSequentialBackgroundJobs = async (options) => {
                     });
                 }
 
-                // ⏱️ 4 second delay between pack resolutions (API intensive - 3 calls per pack)
-                // RD rate limits after ~15-20 rapid calls to addMagnet
-                if (i < seriesPacksToVerify.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 4000));
-                }
+                // ⏱️ Delay handled by global RD queue (2s min gap)
 
             } catch (err) {
                 console.warn(`   ⚠️ Pack resolution failed for ${pack.hash.substring(0, 8)}: ${err.message}`);
-                // Wait longer on failure (likely rate limit) - 10 seconds
-                const is429 = err.message?.includes('429');
-                const waitTime = is429 ? 10000 : 4000;
-                await new Promise(resolve => setTimeout(resolve, waitTime));
+                // Extra wait on 429 (on top of queue delay)
+                if (err.message?.includes('429')) {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                }
             }
         }
 
@@ -684,16 +734,15 @@ const _runSequentialBackgroundJobs = async (options) => {
             try {
                 let packData = null;
 
-                // Try RD first
-                if (rdKey && typeof packFilesHandler.fetchFilesFromRealDebrid === 'function') {
-                    packData = await packFilesHandler.fetchFilesFromRealDebrid(pack.hash, rdKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] RD movie pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
-                }
-
-                // Fallback to TB
-                if (!packData && tbKey && typeof packFilesHandler.fetchFilesFromTorbox === 'function') {
-                    packData = await packFilesHandler.fetchFilesFromTorbox(pack.hash, tbKey);
-                    if (DEBUG_MODE) console.log(`   [${i + 1}/${allPacksToResolve.length}] TB movie pack: ${packData?.files?.length || 0} files for ${pack.hash.substring(0, 8)}`);
+                // ✅ Use full fallback chain: RD (via queue) → TB → Public Cache
+                // This ensures we get file list even if RD is rate limited
+                if (typeof packFilesHandler.fetchFilesFromAnySource === 'function') {
+                    if (rdKey) {
+                        packData = await enqueueRdCall(() => packFilesHandler.fetchFilesFromAnySource(pack.hash, { rd_key: rdKey, torbox_key: tbKey }));
+                    } else {
+                        packData = await packFilesHandler.fetchFilesFromAnySource(pack.hash, { rd_key: rdKey, torbox_key: tbKey });
+                    }
+                    if (DEBUG_MODE) console.log(`   [${i + 1}/${packsToProcess.length}] Movie pack files: ${packData?.files?.length || 0} from ${packData?.source || 'none'} for ${pack.hash.substring(0, 8)}`);
                 }
 
                 if (packData) {
@@ -810,16 +859,14 @@ const _runSequentialBackgroundJobs = async (options) => {
                     });
                 }
 
-                // ⏱️ 4 second delay between pack resolutions
-                if (i < allPacksToResolve.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 4000));
-                }
+                // ⏱️ Delay handled by global RD queue (2s min gap)
 
             } catch (err) {
                 console.warn(`   ⚠️ Movie pack resolution failed for ${pack.hash.substring(0, 8)}: ${err.message}`);
-                const is429 = err.message?.includes('429');
-                const waitTime = is429 ? 10000 : 4000;
-                await new Promise(resolve => setTimeout(resolve, waitTime));
+                // Extra wait on 429 (on top of queue delay)
+                if (err.message?.includes('429')) {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                }
             }
         }
 
@@ -879,13 +926,18 @@ const _runSequentialBackgroundJobs = async (options) => {
                 }
 
                 // Use fetchFilesFromAnySource with full fallback chain (RD → TB → Public Cache)
+                // Route through RD queue if RD key is present (fetchFilesFromAnySource tries RD first)
                 let packData = null;
                 if (typeof packFilesHandler.fetchFilesFromAnySource === 'function') {
-                    packData = await packFilesHandler.fetchFilesFromAnySource(hash, config);
+                    if (rdKey) {
+                        packData = await enqueueRdCall(() => packFilesHandler.fetchFilesFromAnySource(hash, config));
+                    } else {
+                        packData = await packFilesHandler.fetchFilesFromAnySource(hash, config);
+                    }
                 } else {
                     // Fallback to direct RD/TB if new function not available
                     if (rdKey && typeof packFilesHandler.fetchFilesFromRealDebrid === 'function') {
-                        packData = await packFilesHandler.fetchFilesFromRealDebrid(hash, rdKey);
+                        packData = await enqueueRdCall(() => packFilesHandler.fetchFilesFromRealDebrid(hash, rdKey));
                     }
                     if (!packData && tbKey && typeof packFilesHandler.fetchFilesFromTorbox === 'function') {
                         packData = await packFilesHandler.fetchFilesFromTorbox(hash, tbKey);
@@ -952,16 +1004,14 @@ const _runSequentialBackgroundJobs = async (options) => {
                     // ❌ Do NOT update flag - leave NULL so it can be retried
                 }
 
-                // ⏱️ 4 second delay between checks
-                if (i < packsToVerify.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 4000));
-                }
+                // ⏱️ Delay handled by global RD queue (2s min gap)
 
             } catch (err) {
                 console.warn(`   ⚠️ Rejected pack verification failed for ${hash?.substring(0, 8)}: ${err.message}`);
-                const is429 = err.message?.includes('429');
-                const waitTime = is429 ? 10000 : 4000;
-                await new Promise(resolve => setTimeout(resolve, waitTime));
+                // Extra wait on 429 (on top of queue delay)
+                if (err.message?.includes('429')) {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                }
             }
         }
 
@@ -9677,48 +9727,67 @@ async function handleStream(type, id, config, workerOrigin) {
                             if (DEBUG_MODE) console.log(`🔄 [RD Cache] ${dbCachedCount} already in DB cache, checking ${syncItems.length} more (target: 5 total)`);
 
                             if (syncItems.length > 0) {
-                                // 🚀 Fire-and-forget: Check RD cache in background (add/delete is slow!)
-                                // Users won't see "⚡" immediately for NEW items, but searching again instantly will show it.
-                                if (DEBUG_MODE) console.log(`⏩ [RD Cache] Running background check for ${syncItems.length} items...`);
-                                rdCacheChecker.checkCacheSync(syncItems, config.rd_key, syncLimit)
-                                    .then(async (liveCheckResults) => {
-                                        // Save results to DB
-                                        const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
-                                            // Ensure not blocked by strict filter
-                                            const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                                            if (originalResult?.skipDbSave) {
-                                                return null;
-                                            }
-                                            return {
-                                                hash,
-                                                cached: data.cached,
-                                                file_title: data.file_title || null,
-                                                file_size: data.file_size || null
-                                            };
-                                        }).filter(Boolean);
+                                // ⚡ FAST CHECK: Await fast RD cache check (no retry, 5s timeout per API call)
+                                // Results are immediately available for stream building
+                                if (DEBUG_MODE) console.log(`⚡ [RD Fast] Running fast check for ${syncItems.length} items...`);
+                                try {
+                                    const { results: liveCheckResults, deferred: deferredItems } =
+                                        await rdCacheChecker.checkCacheSyncFast(syncItems, config.rd_key, syncLimit);
 
-                                        if (liveResultsToSave.length > 0 && dbEnabled) {
-                                            await dbHelper.updateRdCacheStatus(liveResultsToSave, type);
-                                            console.log(`💾 [DB] Saved ${liveResultsToSave.length} background live check results`);
+                                    // Merge live results into rdCacheResults (immediately visible to user)
+                                    for (const [hash, data] of Object.entries(liveCheckResults)) {
+                                        if (data.cached) {
+                                            rdCacheResults[hash] = data;
                                         }
+                                    }
 
-                                        // 🔧 PACK DETECTION: If live check found packs (is_pack: true), add to queue
-                                        if (type === 'series') {
-                                            for (const [hash, data] of Object.entries(liveCheckResults)) {
-                                                if (data.is_pack && data.cached) {
-                                                    const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
-                                                    if (originalResult && !originalResult.skipDbSave) {
-                                                        backgroundPackItems.push({
-                                                            hash: hash,
-                                                            title: data.torrent_title || originalResult.title || 'Unknown Pack'
-                                                        });
-                                                        console.log(`📦 [Pack Detected] ${hash.substring(0, 8)} has ${data.files?.length || 'multiple'} video files -> queued for resolution`);
-                                                    }
+                                    // Save results to DB
+                                    const liveResultsToSave = Object.entries(liveCheckResults).map(([hash, data]) => {
+                                        const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                        if (originalResult?.skipDbSave) return null;
+                                        return {
+                                            hash,
+                                            cached: data.cached,
+                                            file_title: data.file_title || null,
+                                            file_size: data.file_size || null
+                                        };
+                                    }).filter(Boolean);
+
+                                    if (liveResultsToSave.length > 0 && dbEnabled) {
+                                        await dbHelper.updateRdCacheStatus(liveResultsToSave, type);
+                                        console.log(`💾 [DB] Saved ${liveResultsToSave.length} fast live check results`);
+                                    }
+
+                                    // 🔧 PACK DETECTION: If live check found packs (is_pack: true), add to queue
+                                    if (type === 'series') {
+                                        for (const [hash, data] of Object.entries(liveCheckResults)) {
+                                            if (data.is_pack && data.cached) {
+                                                const originalResult = filteredResults.find(r => r.infoHash?.toLowerCase() === hash);
+                                                if (originalResult && !originalResult.skipDbSave) {
+                                                    backgroundPackItems.push({
+                                                        hash: hash,
+                                                        title: data.torrent_title || originalResult.title || 'Unknown Pack'
+                                                    });
+                                                    console.log(`📦 [Pack Detected] ${hash.substring(0, 8)} has ${data.files?.length || 'multiple'} video files -> queued for resolution`);
                                                 }
                                             }
                                         }
-                                    })
-                                    .catch(err => console.warn(`⚠️ [RD Cache] Background check failed: ${err.message}`));
+                                    }
+
+                                    // ⏳ Deferred items (429/timeout/error) go to background queue
+                                    if (deferredItems.length > 0) {
+                                        for (const item of deferredItems) {
+                                            backgroundCacheItems.push(item);
+                                        }
+                                        console.log(`⏳ [RD Fast] ${deferredItems.length} items deferred to background queue`);
+                                    }
+                                } catch (err) {
+                                    console.warn(`⚠️ [RD Fast] Fast check failed completely: ${err.message}`);
+                                    // On total failure, defer ALL sync items to background
+                                    for (const item of syncItems) {
+                                        backgroundCacheItems.push(item);
+                                    }
+                                }
                             }
 
                             // 🔄 SEQUENTIAL BACKGROUND: Accumulate remaining items instead of parallel processing

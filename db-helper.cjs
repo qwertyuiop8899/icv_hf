@@ -104,14 +104,14 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching by IMDb: ${imdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
-      SELECT 
-        info_hash, 
-        provider, 
-        title, 
-        size, 
-        type, 
-        seeders, 
-        imdb_id, 
+      SELECT
+        info_hash,
+        provider,
+        title,
+        size,
+        type,
+        seeders,
+        imdb_id,
         tmdb_id,
         cached_rd,
         last_cached_check,
@@ -120,7 +120,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
         file_index,
         file_title,
         is_torrent_pack
-      FROM torrents 
+      FROM torrents
       WHERE imdb_id = $1
     `;
 
@@ -170,14 +170,14 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching by TMDb: ${tmdbId}${type ? ` (${type})` : ''}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
-      SELECT 
-        info_hash, 
-        provider, 
-        title, 
-        size, 
-        type, 
-        seeders, 
-        imdb_id, 
+      SELECT
+        info_hash,
+        provider,
+        title,
+        size,
+        type,
+        seeders,
+        imdb_id,
         tmdb_id,
         cached_rd,
         last_cached_check,
@@ -186,7 +186,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
         file_index,
         file_title,
         is_torrent_pack
-      FROM torrents 
+      FROM torrents
       WHERE tmdb_id = $1
     `;
 
@@ -235,7 +235,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching episode: ${imdbId} S${season}E${episode}${providers ? ` [providers: ${providers.join(',')}]` : ''}`);
 
     let query = `
-      SELECT 
+      SELECT
         f.file_index,
         f.title as file_title,
         f.size as file_size,
@@ -254,8 +254,8 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
         t.is_torrent_pack
       FROM files f
       JOIN torrents t ON f.info_hash = t.info_hash
-      WHERE f.imdb_id = $1 
-        AND f.imdb_season = $2 
+      WHERE f.imdb_id = $1
+        AND f.imdb_season = $2
         AND f.imdb_episode = $3
     `;
 
@@ -349,7 +349,7 @@ async function insertTorrent(torrent) {
     // Insert torrent
     await client.query(
       `INSERT INTO torrents (
-        info_hash, provider, title, size, type, 
+        info_hash, provider, title, size, type,
         upload_date, seeders, imdb_id, tmdb_id, cached_tb, last_cached_check_tb
       ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9, $10)`,
       [
@@ -669,7 +669,7 @@ async function refreshRdCacheTimestamp(infoHash) {
 
   try {
     const query = `
-      UPDATE torrents 
+      UPDATE torrents
       SET last_cached_check = NOW() + INTERVAL '18 days'
       WHERE info_hash = $1 AND cached_rd = true
     `;
@@ -697,7 +697,7 @@ async function refreshTbCacheTimestamp(infoHash) {
 
   try {
     const query = `
-      UPDATE torrents 
+      UPDATE torrents
       SET last_cached_check_tb = NOW() + INTERVAL '18 days'
       WHERE info_hash = $1 AND cached_tb = true
     `;
@@ -740,7 +740,7 @@ async function batchInsertTorrents(torrents) {
       try {
         const query = `
           INSERT INTO torrents (
-            info_hash, provider, title, size, type, upload_date, 
+            info_hash, provider, title, size, type, upload_date,
             seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index,
             cached_tb, last_cached_check_tb
           )
@@ -755,24 +755,24 @@ async function batchInsertTorrents(torrents) {
             ELSE torrents.title END,
             provider = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.provider
             ELSE torrents.provider END,
-            cached_rd = CASE 
+            cached_rd = CASE
               WHEN torrents.cached_rd = true THEN true  -- Never overwrite true with false
               WHEN EXCLUDED.cached_rd = true THEN true  -- Allow updating to true
               ELSE COALESCE(torrents.cached_rd, EXCLUDED.cached_rd)
             END,
-            last_cached_check = CASE 
-              WHEN EXCLUDED.last_cached_check IS NOT NULL 
+            last_cached_check = CASE
+              WHEN EXCLUDED.last_cached_check IS NOT NULL
               THEN GREATEST(EXCLUDED.last_cached_check, COALESCE(torrents.last_cached_check, EXCLUDED.last_cached_check))
               ELSE torrents.last_cached_check
             END,
             file_index = COALESCE(EXCLUDED.file_index, torrents.file_index),
-            cached_tb = CASE 
+            cached_tb = CASE
               WHEN torrents.cached_tb = true THEN true
               WHEN EXCLUDED.cached_tb = true THEN true
               ELSE COALESCE(torrents.cached_tb, EXCLUDED.cached_tb)
             END,
-            last_cached_check_tb = CASE 
-              WHEN EXCLUDED.last_cached_check_tb IS NOT NULL 
+            last_cached_check_tb = CASE
+              WHEN EXCLUDED.last_cached_check_tb IS NOT NULL
               THEN GREATEST(EXCLUDED.last_cached_check_tb, COALESCE(torrents.last_cached_check_tb, EXCLUDED.last_cached_check_tb))
               ELSE torrents.last_cached_check_tb
             END
@@ -837,10 +837,10 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
 
       // Check if file already exists
       const checkQuery = `
-        SELECT file_index FROM files 
-        WHERE info_hash = $1 
-          AND imdb_id = $2 
-          AND imdb_season = $3 
+        SELECT file_index FROM files
+        WHERE info_hash = $1
+          AND imdb_id = $2
+          AND imdb_season = $3
           AND imdb_episode = $4
       `;
       const checkRes = await pool.query(checkQuery, [
@@ -857,9 +857,9 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
           SET file_index = $1,
               title = $2,
               size = COALESCE($7, size)
-          WHERE info_hash = $3 
-            AND imdb_id = $4 
-            AND imdb_season = $5 
+          WHERE info_hash = $3
+            AND imdb_id = $4
+            AND imdb_season = $5
             AND imdb_episode = $6
         `;
         const res = await pool.query(updateQuery, [
@@ -961,7 +961,7 @@ async function updateRdLinkIndex(infoHash, fileIndex, rdLinkIndex) {
 
   try {
     const query = `
-      UPDATE files 
+      UPDATE files
       SET rd_link_index = $3
       WHERE info_hash = $1 AND file_index = $2
     `;
@@ -995,7 +995,7 @@ async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename)
   try {
     // Update pack_files table with rd_link_index
     const query = `
-      UPDATE pack_files 
+      UPDATE pack_files
       SET rd_link_index = $3
       WHERE pack_hash = $1 AND file_index = $2
     `;
@@ -1007,7 +1007,7 @@ async function updateRdLinkIndexForPack(infoHash, fileId, rdLinkIndex, filename)
     } else {
       // Try to match by filename if file_index doesn't match
       const filenameQuery = `
-        UPDATE pack_files 
+        UPDATE pack_files
         SET rd_link_index = $2
         WHERE pack_hash = $1 AND file_path ILIKE '%' || $3
       `;
@@ -1135,7 +1135,7 @@ async function updateIsTorrentPack(infoHash, isPack) {
 
   try {
     const query = `
-      UPDATE torrents 
+      UPDATE torrents
       SET is_torrent_pack = $2
       WHERE info_hash = $1
     `;
@@ -1168,21 +1168,21 @@ async function searchByTitleFTS(cleanedTitle, type = null, year = null) {
     console.log(`💾 [DB FTS] Searching: "${cleanedTitle}"${type ? ` (${type})` : ''}${year ? ` year=${year}` : ''}`);
 
     let query = `
-      SELECT 
-        info_hash, 
-        provider, 
-        title, 
-        size, 
-        type, 
-        seeders, 
-        imdb_id, 
+      SELECT
+        info_hash,
+        provider,
+        title,
+        size,
+        type,
+        seeders,
+        imdb_id,
         tmdb_id,
         cached_rd,
         last_cached_check,
         file_index,
         file_title,
         ts_rank(title_vector, plainto_tsquery('italian', $1)) as rank
-      FROM torrents 
+      FROM torrents
       WHERE title_vector @@ plainto_tsquery('italian', $1)
     `;
 
@@ -1199,8 +1199,8 @@ async function searchByTitleFTS(cleanedTitle, type = null, year = null) {
     // Filter by year with ±1 tolerance if provided
     if (year) {
       query += ` AND (
-        title ~* '\\m${year}\\M' OR 
-        title ~* '\\m${year - 1}\\M' OR 
+        title ~* '\\m${year}\\M' OR
+        title ~* '\\m${year - 1}\\M' OR
         title ~* '\\m${year + 1}\\M'
       )`;
     }
@@ -1273,7 +1273,7 @@ async function updateTorrentsWithIds(infoHashes, imdbId, tmdbId) {
     params.push(hashArray.map(h => h.toLowerCase()));
 
     const query = `
-      UPDATE torrents 
+      UPDATE torrents
       SET ${updates.join(', ')}
       WHERE info_hash = ANY($${paramIndex})
       AND (imdb_id IS NULL OR tmdb_id IS NULL)
@@ -1301,7 +1301,7 @@ async function searchPacksByImdbId(imdbId) {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching packs containing film: ${imdbId}`);
 
     const query = `
-      SELECT 
+      SELECT
         t.info_hash,
         t.provider,
         t.title,
@@ -1391,7 +1391,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
     if (baseSearchPattern && baseSearchPattern !== searchPattern) {
       // Search with both patterns using OR
       query = `
-        SELECT 
+        SELECT
           t.info_hash,
           t.provider,
           t.title,
@@ -1407,15 +1407,15 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
           pf.imdb_id as film_imdb_id
         FROM torrents t
         INNER JOIN pack_files pf ON t.info_hash = pf.pack_hash
-        WHERE LOWER(pf.file_path) LIKE $1 OR LOWER(pf.file_path) LIKE $2
+        WHERE pf.file_path ~* ('\\m' || $1 || '\\M') OR pf.file_path ~* ('\\m' || $2 || '\\M')
         ORDER BY t.seeders DESC, t.size DESC
         LIMIT 50
       `;
-      params = [searchPattern, baseSearchPattern];
+      params = [title.toLowerCase(), baseTitle.toLowerCase()];
     } else {
       // Search with just the exact pattern
       query = `
-        SELECT 
+        SELECT
           t.info_hash,
           t.provider,
           t.title,
@@ -1432,11 +1432,11 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
           pf.imdb_id as imdb_id
         FROM torrents t
         INNER JOIN pack_files pf ON t.info_hash = pf.pack_hash
-        WHERE LOWER(pf.file_path) LIKE $1
+        WHERE pf.file_path ~* ('\\m' || $1 || '\\M')
         ORDER BY t.seeders DESC, t.size DESC
         LIMIT 30
       `;
-      params = [searchPattern];
+      params = [title.toLowerCase()];
     }
 
     const result = await pool.query(query, params);
@@ -1552,7 +1552,7 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
 
         // Decide if we should assign IMDb ID:
         // 1. File has matching year → YES
-        // 2. File has no year AND title matches well → YES  
+        // 2. File has no year AND title matches well → YES
         // 3. File has wrong year → NO (already filtered out)
         const shouldUpdate = (fileYear === yearStr) || (!fileYear && yearStr) || (!yearStr);
 
@@ -1568,8 +1568,8 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
 
         try {
           await pool.query(`
-            UPDATE pack_files 
-            SET imdb_id = $1 
+            UPDATE pack_files
+            SET imdb_id = $1
             WHERE pack_hash = $2 AND file_index = $3 AND (imdb_id IS NULL OR imdb_id = '')
           `, [imdbId, row.info_hash, row.file_index]);
           indexedCount++;
@@ -1585,6 +1585,14 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
       }
     }
 
+    if (imdbId) {
+      filteredResults = filteredResults.filter(row => {
+      if (row.film_imdb_id && imdbId && row.film_imdb_id !== imdbId) {
+        return false;
+      }
+      return true;
+      });
+    }
     return filteredResults;
   } catch (error) {
     console.error(`❌ Error searching packs by title "${title}":`, error.message);
@@ -1784,7 +1792,7 @@ async function getSeriesPackFiles(infoHash) {
     // 1️⃣ PRIORITY: Check pack_files first (has correct RD file.id indices)
     const packFilesQuery = `
       SELECT file_index as id, file_path as path, file_size as bytes
-      FROM pack_files 
+      FROM pack_files
       WHERE pack_hash = $1
       ORDER BY file_path ASC
     `;
@@ -1803,7 +1811,7 @@ async function getSeriesPackFiles(infoHash) {
     // 2️⃣ FALLBACK: Check files table (for series packs)
     const filesQuery = `
       SELECT file_index as id, title as path, size as bytes
-      FROM files 
+      FROM files
       WHERE info_hash = $1
       ORDER BY file_index ASC
     `;
@@ -1841,7 +1849,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
   // 🔧 Helper function for ILIKE search (fallback)
   const runIlikeSearch = async () => {
     let query = `
-      SELECT 
+      SELECT
         f.file_index,
         f.title as file_title,
         f.size as file_size,
@@ -1856,9 +1864,9 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
         f.imdb_id as file_imdb_id
       FROM files f
       JOIN torrents t ON f.info_hash = t.info_hash
-      WHERE f.title ILIKE $1
+      WHERE f.title ~* ('\\m' || $1 || '\\M')
     `;
-    const params = [`%${titleQuery}%`];
+    const params = [titleQuery.toLowerCase()];
     let paramIndex = 2;
 
     // 🎬 FILTER: Year in filename
@@ -1940,7 +1948,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching FILES by title: "${titleQuery}"${year ? ` (${year})` : ''} (FTS: ${cleanQuery})${movieImdbId ? ` [filter: imdb=${movieImdbId}]` : ''}${excludeSeries ? ' [exclude series]' : ''}`);
 
     let query = `
-      SELECT 
+      SELECT
         f.file_index,
         f.title as file_title,
         f.size as file_size,
@@ -2088,11 +2096,11 @@ async function setTorrentSearchCache(cacheKey, data) {
 
   try {
     await pool.query(`
-      INSERT INTO torrent_search_cache 
+      INSERT INTO torrent_search_cache
         (cache_key, filtered_results, media_details, season, episode, imdb_id, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, NOW())
-      ON CONFLICT (cache_key) 
-      DO UPDATE SET 
+      ON CONFLICT (cache_key)
+      DO UPDATE SET
         filtered_results = EXCLUDED.filtered_results,
         media_details = EXCLUDED.media_details,
         season = EXCLUDED.season,

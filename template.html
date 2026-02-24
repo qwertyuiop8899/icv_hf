@@ -1080,14 +1080,55 @@
                 </button>
             </div>
 
-            <div class="button-group">
-                <button id="install_button" disabled>Installa Addon</button>
-                <span style="flex: 1.5; min-width: 250px; display: flex; justify-content: center; align-items: center; transform: scale(1.15);">
-                    <script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
-                    <script type='text/javascript'>kofiwidget2.init('Un Grog per noi 🍻', '#00b521', 'G2G41MG3ZN'); kofiwidget2.draw();</script>
-                </span>
-                <button id="copy_button" disabled>Copia Link</button>
-            </div>
+<div class="button-group">
+    <button id="install_button" disabled>Installa Addon</button>
+
+    <a href="https://ko-fi.com/G2G41MG3ZN" target="_blank" class="custom-kofi-union">
+        <img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="Ko-fi">
+        <span>Un Grog per noi 🍻</span>
+    </a>
+
+    <button id="copy_button" disabled>Copia Link</button>
+</div>
+
+<style>
+    .custom-kofi-union {
+        flex: 1; /* Uguale ai bottoni originali */
+        min-width: 200px; /* Uguale ai bottoni originali */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #00b521; /* Colore Ko-fi */
+        color: #ffffff !important;
+        text-decoration: none !important;
+        border-radius: 8px; /* Uguale ai bottoni originali */
+        font-size: 1.2em; /* Uguale ai bottoni originali */
+        font-weight: 600; /* Uguale ai bottoni originali */
+        padding: 18px 35px; /* Uguale ai bottoni originali */
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(0, 181, 33, 0.3);
+        box-sizing: border-box;
+    }
+
+    .custom-kofi-union:hover {
+        transform: translateY(-2px); /* Effetto hover originale */
+        filter: brightness(1.1);
+        box-shadow: 0 6px 24px rgba(0, 181, 33, 0.4);
+    }
+
+    .custom-kofi-union img {
+        width: 24px;
+        margin-right: 10px;
+        vertical-align: middle;
+    }
+    
+    /* Responsive: su mobile va a capo come gli altri */
+    @media (max-width: 640px) {
+        .custom-kofi-union {
+            width: 100%;
+        }
+    }
+</style>
 
             <div id="link-container">
                 <p class="section-title"><small>Link di installazione generato:</small></p>

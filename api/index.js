@@ -339,6 +339,35 @@ const MAX_CONCURRENT_BG_JOBS = 2;
 let activeBgJobs = 0;
 const bgJobQueue = [];
 
+// 🔒 FOREGROUND CONCURRENCY LIMITER
+// Prevents too many simultaneous handleStream() calls from saturating the DB
+// Each handleStream does 15-40+ DB queries; without this, 10 users = 150-400 concurrent queries
+const MAX_CONCURRENT_STREAMS = 5;
+let activeStreams = 0;
+const streamQueue = [];
+
+const acquireStreamSlot = () => {
+    return new Promise((resolve) => {
+        if (activeStreams < MAX_CONCURRENT_STREAMS) {
+            activeStreams++;
+            resolve();
+        } else {
+            streamQueue.push(resolve);
+            console.log(`⏳ [Stream Queue] Request queued (${activeStreams}/${MAX_CONCURRENT_STREAMS} active, ${streamQueue.length} queued)`);
+        }
+    });
+};
+
+const releaseStreamSlot = () => {
+    if (streamQueue.length > 0) {
+        const next = streamQueue.shift();
+        console.log(`🔄 [Stream Queue] Dequeuing request (${streamQueue.length} remaining)`);
+        next();
+    } else {
+        activeStreams--;
+    }
+};
+
 /**
  * Enqueue a background job with global concurrency limit.
  * - Max 2 concurrent jobs
@@ -9218,6 +9247,7 @@ async function handleStream(type, id, config, workerOrigin) {
                     // 🚀 BACKGROUND VERIFICATION for skipped packs (non-blocking)
                     // This pre-fetches pack files for future searches
                     // ⚠️ RUNS AFTER response is sent - 1 second between calls
+                    // 🔒 Now uses foreground semaphore to prevent DB saturation
                     if (skipped.length > 0 && (config.rd_key || config.torbox_key)) {
                         const candidateTitles = [
                             mediaDetails.title,
@@ -9229,6 +9259,9 @@ async function handleStream(type, id, config, workerOrigin) {
                         // Fire and forget - DELAYED to not interfere with response
                         setTimeout(() => {
                             (async () => {
+                                // 🔒 Acquire stream slot to prevent DB saturation
+                                await acquireStreamSlot();
+                                try {
                                 console.log(`🔄 [MOVIE VERIFY BG] Starting background verification...`);
                                 const BG_DELAY_MS = 1000; // 1 second between calls (RD: 200/min limit)
                                 let processed = 0;
@@ -9283,6 +9316,9 @@ async function handleStream(type, id, config, workerOrigin) {
                                     }
                                 }
                                 console.log(`✅ [MOVIE VERIFY BG] Complete: ${processed} packs verified, ${skippedNotPack} non-pack title, ${skippedByFlag} already-verified non-packs`);
+                                } finally {
+                                    releaseStreamSlot();
+                                }
                             })().catch(() => { });
                         }, 5000); // 5 second delay to let response complete first
                     }
@@ -11735,7 +11771,14 @@ export default async function handler(req, res) {
 
             // Passa la configurazione estratta (o un oggetto vuoto) a handleStream.
             // Usa solo la configurazione dall'URL, senza fallback.
-            const result = await handleStream(type, id, config, url.origin);
+            // 🔒 Foreground concurrency limiter: max 5 simultaneous handleStream() calls
+            await acquireStreamSlot();
+            let result;
+            try {
+                result = await handleStream(type, id, config, url.origin);
+            } finally {
+                releaseStreamSlot();
+            }
 
             const responseTime = Date.now() - startTime;
 
@@ -11750,21 +11793,23 @@ export default async function handler(req, res) {
             console.log(`🐞 [Hybrid Debug] config.hybrid_mode = ${config.hybrid_mode} (type: ${typeof config.hybrid_mode})`);
             if (config.hybrid_mode === true) {
                 // Fire and forget - don't await, don't block
-                setTimeout(() => {
+                setTimeout(async () => {
                     console.log(`\n🔄 [Hybrid Background] Starting background scrape for ${type}:${id}...`);
 
                     // Create a modified config that forces live search (disable hybrid for background run)
                     // force_refresh: true bypasses the cache to get fresh results from external addons
                     const backgroundConfig = { ...config, hybrid_mode: false, db_only: false, force_refresh: true };
 
-                    // Run full scrape in background (results will be saved to DB for next request)
-                    handleStream(type, id, backgroundConfig, url.origin)
-                        .then(bgResult => {
-                            console.log(`✅ [Hybrid Background] Completed! Found ${bgResult.streams?.length || 0} streams (now in DB for next request)`);
-                        })
-                        .catch(err => {
-                            console.error(`❌ [Hybrid Background] Error:`, err.message);
-                        });
+                    // 🔒 Hybrid background also uses foreground semaphore (it runs the full query chain)
+                    await acquireStreamSlot();
+                    try {
+                        const bgResult = await handleStream(type, id, backgroundConfig, url.origin);
+                        console.log(`✅ [Hybrid Background] Completed! Found ${bgResult.streams?.length || 0} streams (now in DB for next request)`);
+                    } catch (err) {
+                        console.error(`❌ [Hybrid Background] Error:`, err.message);
+                    } finally {
+                        releaseStreamSlot();
+                    }
                 }, 100); // Small delay to ensure response is fully sent
             }
 

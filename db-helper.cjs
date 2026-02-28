@@ -735,48 +735,29 @@ async function batchInsertTorrents(torrents) {
 
   try {
     let inserted = 0;
-    const BATCH_SIZE = 25; // 25 rows × 14 params = 350 params per query (well within PG limit)
 
-    for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
-      const batch = torrents.slice(i, i + BATCH_SIZE);
-
+    for (const torrent of torrents) {
       try {
-        const COLS_PER_ROW = 14;
-        const valuePlaceholders = [];
-        const values = [];
-
-        for (let j = 0; j < batch.length; j++) {
-          const offset = j * COLS_PER_ROW;
-          valuePlaceholders.push(
-            `($${offset+1}, $${offset+2}, $${offset+3}, $${offset+4}, $${offset+5}, $${offset+6}, $${offset+7}, $${offset+8}, $${offset+9}, $${offset+10}, $${offset+11}, $${offset+12}, $${offset+13}, $${offset+14})`
-          );
-          const t = batch[j];
-          values.push(
-            t.info_hash, t.provider, t.title, t.size, t.type, t.upload_date,
-            t.seeders, t.imdb_id, t.tmdb_id, t.cached_rd, t.last_cached_check,
-            t.file_index, t.cached_tb || null, t.last_cached_check_tb || null
-          );
-        }
-
         const query = `
           INSERT INTO torrents (
             info_hash, provider, title, size, type, upload_date,
             seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index,
             cached_tb, last_cached_check_tb
           )
-          VALUES ${valuePlaceholders.join(', ')}
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           ON CONFLICT (info_hash) DO UPDATE SET
             imdb_id = COALESCE(torrents.imdb_id, EXCLUDED.imdb_id),
             tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
             size = CASE WHEN torrents.size = 0 OR torrents.size IS NULL THEN EXCLUDED.size ELSE torrents.size END,
             seeders = GREATEST(EXCLUDED.seeders, torrents.seeders),
+            -- ✅ PROVIDER PRIORITY: Update title + provider if new provider has higher priority (uses providerPrioritySQL)
             title = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.title
             ELSE torrents.title END,
             provider = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.provider
             ELSE torrents.provider END,
             cached_rd = CASE
-              WHEN torrents.cached_rd = true THEN true
-              WHEN EXCLUDED.cached_rd = true THEN true
+              WHEN torrents.cached_rd = true THEN true  -- Never overwrite true with false
+              WHEN EXCLUDED.cached_rd = true THEN true  -- Allow updating to true
               ELSE COALESCE(torrents.cached_rd, EXCLUDED.cached_rd)
             END,
             last_cached_check = CASE
@@ -797,61 +778,29 @@ async function batchInsertTorrents(torrents) {
             END
         `;
 
+        const values = [
+          torrent.info_hash,
+          torrent.provider,
+          torrent.title,
+          torrent.size,
+          torrent.type,
+          torrent.upload_date,
+          torrent.seeders,
+          torrent.imdb_id,
+          torrent.tmdb_id,
+          torrent.cached_rd,
+          torrent.last_cached_check,
+          torrent.file_index,
+          torrent.cached_tb || null,
+          torrent.last_cached_check_tb || null
+        ];
+
         const res = await pool.query(query, values);
-        inserted += res.rowCount || 0;
+        if (res.rowCount > 0) inserted++;
 
       } catch (error) {
-        // If batch fails, fall back to individual inserts for this batch
-        console.warn(`⚠️ [DB] Batch of ${batch.length} failed (${error.message}), falling back to individual inserts`);
-        for (const torrent of batch) {
-          try {
-            const res = await pool.query(`
-              INSERT INTO torrents (
-                info_hash, provider, title, size, type, upload_date,
-                seeders, imdb_id, tmdb_id, cached_rd, last_cached_check, file_index,
-                cached_tb, last_cached_check_tb
-              )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-              ON CONFLICT (info_hash) DO UPDATE SET
-                imdb_id = COALESCE(torrents.imdb_id, EXCLUDED.imdb_id),
-                tmdb_id = COALESCE(torrents.tmdb_id, EXCLUDED.tmdb_id),
-                size = CASE WHEN torrents.size = 0 OR torrents.size IS NULL THEN EXCLUDED.size ELSE torrents.size END,
-                seeders = GREATEST(EXCLUDED.seeders, torrents.seeders),
-                title = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.title
-                ELSE torrents.title END,
-                provider = CASE WHEN (${providerPrioritySQL('EXCLUDED.provider')}) < (${providerPrioritySQL('torrents.provider')}) THEN EXCLUDED.provider
-                ELSE torrents.provider END,
-                cached_rd = CASE
-                  WHEN torrents.cached_rd = true THEN true
-                  WHEN EXCLUDED.cached_rd = true THEN true
-                  ELSE COALESCE(torrents.cached_rd, EXCLUDED.cached_rd)
-                END,
-                last_cached_check = CASE
-                  WHEN EXCLUDED.last_cached_check IS NOT NULL
-                  THEN GREATEST(EXCLUDED.last_cached_check, COALESCE(torrents.last_cached_check, EXCLUDED.last_cached_check))
-                  ELSE torrents.last_cached_check
-                END,
-                file_index = COALESCE(EXCLUDED.file_index, torrents.file_index),
-                cached_tb = CASE
-                  WHEN torrents.cached_tb = true THEN true
-                  WHEN EXCLUDED.cached_tb = true THEN true
-                  ELSE COALESCE(torrents.cached_tb, EXCLUDED.cached_tb)
-                END,
-                last_cached_check_tb = CASE
-                  WHEN EXCLUDED.last_cached_check_tb IS NOT NULL
-                  THEN GREATEST(EXCLUDED.last_cached_check_tb, COALESCE(torrents.last_cached_check_tb, EXCLUDED.last_cached_check_tb))
-                  ELSE torrents.last_cached_check_tb
-                END
-            `, [
-              torrent.info_hash, torrent.provider, torrent.title, torrent.size, torrent.type, torrent.upload_date,
-              torrent.seeders, torrent.imdb_id, torrent.tmdb_id, torrent.cached_rd, torrent.last_cached_check,
-              torrent.file_index, torrent.cached_tb || null, torrent.last_cached_check_tb || null
-            ]);
-            if (res.rowCount > 0) inserted++;
-          } catch (innerErr) {
-            console.warn(`⚠️ [DB] Failed to insert/update torrent ${torrent.info_hash}:`, innerErr.message);
-          }
-        }
+        // Log all errors (even duplicates now get updated)
+        console.warn(`⚠️ [DB] Failed to insert/update torrent ${torrent.info_hash}:`, error.message);
       }
     }
 
@@ -1897,7 +1846,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
   const { movieImdbId = null, excludeSeries = false, year = null } = options;
 
-  //  Helper function for ILIKE search (fallback)
+  // 🔧 Helper function for ILIKE search (fallback)
   const runIlikeSearch = async () => {
     let query = `
       SELECT
@@ -2056,15 +2005,13 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
       return result.rows;
     }
     if (DEBUG_MODE) console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
-    const ilikeResults = await runIlikeSearch();
-    return ilikeResults;
+    return await runIlikeSearch();
 
   } catch (error) {
     // Fallback if FTS syntax error (e.g. strict chars)
     console.warn(`⚠️ [DB] FTS File Search failed, trying simple ILIKE. Error: ${error.message}`);
     try {
-      const ilikeResults = await runIlikeSearch();
-      return ilikeResults;
+      return await runIlikeSearch();
     } catch (err2) {
       console.error(`❌ [DB] Error searching files by title:`, err2.message);
       return [];

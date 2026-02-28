@@ -3,33 +3,6 @@ const { Pool } = require('pg');
 // ✅ VERBOSE LOGGING - configurabile via ENV
 const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 
-// 🔒 IN-MEMORY QUERY CACHE
-// Avoids duplicate expensive regex/trgm queries when multiple users search the same title
-// TTL: 3 minutes (short enough to pick up new torrents, long enough to absorb burst traffic)
-const QUERY_CACHE_TTL_MS = 3 * 60 * 1000;
-const queryCache = new Map();
-
-function getCachedQuery(key) {
-  const entry = queryCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > QUERY_CACHE_TTL_MS) {
-    queryCache.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-
-function setCachedQuery(key, data) {
-  queryCache.set(key, { data, ts: Date.now() });
-  // Evict old entries periodically (keep cache under 500 entries)
-  if (queryCache.size > 500) {
-    const now = Date.now();
-    for (const [k, v] of queryCache) {
-      if (now - v.ts > QUERY_CACHE_TTL_MS) queryCache.delete(k);
-    }
-  }
-}
-
 // =====================================================
 // PROVIDER PRIORITY (single source of truth)
 // Lower number = higher priority
@@ -1422,14 +1395,6 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
   if (!pool) throw new Error('Database not initialized');
   if (!title || title.length < 3) return [];
 
-  // 🔒 Check in-memory cache first (avoids duplicate trgm queries for same title)
-  const cacheKey = `pbt:${title.toLowerCase()}:${year || ''}`;
-  const cached = getCachedQuery(cacheKey);
-  if (cached) {
-    if (DEBUG_MODE) console.log(`💾 [DB CACHE HIT] searchPacksByTitle: "${title}" (${cached.length} results)`);
-    return cached;
-  }
-
   try {
     if (DEBUG_MODE) console.log(`💾 [DB] Searching packs by title: "${title}" (${year || 'no year'})`);
 
@@ -1679,8 +1644,6 @@ async function searchPacksByTitle(title, year = null, imdbId = null) {
       return true;
       });
     }
-    // 🔒 Cache results for future identical queries
-    setCachedQuery(cacheKey, filteredResults);
     return filteredResults;
   } catch (error) {
     console.error(`❌ Error searching packs by title "${title}":`, error.message);
@@ -1934,15 +1897,7 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
 
   const { movieImdbId = null, excludeSeries = false, year = null } = options;
 
-  // 🔒 Check in-memory cache first (avoids duplicate trgm queries for same title)
-  const cacheKey = `fbt:${titleQuery.toLowerCase()}:${year || ''}:${movieImdbId || ''}:${excludeSeries}`;
-  const cached = getCachedQuery(cacheKey);
-  if (cached) {
-    if (DEBUG_MODE) console.log(`💾 [DB CACHE HIT] searchFilesByTitle: "${titleQuery}" (${cached.length} results)`);
-    return cached;
-  }
-
-  // 🔧 Helper function for ILIKE search (fallback)
+  //  Helper function for ILIKE search (fallback)
   const runIlikeSearch = async () => {
     let query = `
       SELECT
@@ -2098,12 +2053,10 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     // 🔧 FIX: If FTS returns 0 results, also try ILIKE fallback
     // This is needed for file titles like "(2013) Frozen.mkv" where FTS doesn't index well
     if (result.rows.length > 0) {
-      setCachedQuery(cacheKey, result.rows);
       return result.rows;
     }
     if (DEBUG_MODE) console.log(`💾 [DB] FTS returned 0 results, trying ILIKE fallback...`);
     const ilikeResults = await runIlikeSearch();
-    setCachedQuery(cacheKey, ilikeResults);
     return ilikeResults;
 
   } catch (error) {
@@ -2111,7 +2064,6 @@ async function searchFilesByTitle(titleQuery, providers = null, options = {}) {
     console.warn(`⚠️ [DB] FTS File Search failed, trying simple ILIKE. Error: ${error.message}`);
     try {
       const ilikeResults = await runIlikeSearch();
-      setCachedQuery(cacheKey, ilikeResults);
       return ilikeResults;
     } catch (err2) {
       console.error(`❌ [DB] Error searching files by title:`, err2.message);

@@ -588,8 +588,8 @@ const _runSequentialBackgroundJobs = async (options) => {
                         const cleanScraperTitle = stripEmoji(scraperTitle).trim();
 
                         // 1. Scraper title (from DB, already cleaned) - prefer if valid
-                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
-                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 &&
+                            !/^Season \d+$/i.test(cleanScraperTitle) &&
                             !/^Stagione \d+$/i.test(cleanScraperTitle)) {
                             return { title: cleanScraperTitle, source: 'Scraper' };
                         }
@@ -760,8 +760,8 @@ const _runSequentialBackgroundJobs = async (options) => {
                         const scraperTitle = pack.title || '';
                         const cleanScraperTitle = stripEmoji(scraperTitle).trim();
 
-                        if (cleanScraperTitle && cleanScraperTitle.length > 5 && 
-                            !/^Season \d+$/i.test(cleanScraperTitle) && 
+                        if (cleanScraperTitle && cleanScraperTitle.length > 5 &&
+                            !/^Season \d+$/i.test(cleanScraperTitle) &&
                             !/^Stagione \d+$/i.test(cleanScraperTitle)) {
                             return { title: cleanScraperTitle, source: 'Scraper' };
                         }
@@ -6409,7 +6409,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 headers: { 'User-Agent': 'Mozilla/5.0' },
                 signal: AbortSignal.timeout(180000) // 3 min max
             }).then(r => r.ok ? r.json() : null)
-              .catch(err => { console.warn(`⚠️ [StreamVix] Fetch error: ${err.message}`); return null; });
+                .catch(err => { console.warn(`⚠️ [StreamVix] Fetch error: ${err.message}`); return null; });
         }
 
         // ✅ GLOBAL CACHE HIT: Load data from cache, skip search
@@ -6668,6 +6668,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (config.use_knaben !== false) selectedProviders.push('knaben');        // Matches Knaben (1337x), etc.
                 if (config.use_torrentgalaxy === true) selectedProviders.push('torrentgalaxy');
                 if (config.use_uindex !== false) selectedProviders.push('uindex');
+                if (config.use_stremthru_torz !== false) selectedProviders.push('stremthru_torz');
                 if (config.use_rarbg === true) selectedProviders.push('rarbg');
                 // Always include rd_cache (personal torrents), pack-handler, and Custom (manually imported)
                 selectedProviders.push('rd_cache', 'pack-handler', 'Custom');
@@ -7347,6 +7348,7 @@ async function handleStream(type, id, config, workerOrigin) {
                 if (config.use_torrentio !== false) enabledExternalAddons.push('torrentio');
                 if (config.use_mediafusion !== false) enabledExternalAddons.push('mediafusion');
                 if (config.use_comet !== false) enabledExternalAddons.push('comet');
+                if (config.use_stremthru_torz !== false) enabledExternalAddons.push('stremthru_torz');
             }
             if (DEBUG_MODE) {
                 console.log(`🐞 [DEBUG-EXT] Config:`, JSON.stringify(config));
@@ -8345,11 +8347,11 @@ async function handleStream(type, id, config, workerOrigin) {
                     if (sourceLabel.includes('custom manual')) {
                         if (DEBUG_MODE) console.log(`✅ [Dedup] Custom Manual bypass: ${result.title}`);
                     } else {
-                    // Pass expected titles to also validate series name
-                    const expectedTitles = mediaDetails.titles || [mediaDetails.title];
-                    if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
-                        continue; // Skip this result
-                    }
+                        // Pass expected titles to also validate series name
+                        const expectedTitles = mediaDetails.titles || [mediaDetails.title];
+                        if (!matchesRequestedEpisode(result.title, season, episode, expectedTitles)) {
+                            continue; // Skip this result
+                        }
                     }
                 }
 
@@ -8498,39 +8500,40 @@ async function handleStream(type, id, config, workerOrigin) {
                             return true;
                         })
                         .map(r => {
-                        // ✅ FIX: Clean multiline titles to first line only, strip emojis
-                        // External addons (Torrentio, MediaFusion) send multiline titles with
-                        // size, seeders, flags info that should NOT be saved as the torrent title
-                        // ⚠️ CUSTOM: Never clean/modify the title - keep it exactly as imported
-                        const isManualAdd = isTrustedSource(r.source, r.provider) && /\bCustom\b/i.test((r.source || '') + (r.provider || ''));
-                        let cleanTitle = (r.title || r.websiteTitle || 'Unknown');
-                        if (!isManualAdd) {
-                            cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
-                            cleanTitle = cleanTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim(); // Strip emojis
-                            // Strip MediaFusion separator: take only part before ┈➤
-                            if (cleanTitle.includes('┈➤')) {
-                                cleanTitle = cleanTitle.split('┈➤')[0].trim();
+                            // ✅ FIX: Clean multiline titles to first line only, strip emojis
+                            // External addons (Torrentio, MediaFusion) send multiline titles with
+                            // size, seeders, flags info that should NOT be saved as the torrent title
+                            // ⚠️ CUSTOM: Never clean/modify the title - keep it exactly as imported
+                            const isManualAdd = isTrustedSource(r.source, r.provider) && /\bCustom\b/i.test((r.source || '') + (r.provider || ''));
+                            let cleanTitle = (r.title || r.websiteTitle || 'Unknown');
+                            if (!isManualAdd) {
+                                cleanTitle = cleanTitle.split(/\r?\n/)[0] || cleanTitle; // First line only
+                                cleanTitle = cleanTitle.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim(); // Strip emojis
+                                // Strip MediaFusion separator: take only part before ┈➤
+                                if (cleanTitle.includes('┈➤')) {
+                                    cleanTitle = cleanTitle.split('┈➤')[0].trim();
+                                }
+                                // If title looks like a path (contains / with extension), take folder name
+                                if (/\/[^/]+\.\w{2,4}$/.test(cleanTitle)) {
+                                    cleanTitle = cleanTitle.split('/')[0].trim();
+                                }
                             }
-                            // If title looks like a path (contains / with extension), take folder name
-                            if (/\/[^/]+\.\w{2,4}$/.test(cleanTitle)) {
-                                cleanTitle = cleanTitle.split('/')[0].trim();
-                            }
-                        }
-                        if (!cleanTitle || cleanTitle.length < 3) cleanTitle = r.title || r.websiteTitle || 'Unknown';
-                        const providerCandidate = r.provider || r.source || r.externalAddon || 'unknown';
-                        const cleanProvider = providerCandidate.replace(/^[^a-zA-Z0-9]+/, '').trim();
-                        return ({
-                            info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
-                            title: cleanTitle,
-                            provider: cleanProvider,
-                            size: r.sizeInBytes || null,
-                            type: type,
-                            seeders: r.seeders || 0,
-                            imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
-                            tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
-                            upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
-                            cached_rd: r.cached || false // Save cached status if available
-                        })});
+                            if (!cleanTitle || cleanTitle.length < 3) cleanTitle = r.title || r.websiteTitle || 'Unknown';
+                            const providerCandidate = r.provider || r.source || r.externalAddon || 'unknown';
+                            const cleanProvider = providerCandidate.replace(/^[^a-zA-Z0-9]+/, '').trim();
+                            return ({
+                                info_hash: r.infoHash.toLowerCase(),  // snake_case for DB
+                                title: cleanTitle,
+                                provider: cleanProvider,
+                                size: r.sizeInBytes || null,
+                                type: type,
+                                seeders: r.seeders || 0,
+                                imdb_id: mediaDetails.imdbId || null,  // snake_case for DB
+                                tmdb_id: mediaDetails.tmdbId || null,  // snake_case for DB
+                                upload_date: new Date().toISOString().split('T')[0],  // YYYY-MM-DD format
+                                cached_rd: r.cached || false // Save cached status if available
+                            })
+                        });
 
                     if (torrentsToSave.length > 0) {
                         // 🚀 Fire-and-forget: Save to DB in background without blocking response
@@ -11640,7 +11643,7 @@ export default async function handler(req, res) {
             try {
                 let manifestConfig = null;
                 if (pathParts.length >= 3 && pathParts[1] && pathParts[1] !== 'manifest.json') {
-                    try { manifestConfig = JSON.parse(atob(pathParts[1])); } catch(e) {}
+                    try { manifestConfig = JSON.parse(atob(pathParts[1])); } catch (e) { }
                 }
                 if (manifestConfig?.anime_enabled) {
                     for (const catalog of KITSU_PLUS_CATALOGS) {
@@ -11656,7 +11659,7 @@ export default async function handler(req, res) {
                         manifest.resources.push('catalog');
                     }
                 }
-            } catch(e) { /* ignore */ }
+            } catch (e) { /* ignore */ }
 
             res.setHeader('Content-Type', 'application/json');
             return res.status(200).send(JSON.stringify(manifest, null, 2));

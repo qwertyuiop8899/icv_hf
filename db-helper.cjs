@@ -917,7 +917,14 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
       ]);
 
       if (checkRes.rowCount > 0) {
-        // Record already exists for this episode - just update the title and size if needed
+        // Record already exists for this episode - update file_index, title, size
+        // First, remove any OTHER episode record that currently holds this file_index
+        // (prevents UNIQUE constraint violation when reassigning a file to a different episode)
+        await pool.query(
+          'DELETE FROM files WHERE info_hash = $1 AND file_index = $2 AND NOT (imdb_season = $3 AND imdb_episode = $4)',
+          [infoHash.toLowerCase(), fileIndex, episodeInfo.season, episodeInfo.episode]
+        );
+
         const updateQuery = `
           UPDATE files
           SET file_index = $1,

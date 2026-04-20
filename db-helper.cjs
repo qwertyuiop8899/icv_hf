@@ -143,6 +143,7 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
       SELECT
         info_hash,
         provider,
+        contributor,
         title,
         size,
         type,
@@ -209,6 +210,7 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
       SELECT
         info_hash,
         provider,
+        contributor,
         title,
         size,
         type,
@@ -278,6 +280,7 @@ async function searchEpisodeFiles(imdbId, season, episode, providers = null) {
         f.rd_link_index,
         t.info_hash,
         t.provider,
+        t.contributor,
         t.title as torrent_title,
         t.size as torrent_size,
         t.seeders,
@@ -1251,6 +1254,7 @@ async function searchByTitleFTS(cleanedTitle, type = null, year = null) {
       SELECT
         info_hash,
         provider,
+        contributor,
         title,
         size,
         type,
@@ -1384,6 +1388,7 @@ async function searchPacksByImdbId(imdbId) {
       SELECT
         t.info_hash,
         t.provider,
+        t.contributor,
         t.title,
         t.size,
         t.type,
@@ -2296,6 +2301,25 @@ async function updateTorrentProvider(infoHash, provider) {
 }
 
 /**
+ * Update the contributor name for a torrent (manual imports only)
+ * @param {string} infoHash - Torrent info hash
+ * @param {string|null} contributor - Contributor name or null
+ * @returns {Promise<boolean>} True if updated, false otherwise
+ */
+async function updateTorrentContributor(infoHash, contributor) {
+  if (!pool) throw new Error('Database not initialized');
+
+  try {
+    const query = 'UPDATE torrents SET contributor = $1 WHERE info_hash = $2';
+    const result = await pool.query(query, [contributor, infoHash.toLowerCase()]);
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error(`❌ [DB] Error updating contributor:`, error.message);
+    return false;
+  }
+}
+
+/**
  * Get the title (filename) for a specific episode from the files table
  * Used by rd-stream as fallback when pattern matching fails (e.g. "HNK 001...mkv" not recognized)
  * The DB already has imdb_season/imdb_episode from manual imports, so we just look up the filename
@@ -2322,6 +2346,7 @@ module.exports = {
   getTorrent,
   updateTorrentTitle,
   updateTorrentProvider,
+  updateTorrentContributor,
   searchByImdbId,
   searchByTmdbId,
   searchEpisodeFiles,

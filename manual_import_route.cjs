@@ -1354,24 +1354,11 @@ router.get('/', (req, res) => {
                 return;
             }
 
-            const parsedMap = new Map();
-            for (const file of lastImport?.videoFiles || []) {
-                if (file.parsedSeason && file.parsedEpisode) {
-                    const key = \`\${file.parsedSeason}-\${file.parsedEpisode}\`;
-                    if (!parsedMap.has(key)) parsedMap.set(key, file.id);
-                }
-            }
-
             const sNum = String(seasonNumber).padStart(2, '0');
             episodesTable.innerHTML = episodes.map(ep => {
                 const key = getMappingKey(seasonNumber, ep.episode_number);
-                let preselected = mappingSelections.get(key);
-                if (!preselected) {
-                    preselected = parsedMap.get(key) || '';
-                    if (preselected) {
-                        mappingSelections.set(key, String(preselected));
-                    }
-                }
+                // Only use explicit user/autoMatch selections — never auto-fill from parsedMap
+                const preselected = mappingSelections.has(key) ? (mappingSelections.get(key) || '') : '';
                 return \`
                     <div class="mapping-row" data-episode="\${ep.episode_number}">
                         <strong>S\${sNum}E\${String(ep.episode_number).padStart(2, '0')}</strong>
@@ -1459,11 +1446,17 @@ router.get('/', (req, res) => {
                 const seasonNumber = parseInt(seasonSelect.value, 10);
                 if (!Number.isNaN(seasonNumber) && !Number.isNaN(episodeNumber)) {
                     const key = getMappingKey(seasonNumber, episodeNumber);
-                    if (event.target.value) {
-                        mappingSelections.set(key, String(event.target.value));
-                    } else {
-                        mappingSelections.delete(key);
+                    const newFileId = event.target.value ? String(event.target.value) : '';
+                    // If assigning a file, clear it from any other episode (prevent duplicates)
+                    if (newFileId) {
+                        for (const [otherKey, otherVal] of mappingSelections.entries()) {
+                            if (otherKey !== key && String(otherVal) === newFileId) {
+                                mappingSelections.set(otherKey, '');
+                            }
+                        }
                     }
+                    // Set explicit selection (empty string = "non assegnato")
+                    mappingSelections.set(key, newFileId);
                     renderEpisodes(currentEpisodes, seasonNumber);
                 }
                 updateSaveButtonState();
@@ -1516,6 +1509,17 @@ router.get('/', (req, res) => {
 
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'AutoMatch fallito');
+
+                // Populate mappingSelections from parsed file data
+                for (const file of lastImport.videoFiles) {
+                    if (file.parsedSeason && file.parsedEpisode) {
+                        const key = getMappingKey(file.parsedSeason, file.parsedEpisode);
+                        if (!mappingSelections.has(key) || !mappingSelections.get(key)) {
+                            mappingSelections.set(key, String(file.id));
+                        }
+                    }
+                }
+                renderEpisodes(currentEpisodes, parseInt(seasonSelect.value, 10));
 
                 setMappingStatus(\`AutoMatch completato: \${data.matched} trovati, \${data.unmatched} da mappare.\`);
             } catch (e) {

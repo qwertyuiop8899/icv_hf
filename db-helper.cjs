@@ -944,10 +944,27 @@ async function updateTorrentFileInfo(infoHash, fileIndex, filePath, fileSize = n
         );
 
         if (conflictCheck.rowCount > 0) {
-          // This fileIndex is already used for a different episode - skip to avoid conflict
+          // This fileIndex is already used for a different episode
+          // For manual mapping (episodeInfo provided), allow override - user explicitly chose this mapping
           const existing = conflictCheck.rows[0];
-          if (DEBUG_MODE) console.log(`⚠️ [DB] FileIndex ${fileIndex} already used for S${existing.imdb_season}E${existing.imdb_episode}, skipping S${episodeInfo.season}E${episodeInfo.episode}`);
-          return false;
+          if (DEBUG_MODE) console.log(`⚠️ [DB] FileIndex ${fileIndex} already used for S${existing.imdb_season}E${existing.imdb_episode}, overriding with S${episodeInfo.season}E${episodeInfo.episode}`);
+          
+          // Update the existing record with the new episode mapping
+          const overrideQuery = `
+            UPDATE files
+            SET title = $3, imdb_id = $4, imdb_season = $5, imdb_episode = $6, size = COALESCE($7, size)
+            WHERE info_hash = $1 AND file_index = $2
+          `;
+          const overrideRes = await pool.query(overrideQuery, [
+            infoHash.toLowerCase(),
+            fileIndex,
+            fileName,
+            episodeInfo.imdbId,
+            episodeInfo.season,
+            episodeInfo.episode,
+            fileSize
+          ]);
+          return overrideRes.rowCount > 0;
         }
 
         // Insert new file (UPSERT - update if exists)

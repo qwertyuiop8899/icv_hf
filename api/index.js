@@ -8058,7 +8058,11 @@ async function handleStream(type, id, config, workerOrigin) {
                         file_size: finalFileSize || 0,
                         quality: extractQuality(torrentTitle),
                         filename: fileName || torrentTitle,
-                        source: `💾 ${dbResult.provider || 'Database'}`,
+                        source: `💾 ${(() => {
+                            const p = dbResult.provider || 'Database';
+                            if (!/custom/i.test(p) || dbResult.contributor === null || dbResult.contributor === undefined) return p;
+                            return dbResult.contributor ? `${p} (💜 ${dbResult.contributor})` : `${p} (💜)`;
+                        })()}`,
                         fileIndex: finalFileIndex, // For series episodes and pack movies
                         file_title: fileName, // Real filename from DB (only for specific episode)
                         imdb_id: dbResult.imdb_id || null, // ✅ Pass IMDb ID for pack movie trust check

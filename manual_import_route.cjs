@@ -971,6 +971,21 @@ router.get('/', (req, res) => {
         <div id="debug">In attesa...</div>
     </div>
 
+    <!-- 💜 CONTRIBUTOR POPUP -->
+    <div id="contributorOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); backdrop-filter:blur(6px); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); border:1px solid rgba(168,85,247,0.3); border-radius:16px; padding:28px 32px; max-width:380px; width:90%; box-shadow:0 0 40px rgba(168,85,247,0.15);">
+            <div style="text-align:center; margin-bottom:18px;">
+                <span style="font-size:1.4rem;">💜</span>
+                <span style="font-family:'Outfit',sans-serif; font-size:1.1rem; font-weight:600; color:#e2e8f0; margin-left:8px;">Nome Contributore</span>
+            </div>
+            <input type="text" id="contributorInput" placeholder="Lascia vuoto per anonimo" style="width:100%; padding:10px 14px; background:rgba(30,27,75,0.6); border:1px solid rgba(168,85,247,0.25); border-radius:10px; color:#e2e8f0; font-size:0.95rem; font-family:'Inter',sans-serif; outline:none; box-sizing:border-box; transition:border 0.2s;" onfocus="this.style.borderColor='rgba(168,85,247,0.6)'" onblur="this.style.borderColor='rgba(168,85,247,0.25)'">
+            <div style="display:flex; gap:10px; margin-top:16px;">
+                <button id="contributorCancel" style="flex:1; padding:10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:10px; color:#94a3b8; font-size:0.9rem; cursor:pointer; font-family:'Inter',sans-serif;">Annulla</button>
+                <button id="contributorConfirm" style="flex:1; padding:10px; background:linear-gradient(135deg,#22c55e,#16a34a); border:none; border-radius:10px; color:#fff; font-size:0.9rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif;">INVIA</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // --- ADVANCED NEURAL PARTICLES ---
         const canvas = document.getElementById('bg-canvas');
@@ -1066,6 +1081,33 @@ router.get('/', (req, res) => {
         let currentEpisodes = [];
         let pendingPreview = null; // ✅ Stores preview data when manual mapping (torrent NOT yet imported)
         let mappingSelections = new Map(); // key: "season-episode" -> fileId
+
+        // 💜 Ask contributor name via popup - returns Promise<string|null> (null = cancelled)
+        function askContributorName() {
+            return new Promise((resolve) => {
+                const overlay = document.getElementById('contributorOverlay');
+                const input = document.getElementById('contributorInput');
+                const confirmBtn = document.getElementById('contributorConfirm');
+                const cancelBtn = document.getElementById('contributorCancel');
+                input.value = '';
+                overlay.style.display = 'flex';
+                input.focus();
+
+                function cleanup() {
+                    overlay.style.display = 'none';
+                    confirmBtn.removeEventListener('click', onConfirm);
+                    cancelBtn.removeEventListener('click', onCancel);
+                    input.removeEventListener('keydown', onKey);
+                }
+                function onConfirm() { cleanup(); resolve(input.value.trim()); }
+                function onCancel() { cleanup(); resolve(null); }
+                function onKey(e) { if (e.key === 'Enter') onConfirm(); if (e.key === 'Escape') onCancel(); }
+
+                confirmBtn.addEventListener('click', onConfirm);
+                cancelBtn.addEventListener('click', onCancel);
+                input.addEventListener('keydown', onKey);
+            });
+        }
 
         // ✅ Update button text based on manual mapping toggle
         function updateSubmitButtonText() {
@@ -1515,6 +1557,10 @@ router.get('/', (req, res) => {
             const resDiv = document.getElementById('result');
             const dbg = document.getElementById('debug');
 
+            // 💜 Ask contributor name before saving
+            const contributorName = await askContributorName();
+            if (contributorName === null) { saveMappingBtn.disabled = false; return; }
+
             try {
                 // ✅ If pendingPreview exists, import torrent FIRST, then save mappings
                 if (pendingPreview) {
@@ -1527,6 +1573,7 @@ router.get('/', (req, res) => {
                     if (pendingPreview.tmdbId) formData.append('tmdbId', pendingPreview.tmdbId);
                     formData.append('type', pendingPreview.typeVal);
                     formData.append('manualMapping', 'true');
+                    formData.append('contributor', contributorName || '');
                     if (pendingPreview.seedersVal) formData.append('seeders', pendingPreview.seedersVal);
                     if (pendingPreview.rdKey) formData.append('rdKey', pendingPreview.rdKey);
                     if (pendingPreview.tbKey) formData.append('tbKey', pendingPreview.tbKey);
@@ -1558,6 +1605,7 @@ router.get('/', (req, res) => {
                     body: JSON.stringify({
                         infoHash: lastImport.infoHash,
                         imdbId: lastImport.imdbId,
+                        contributor: contributorName || '',
                         mappings
                     })
                 });
@@ -1767,12 +1815,17 @@ router.get('/', (req, res) => {
                     }
                 } else {
                     // ✅ NORMAL FLOW: Import directly
+                    // 💜 Ask contributor name
+                    const contributorName = await askContributorName();
+                    if (contributorName === null) { btn.disabled = false; btn.innerText = btnLabel; return; }
+
                     const formData = new FormData();
                     formData.append('method', mode);
                     formData.append('imdbId', imdbId);
                     if (currentTmdbId) formData.append('tmdbId', currentTmdbId);
                     formData.append('type', typeVal);
                     formData.append('manualMapping', 'false');
+                    formData.append('contributor', contributorName || '');
                     if (seedersVal) formData.append('seeders', seedersVal);
                     if (rdKey) formData.append('rdKey', rdKey);
                     if (tbKey) formData.append('tbKey', tbKey);
@@ -2125,7 +2178,7 @@ router.post('/preview-files', upload.any(), async (req, res) => {
 // POST /scrape/map - Save manual episode mapping
 router.post('/map', async (req, res) => {
     try {
-        const { infoHash, imdbId, mappings } = req.body || {};
+        const { infoHash, imdbId, mappings, contributor } = req.body || {};
         if (!infoHash || !imdbId || !Array.isArray(mappings)) {
             return res.status(400).json({ error: 'Missing infoHash, imdbId, or mappings' });
         }
@@ -2159,6 +2212,10 @@ router.post('/map', async (req, res) => {
 
         if (updated > 0) {
             await dbHelper.updateTorrentProvider(infoHash, 'Custom Manual');
+            // 💜 Save contributor name
+            if (contributor !== undefined) {
+                await dbHelper.updateTorrentContributor(infoHash, (typeof contributor === 'string' ? contributor.trim() : '') || '');
+            }
         }
 
         return res.json({ status: 'ok', updated, failed });
@@ -2183,7 +2240,8 @@ router.post('/add', upload.any(), async (req, res) => {
             tbKey: bodyTbKey,
             seeders: bodySeeders,
             forcePackMode,
-            manualMapping
+            manualMapping,
+            contributor // 💜 Contributor name
         } = req.body;
 
         // ✅ HANDLE PACK MODE:
@@ -2357,6 +2415,11 @@ router.post('/add', upload.any(), async (req, res) => {
 
         // 4. Insert Main Torrent
         await dbHelper.batchInsertTorrents([torrentEntry]);
+
+        // 💜 Save contributor name if provided
+        if (contributor !== undefined) {
+            await dbHelper.updateTorrentContributor(infoHash, contributor.trim() || '');
+        }
 
         // 5. Process Files & Episodes
         let processedFiles = [];

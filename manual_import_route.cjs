@@ -1517,20 +1517,6 @@ router.get('/', (req, res) => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'AutoMatch fallito');
 
-                // 💜 Update mappingSelections with server-side matches
-                if (data.mappings && Array.isArray(data.mappings)) {
-                    for (const m of data.mappings) {
-                        const key = getMappingKey(m.season, m.episode);
-                        mappingSelections.set(key, String(m.file_id));
-                    }
-                }
-
-                // Re-render current season to show matched files
-                if (currentEpisodes.length > 0) {
-                    renderEpisodes(currentEpisodes, parseInt(seasonSelect.value, 10));
-                }
-                updateSaveButtonState();
-
                 setMappingStatus(\`AutoMatch completato: \${data.matched} trovati, \${data.unmatched} da mappare.\`);
             } catch (e) {
                 setMappingStatus(e.message, true);
@@ -2038,7 +2024,8 @@ router.post('/automatch', async (req, res) => {
                 imdb_season: season,
                 imdb_episode: episode
             });
-            processed++;
+
+            processed.push(filename);
         }
 
         if (filesToInsert.length > 0) {
@@ -2049,20 +2036,12 @@ router.post('/automatch', async (req, res) => {
             await dbHelper.updateTorrentProvider(infoHash, 'Custom Manual');
         }
 
-        // 💜 Return mappings so the client can update the UI
-        const matchedMappings = filesToInsert.map(f => ({
-            season: f.imdb_season,
-            episode: f.imdb_episode,
-            file_id: f.file_index
-        }));
-
         return res.json({
             status: 'ok',
             matched: filesToInsert.length,
             unmatched: unmatchedFiles.length,
             unmatchedFiles,
-            processed,
-            mappings: matchedMappings
+            processed
         });
     } catch (err) {
         console.error('❌ [MANUAL] AutoMatch error:', err.message);
@@ -2193,7 +2172,7 @@ router.post('/preview-files', upload.any(), async (req, res) => {
     } catch (err) {
         console.error("❌ [MANUAL] Preview error:", err);
         return res.status(500).json({ error: err.message });
-    }isNaN(season) || isNaN(episode)
+    }
 });
 
 // POST /scrape/map - Save manual episode mapping
@@ -2214,7 +2193,7 @@ router.post('/map', async (req, res) => {
             const filePath = mapping.file_path || '';
             const fileSize = mapping.file_size || null;
 
-            if (isNaN(season) || isNaN(episode) || isNaN(fileIndex) || fileIndex < 0 || !filePath) {
+            if (!season || !episode || isNaN(fileIndex) || fileIndex < 0 || !filePath) {
                 failed++;
                 continue;
             }

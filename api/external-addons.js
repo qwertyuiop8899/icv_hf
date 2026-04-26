@@ -17,9 +17,11 @@ const TORRENTIO_BASE_DOMAIN = process.env.TORRENTIO_BASE_URL || '';
 
 const EXTERNAL_ADDONS = {
     torrentio: {
-        // Use direct Torrentio URL - the proxy (torrentioita.stremio.dpdns.org) gives 500 errors on stream requests
-        baseUrl: TORRENTIO_BASE_DOMAIN ? `${TORRENTIO_BASE_DOMAIN}/oResults=false/aHR0cHM6Ly90b3JyZW50aW8uc3RyZW0uZnVuL3Byb3ZpZGVycz15dHMsZXp0dixyYXJiZywxMzM3eCx0aGVwaXJhdGViYXksa2lja2Fzc3RvcnJlbnRzLHRvcnJlbnRnYWxheHksbWFnbmV0ZGwsaG9ycmlibGVzdWJzLG55YWFzaSx0b2t5b3Rvc2hvLGFuaWRleCxydXRvcixydXRyYWNrZXIsY29tYW5kbyxibHVkdix0b3JyZW50OSxpbGNvcnNhcm9uZXJvLG1lam9ydG9ycmVudCx3b2xmbWF4NGssY2luZWNhbGlkYWQsYmVzdHRvcnJlbnRzfGxhbmd1YWdlPWl0YWxpYW58c29ydD1xdWFsaXR5c2l6ZXxxdWFsaXR5ZmlsdGVyPXNjcixjYW18bGltaXQ9Ng==` : null,
-        //baseUrl: 'https://torrentio.strem.fun/providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubsnyaasi,tokyotosho,anidex,rutor,rutracker,comando,bludv,torrent9,ilcorsaronero,mejortorrent,wolfmax4k,cinecalidad,besttorrents|language=italian|sort=qualitysize|qualityfilter=scr,cam',
+        // Proxy URL (hides upstream Torrentio). The direct torrentio.strem.fun does NOT work from
+        // the user's server — only this proxy is reachable. Do NOT add a fallback.
+        baseUrl: TORRENTIO_BASE_DOMAIN
+            ? `${TORRENTIO_BASE_DOMAIN}/oResults=false/aHR0cHM6Ly90b3JyZW50aW8uc3RyZW0uZnVuL3Byb3ZpZGVycz15dHMsZXp0dixyYXJiZywxMzM3eCx0aGVwaXJhdGViYXksa2lja2Fzc3RvcnJlbnRzLHRvcnJlbnRnYWxheHksbWFnbmV0ZGwsaG9ycmlibGVzdWJzLG55YWFzaSx0b2t5b3Rvc2hvLGFuaWRleCxydXRvcixydXRyYWNrZXIsY29tYW5kbyxibHVkdix0b3JyZW50OSxpbGNvcnNhcm9uZXJvLG1lam9ydG9ycmVudCx3b2xmbWF4NGssY2luZWNhbGlkYWQsYmVzdHRvcnJlbnRzfGxhbmd1YWdlPWl0YWxpYW58cXVhbGl0eWZpbHRlcj1zY3IsY2Ft`
+            : null,
         name: 'Torrentio',
         emoji: '🅣',
         timeout: 2000  // Increased from 1500ms - Torrentio can be slow
@@ -40,6 +42,12 @@ const EXTERNAL_ADDONS = {
         baseUrl: process.env.STREMTHRU_TORZ_URL || 'https://stremthru.13377001.xyz/stremio/torz/eyJpbmRleGVycyI6bnVsbCwic3RvcmVzIjpbeyJjIjoicDJwIiwidCI6IiJ9XSwiZmlsdGVyIjoiXCJpdFwiIGluIExhbmd1YWdlcyBcdTAwMjZcdTAwMjYgUXVhbGl0eSAhPSBcIkNBTVwiIn0=',
         name: 'StremThru Torz',
         emoji: '🆂',
+        timeout: 2000
+    },
+    meteor: {
+        baseUrl: process.env.METEOR_URL || 'https://meteorfortheweebs.midnightignite.me/eyJkZWJyaWRTZXJ2aWNlIjoidG9ycmVudCIsImRlYnJpZEFwaUtleSI6IiIsImNhY2hlZE9ubHkiOnRydWUsImVuYWJsZVlvdXJNZWRpYSI6ZmFsc2UsInlvdXJNZWRpYUxlZ2FjeU1vZGUiOmZhbHNlLCJzaG93WW91ck1lZGlhU3RyZWFtcyI6ZmFsc2UsInlvdXJNZWRpYVNvdXJjZXMiOlsidG9ycmVudCJdLCJyZW1vdmVUcmFzaCI6ZmFsc2UsInJlbW92ZVNhbXBsZXMiOmZhbHNlLCJyZW1vdmVBZHVsdCI6ZmFsc2UsImV4Y2x1ZGUzRCI6ZmFsc2UsImVuYWJsZVNlYURleCI6ZmFsc2UsImVuYWJsZVVzZW5ldCI6ZmFsc2UsInVzZW5ldEN1c3RvbUVuZ2luZXMiOmZhbHNlLCJtaW5TZWVkZXJzIjowLCJtYXhSZXN1bHRzIjowLCJtYXhSZXN1bHRzUGVyUmVzIjowLCJtYXhTaXplIjowLCJyZXNvbHV0aW9ucyI6W10sImxhbmd1YWdlcyI6eyJwcmVmZXJyZWQiOlsibXVsdGkiLCJpdCJdLCJyZXF1aXJlZCI6WyJpdCIsIm11bHRpIl0sImV4Y2x1ZGUiOltdfSwicmVzdWx0Rm9ybWF0IjpbInRpdGxlIiwicXVhbGl0eSIsInNpemUiLCJhdWRpbyJdLCJzb3J0T3JkZXIiOlsicGFjayIsImNhY2hlZCIsInlvdXJtZWRpYSIsInNlYWRleCIsInJlc29sdXRpb24iLCJzaXplIiwicXVhbGl0eSIsInNlZWRlcnMiLCJsYW5ndWFnZSIsInR5cGUiXX0',
+        name: 'Meteor',
+        emoji: '☄️',
         timeout: 2000
     }
 };
@@ -240,46 +248,75 @@ async function fetchExternalAddon(addonKey, type, id) {
     const url = `${addon.baseUrl}/stream/${type}/${id}.json`;
     if (DEBUG_MODE) console.log(`🌐 [${addon.name}] Fetching: ${type}/${id}`);
 
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), addon.timeout);
+    // 🔁 Retry on 5xx / timeouts: some proxies (e.g. torrentita) return transient 500s.
+    //    Up to 3 attempts with short backoff. Keeps the per-attempt timeout small.
+    const MAX_ATTEMPTS = 2;
+    let lastError = null;
 
-        const response = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'IlCorsaroViola/1.0 (Stremio Addon)',
-                'Accept': 'application/json'
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), addon.timeout);
+
+            const response = await fetch(url, {
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': 'IlCorsaroViola/1.0 (Stremio Addon)',
+                    'Accept': 'application/json'
+                }
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                // Retry only on transient server errors / rate limits
+                const transient = response.status >= 500 || response.status === 429;
+                if (transient && attempt < MAX_ATTEMPTS) {
+                    const backoff = 350 * attempt; // 200ms, 400ms
+                    console.warn(`⚠️ [${addon.name}] HTTP ${response.status} (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in ${backoff}ms`);
+                    await new Promise(r => setTimeout(r, backoff));
+                    continue;
+                }
+                console.error(`❌ [${addon.name}] HTTP ${response.status}${attempt > 1 ? ` after ${attempt} attempts` : ''}`);
+                return [];
             }
-        });
 
-        clearTimeout(timeoutId);
+            const data = await response.json();
+            const streams = data.streams || [];
 
-        if (!response.ok) {
-            console.error(`❌ [${addon.name}] HTTP ${response.status}`);
+            if (DEBUG_MODE) console.log(`✅ [${addon.name}] Received ${streams.length} streams${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`);
+
+            // Debug: log first stream to see its structure
+            if (DEBUG_MODE && streams.length > 0) {
+                console.log(`🔍 [${addon.name}] First stream sample:`, JSON.stringify(streams[0], null, 2).substring(0, 500));
+            }
+
+            // Normalizza ogni stream
+            return streams.map(stream => normalizeExternalStream(stream, addonKey));
+
+        } catch (error) {
+            lastError = error;
+            const isTimeout = error.name === 'AbortError';
+            if (attempt < MAX_ATTEMPTS) {
+                const backoff = 350 * attempt;
+                if (isTimeout) {
+                    console.warn(`⏱️ [${addon.name}] Timeout (attempt ${attempt}/${MAX_ATTEMPTS}) after ${addon.timeout}ms — retrying in ${backoff}ms`);
+                } else {
+                    console.warn(`⚠️ [${addon.name}] ${error.message} (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in ${backoff}ms`);
+                }
+                await new Promise(r => setTimeout(r, backoff));
+                continue;
+            }
+            if (isTimeout) {
+                console.error(`⏱️ [${addon.name}] Timeout after ${addon.timeout}ms (${attempt} attempts)`);
+            } else {
+                console.error(`❌ [${addon.name}] Error after ${attempt} attempts:`, error.message);
+            }
             return [];
         }
-
-        const data = await response.json();
-        const streams = data.streams || [];
-
-        if (DEBUG_MODE) console.log(`✅ [${addon.name}] Received ${streams.length} streams`);
-
-        // Debug: log first stream to see its structure
-        if (DEBUG_MODE && streams.length > 0) {
-            console.log(`🔍 [${addon.name}] First stream sample:`, JSON.stringify(streams[0], null, 2).substring(0, 500));
-        }
-
-        // Normalizza ogni stream
-        return streams.map(stream => normalizeExternalStream(stream, addonKey));
-
-    } catch (error) {
-        if (error.name === 'AbortError') {
-            console.error(`⏱️ [${addon.name}] Timeout after ${addon.timeout}ms`);
-        } else {
-            console.error(`❌ [${addon.name}] Error:`, error.message);
-        }
-        return [];
     }
+
+    return [];
 }
 
 /**

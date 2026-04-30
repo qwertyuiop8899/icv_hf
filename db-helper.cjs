@@ -177,8 +177,11 @@ async function searchByImdbId(imdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 CUSTOM, CUSTOM MANUAL & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'Custom Manual' OR provider = 'vip')`;
+      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
+      // ⚠️ NOTE: 'Custom Manual' is intentionally NOT bypassed here — its rows live in the
+      // `files` table with explicit imdb_season/imdb_episode and must be fetched via
+      // searchEpisodeFiles(), otherwise a single-episode mapping would leak into every episode.
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
       // Add % wildcards for partial matching (e.g., 'knaben' matches 'Knaben (1337x)')
       params.push(...providers.map(p => `%${p}%`));
     }
@@ -243,8 +246,9 @@ async function searchByTmdbId(tmdbId, type = null, providers = null) {
     // Use ILIKE patterns for case-insensitive matching and variants (e.g., 'Knaben (1337x)')
     if (providers && Array.isArray(providers) && providers.length > 0) {
       const patterns = providers.map((p, i) => `provider ILIKE $${paramIndex + i}`).join(' OR ');
-      // 🚀 CUSTOM, CUSTOM MANUAL & VIP: Always include these providers regardless of filter
-      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'Custom Manual' OR provider = 'vip')`;
+      // 🚀 CUSTOM & VIP: Always include these providers regardless of filter
+      // ⚠️ NOTE: 'Custom Manual' intentionally excluded — see searchByImdbId comment.
+      query += ` AND (${patterns} OR provider = 'Custom' OR provider = 'vip')`;
       params.push(...providers.map(p => `%${p}%`));
     }
 

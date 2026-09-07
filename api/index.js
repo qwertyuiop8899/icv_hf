@@ -1861,6 +1861,8 @@ function isTrustedSource(source, provider) {
     if (/\bCustom\b/i.test(s) || /\bCustom\b/i.test(p)) return true;
     // corsaronero / corsaro
     if (/corsaro/i.test(s) || /corsaro/i.test(p)) return true;
+    // WebTor enrichment provider
+    if (/webtor/i.test(s) || /webtor/i.test(p)) return true;
     return false;
 }
 
